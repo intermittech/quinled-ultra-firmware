@@ -365,8 +365,8 @@ from 20,000 random calls with undefined inputs).
 - **`ULTRA_VERSION` changes only for an incompatible change.** A board rejects every frame of another version (no
   lock, no clock, no slot), so a new version means updating every board on the pin. (A bootloader ends its listen
   window at the first normal version-2 header; with another version it waits its full 150 ms.)
-- **Without a return channel the host can't know what a board supports** ([capability reporting](#capability-reporting-reserved)
-  is reserved). It relies on the fallbacks above: an unknown command does nothing, an unknown effect shows the plain
+- **The host can't ask a board what it supports** ([capability reporting](#capability-reporting-reserved) is
+  reserved for QuinLED Diff-Power ultra receivers; the dig2analog-ultra never answers). It relies on the fallbacks above: an unknown command does nothing, an unknown effect shows the plain
   state, an unknown role leaves the channel dark.
 
 **Reserved ranges:**
@@ -420,8 +420,8 @@ DIN samples at the frame end):
 
 ### Capability reporting (reserved)
 
-The return channel's IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version and a 32-bit
-feature bitmap:
+For QuinLED Diff-Power ultra receivers only (the dig2analog-ultra never reports back): the return channel's
+IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version and a 32-bit feature bitmap:
 
 | Off | Size | Field |
 |---|---|---|
@@ -448,12 +448,16 @@ feature bitmap:
 | 11-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
 | 24-31 | — | hardware-specific |
 
-- Firmware 0.4 would report 0x3A7 (bits 0, 1, 2, 5, 7, 8, 9), plus bits 3 and 4 with the board current sense and
-  bit 6 behind a bootloader.
-- **Until a board can answer, the host can't read this.** It sends what is configured, and a board without a feature
+- Firmware 0.4's features are 0x3A7 (bits 0, 1, 2, 5, 7, 8, 9), plus bits 3 and 4 with the board current sense and
+  bit 6 behind a bootloader; a Diff-Power ultra receiver would report them.
+- **Until Diff-Power receivers answer, the host can't read this** (a dig2analog-ultra never answers). It sends what is configured, and a board without a feature
   falls back as above (e.g. firmware without SCENE would show nothing at power-up).
 
 ## Reserved: return channel
+
+For **QuinLED Diff-Power ultra receivers only** (their RS-485 pair turns around). The QuinLED dig2analog-ultra-5ch
+never reports back, in any revision: its data line is one-way, and what it measures (current, voltage, temperature,
+calibration) stays on the board.
 
 Not implemented. These values are reserved so later firmware and hosts can add it without another change to the
 frame layout. Constants: `ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTRA_RW_*`, `ULTRA_RSP_*`,
@@ -488,7 +492,8 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   0x05 FW_UPDATE (research/return-channel.md §4.5), and for the current calibration (`research/current-calibration.md`)
   below; 0x08-0x7F reserved for later pages, 0x80-0xFD hardware-specific:
 
-  **0x00 STATUS**, the fields the firmware measures already (console `status`; `ULTRA_ST_*`):
+  **0x00 STATUS**, the fields the firmware measures already (console `status`; `ULTRA_ST_*`). A Diff-Power ultra
+  receiver reports them; on the dig2analog-ultra they stay local:
 
   | Off | Size | Field |
   |---|---|---|

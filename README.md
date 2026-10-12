@@ -23,9 +23,9 @@ CH32V203) in the QuinLED dig2analog+ form factor. On the data line it works in o
 
 ## Using it
 
-- **With ESPHome:** the [`esphome-ws2915-ws2805`](https://github.com/intermittech/esphome-ws2915-ws2805)
-  component. `dig2analog_ultra` is for Ultra mode, `ws2915` for WS mode; ready-made configurations are in its
-  `examples/`.
+- **With ESPHome:** Ultra mode with the [`quinled-ultra-esphome`](https://github.com/intermittech/quinled-ultra-esphome) components (`dig2analog_ultra`,
+  `dig2analog_ultra_strip`; ready-made configurations in its `examples/`), WS mode with the `ws2915` component of
+  [`esphome-ws2915-ws2805`](https://github.com/intermittech/esphome-ws2915-ws2805).
 - **With WLED or another WS2805 / WS2915 controller:** see [WS modes and config frames](https://github.com/intermittech/quinled-ultra-firmware/wiki/WS-Modes-And-Config-Frames).
 - More examples are in [`examples/`](examples).
 
@@ -55,7 +55,7 @@ See the **[wiki](https://github.com/intermittech/quinled-ultra-firmware/wiki)**:
 | [WS modes and config frames](https://github.com/intermittech/quinled-ultra-firmware/wiki/WS-Modes-And-Config-Frames) | WS2805 / WS2915 emulation, board settings from the data line, WLED |
 | [Console](https://github.com/intermittech/quinled-ultra-firmware/wiki/Console) | The UART console: status, settings |
 | [Ultra protocol](https://github.com/intermittech/quinled-ultra-firmware/wiki/Ultra-Protocol) | Summary; the full specification is in [quinled-ultra-protocol](https://github.com/intermittech/quinled-ultra-protocol) |
-| [Current sense](https://github.com/intermittech/quinled-ultra-firmware/wiki/Current-Sense) | Board current limit, short protection, calibration (next board revision) |
+| [Current sense](https://github.com/intermittech/quinled-ultra-firmware/wiki/Current-Sense) | Board current limit, short protection, calibration (next board revision); local on the board, not reported back |
 | [Building](https://github.com/intermittech/quinled-ultra-firmware/wiki/Building) · [Flashing over SWD](https://github.com/intermittech/quinled-ultra-firmware/wiki/Flashing-Over-SWD) | For developers |
 | [Development and tests](https://github.com/intermittech/quinled-ultra-firmware/wiki/Development-And-Tests) · [Bench plan](https://github.com/intermittech/quinled-ultra-firmware/wiki/Bench-Plan) | Layout, host tests, measurements, what still needs hardware |
 | [Releases and signing](https://github.com/intermittech/quinled-ultra-firmware/wiki/Releases-And-Signing) | For maintainers |

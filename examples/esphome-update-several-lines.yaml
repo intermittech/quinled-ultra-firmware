@@ -11,7 +11,7 @@ esp32:
     type: esp-idf
 
 external_components:
-  - source: github://intermittech/esphome-ws2915-ws2805@main
+  - source: github://intermittech/quinled-ultra-esphome@main
     components: [dig2analog_ultra]
 
 logger:

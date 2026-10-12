@@ -4,7 +4,7 @@ rem Copyright (C) 2026 QuinLED
 rem Build and run the bootloader host tests with MSVC:
 rem   bl_tests.exe      bl_core + bl_rx against a flash / board / host model (test_bl.c)
 rem   sender_tests.exe  the ESPHome component's update sender through the same model (test_sender.cpp), when
-rem                     esphome-ws2915 sits next to the firmware; also checks its copy of ultra_update.h
+rem                     quinled-ultra-esphome sits next to the firmware; also checks its copy of ultra_update.h
 rem Usage: bootloader\test\build_bl_test.cmd [output dir]   (default %TEMP%\bl_host; keeps clear of build\host)
 rem BL_TEST_IMAGE=<image from tools\release\mkimage.py>: also install that image (both programs).
 setlocal
@@ -27,14 +27,14 @@ cl /nologo /O2 /W4 /wd4996 /I"%HERE%.." /I"%HERE%..\..\src\core" /Fe:"%OUT%\bl_t
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\bl_tests.exe"
 if %errorlevel% neq 0 exit /b 1
-set "ESPH=%HERE%..\..\..\..\esphome-ws2915\components\dig2analog_ultra"
+set "ESPH=%HERE%..\..\..\quinled-ultra-esphome\components\dig2analog_ultra"
 if not exist "%ESPH%\update_session.h" (
-  echo esphome-ws2915 not found next to the firmware: sender test skipped
+  echo quinled-ultra-esphome not found next to the firmware: sender test skipped
   exit /b 0
 )
 fc /b "%HERE%..\..\src\core\ultra_update.h" "%ESPH%\ultra_update.h" >nul
 if errorlevel 1 (
-  echo FAIL: esphome-ws2915 ultra_update.h differs from the master src\core\ultra_update.h
+  echo FAIL: quinled-ultra-esphome ultra_update.h differs from the master src\core\ultra_update.h
   exit /b 1
 )
 rem 4505 / 4611: test_bl.c's own tests are unused here; its setjmp is only used by those

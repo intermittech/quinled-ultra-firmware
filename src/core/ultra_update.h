@@ -2,7 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* QuinLED dig2analog Ultra firmware update over the data line (research/firmware-update.md).
  * Shared by the bootloader (firmware/bootloader), the app and the ESPHome component (a copy:
- * esphome-ws2915/components/dig2analog_ultra/ultra_update.h). This file is the master; keep the copy identical.
+ * quinled-ultra-esphome/components/dig2analog_ultra/ultra_update.h). This file is the master; keep the copy identical.
  *
  * FROZEN: every board's bootloader parses these formats for its whole life (it is never updated in the field).
  * Only add new block types or flags that old bootloaders may ignore; never change a layout or a meaning.

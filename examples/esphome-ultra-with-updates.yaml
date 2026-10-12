@@ -1,6 +1,6 @@
 # QuinLED dig2analog-ultra-5ch in Ultra mode, with board firmware updates from this repository's releases.
-# The full light setups (RGBCCT, downlights, strips) are in the esphome-ws2915-ws2805 repository's examples/:
-# https://github.com/intermittech/esphome-ws2915-ws2805/tree/main/examples
+# The full light setups (RGBCCT, downlights, strips) are in the quinled-ultra-esphome repository's examples/:
+# https://github.com/intermittech/quinled-ultra-esphome/tree/main/examples
 # Updates: https://github.com/intermittech/quinled-ultra-firmware/wiki/Updating-Over-The-Data-Line
 esphome:
   name: d2a-ultra
@@ -11,7 +11,7 @@ esp32:
     type: esp-idf
 
 external_components:
-  - source: github://intermittech/esphome-ws2915-ws2805@main
+  - source: github://intermittech/quinled-ultra-esphome@main
     components: [dig2analog_ultra]
 
 logger:

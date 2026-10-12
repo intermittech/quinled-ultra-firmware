@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-// The ESPHome component's update sender (esphome-ws2915/components/dig2analog_ultra/update_session.h) against the
-// real bootloader logic: its exact frames and pauses go through the flash / board model of test_bl.c.
-// Built by build_bl_test.cmd when the ESPHome component is next to the firmware (..\..\..\..\esphome-ws2915).
+// The ESPHome component's update sender (quinled-ultra-esphome/components/dig2analog_ultra/update_session.h) against
+// the real bootloader logic: its exact frames and pauses go through the flash / board model of test_bl.c.
+// Built by build_bl_test.cmd when the ESPHome components are next to the firmware (..\..\..\quinled-ultra-esphome).
 #define BL_TEST_NO_MAIN
 #include "test_bl.c"
 
