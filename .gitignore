@@ -1,0 +1,29 @@
+# build outputs (tools/build_target.sh, build_release.sh, bootloader/build_bl.sh, test\*.cmd)
+build/
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.exe
+*.pdb
+*.ilk
+__pycache__/
+*.pyc
+
+# signing keys: only the TEST pairs and the production PUBLIC keys belong in the repository
+# (tools/release/KEY_MANAGEMENT.md; the release workflow also fails on any other private key)
+*.pem
+*.key
+!tools/release/keys/test/**/*.pem
+!tools/release/keys/release_pub.pem
+!tools/release/keys/ci_pub.pem
+
+# editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

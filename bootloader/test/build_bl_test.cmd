@@ -1,0 +1,44 @@
+@echo off
+rem SPDX-License-Identifier: GPL-3.0-or-later
+rem Copyright (C) 2026 QuinLED
+rem Build and run the bootloader host tests with MSVC:
+rem   bl_tests.exe      bl_core + bl_rx against a flash / board / host model (test_bl.c)
+rem   sender_tests.exe  the ESPHome component's update sender through the same model (test_sender.cpp), when
+rem                     esphome-ws2915 sits next to the firmware; also checks its copy of ultra_update.h
+rem Usage: bootloader\test\build_bl_test.cmd [output dir]   (default %TEMP%\bl_host; keeps clear of build\host)
+rem BL_TEST_IMAGE=<image from tools\release\mkimage.py>: also install that image (both programs).
+setlocal
+set HERE=%~dp0
+set OUT=%~1
+if "%OUT%"=="" set "OUT=%TEMP%\bl_host"
+set "PF86=%ProgramFiles(x86)%"
+if "%PF86%"=="" set "PF86=C:\Program Files (x86)"
+set "VSWHERE=%PF86%\Microsoft Visual Studio\Installer\vswhere.exe"
+for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSDIR=%%i
+if not defined VSDIR (
+  echo MSVC not found
+  exit /b 2
+)
+call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
+if not exist "%OUT%" mkdir "%OUT%"
+if not exist "%OUT%\sender" mkdir "%OUT%\sender"
+cl /nologo /O2 /W4 /wd4996 /I"%HERE%.." /I"%HERE%..\..\src\core" /Fe:"%OUT%\bl_tests.exe" /Fo:"%OUT%\\" ^
+   "%HERE%test_bl.c" "%HERE%..\bl_core.c" "%HERE%..\bl_rx.c"
+if errorlevel 1 exit /b 1
+"%OUT%\bl_tests.exe"
+if errorlevel 1 exit /b 1
+set "ESPH=%HERE%..\..\..\..\esphome-ws2915\components\dig2analog_ultra"
+if not exist "%ESPH%\update_session.h" (
+  echo esphome-ws2915 not found next to the firmware: sender test skipped
+  exit /b 0
+)
+fc /b "%HERE%..\..\src\core\ultra_update.h" "%ESPH%\ultra_update.h" >nul
+if errorlevel 1 (
+  echo FAIL: esphome-ws2915 ultra_update.h differs from the master src\core\ultra_update.h
+  exit /b 1
+)
+rem 4505 / 4611: test_bl.c's own tests are unused here; its setjmp is only used by those
+cl /nologo /O2 /W4 /wd4996 /wd4505 /wd4611 /EHsc /std:c++17 /I"%HERE%.." /I"%HERE%." /I"%HERE%..\..\src\core" /I"%ESPH%" ^
+   /Fe:"%OUT%\sender_tests.exe" /Fo:"%OUT%\sender\\" "%HERE%test_sender.cpp" "%HERE%..\bl_core.c" "%HERE%..\bl_rx.c"
+if errorlevel 1 exit /b 1
+"%OUT%\sender_tests.exe"

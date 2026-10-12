@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 QuinLED
+# Publishes a stable release after its manifest was signed offline (tools/release/RELEASING.md, step "Stable"):
+# the draft release holds stable.json (from release.yml) and stable.json.sig (uploaded from the signing PC). This
+# checks the signature against the release public key in the repo, puts both on the `channels` branch and makes the
+# release public. Prepared locally; untested until the repo exists.
+name: publish-stable
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "stable tag, e.g. v0.6.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: pip install "cryptography>=42"
+      - name: Fetch and check the offline signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ inputs.tag }}" --pattern "stable.json" --pattern "stable.json.sig" --dir signed
+          python tools/release/sign_release.py verify --file signed/stable.json --pub tools/release/keys/release_pub.pem
+      - name: Channels branch
+        run: |
+          git fetch origin channels:channels
+          git worktree add ch channels
+          cp signed/stable.json signed/stable.json.sig ch/
+          cd ch
+          git config user.name "release bot"; git config user.email "actions@users.noreply.github.com"
+          git add stable.json stable.json.sig
+          git commit -m "channels: stable ${{ inputs.tag }}"
+          git push origin channels
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ inputs.tag }}" --draft=false --latest
