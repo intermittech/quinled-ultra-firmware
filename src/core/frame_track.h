@@ -6,7 +6,7 @@
  * Input per tick: c = DIN falling edges since the last gate re-arm (the hardware edge counter).
  *  - A frame starts with its first edge and ends when DIN stays idle for FT_END_TICKS ticks (100-150 us;
  *    WS reset >= 280 us). Frame end: the gate is re-armed (counter back to 0) with the next plan.
- *  - WS2805 and Ultra (v2) frames stay contiguous along a chain: every board blocks its own bits at the start. A
+ *  - WS2805 and Ultra (wire VERSION 2) frames stay contiguous along a chain: every board blocks its own bits at the start. A
  *    WS2915 frame does not: every board passes the header and then blocks its own 80 bits, so board k sees a gap of
  *    k x 80 bits (100 us each) right after the header. So a gap after exactly 26 or 32 edges (a WS2915 header; no
  *    frame of any protocol is that short) does not end the frame for up to FT_HOLD_TICKS (10 ms = 100 boards), and

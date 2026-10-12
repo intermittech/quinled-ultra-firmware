@@ -27,7 +27,7 @@ def parse_version(s):
     """'0.6.0-beta.1' / 'v0.5.0' -> 32-bit version word (major, minor, patch, pre-release byte)"""
     m = _SEMVER.match(s.strip())
     if not m:
-        raise ValueError(f"not a version: {s!r} (want 1.2.3 or 1.2.3-alpha.N / -beta.N / -rc.N)")
+        raise ValueError(f"not a version: {s!r} (want e.g. 0.6.0 or 0.6.0-alpha.N / -beta.N / -rc.N)")
     ma, mi, pa = int(m.group(1)), int(m.group(2)), int(m.group(3))
     if max(ma, mi, pa) > 255:
         raise ValueError(f"{s}: major / minor / patch must be <= 255")

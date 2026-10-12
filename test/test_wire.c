@@ -13,7 +13,7 @@
  *
  * Content: every WS chip slot and every Ultra slot carries its board index and host frame number, so a board that
  * shows another board's bits, or bits cut at the wrong place, counts as garbage.
- * Negative control: the v1 layout (header first, gate open 64 / closed 256 / open) is run at the wire level; boards
+ * Negative control: the format 1 layout (header first, withdrawn, gate open 64 / closed 256 / open) is run at the wire level; boards
  * after the first never see a frame that holds the header and their slot - the bug this layout change fixes.
  * Firmware update (WK_UPD, run by test_update.c): every board also runs the app's update side (core/upd_app.c) as
  * main.c does - UPD headers make it transparent, it then captures whole 384-bit frames; an ANNOUNCE it takes resets
@@ -131,7 +131,7 @@ static void whost_build(int kind, int boards, int nframes, double start_us, doub
             fr[0] = 0xFF; fr[1] = 0xFF; fr[2] = 0xFF; fr[3] = 0x80; n = 4;      /* gains 31, 7 check bits '0' */
             for (b = 0; b < boards; b++, n += 10) ws2915_bytes(b, f, fr + n);
         } else {
-            int x = kind == WK_LEGACY ? 0 : wext, h = kind == WK_LEGACY ? 0 : 32 * (boards + x);   /* v2: slots, then the header */
+            int x = kind == WK_LEGACY ? 0 : wext, h = kind == WK_LEGACY ? 0 : 32 * (boards + x);   /* VERSION 2: slots, then the header */
             for (b = 0; b < boards; b++) wultra_slot(b, f, fr + (kind == WK_LEGACY ? 8 : 0) + 32 * b);
             for (b = 0; b < x; b++) wbcast_slot(b, f, fr + 32 * (boards + b));
             n = 32 * (boards + x) + 8;
@@ -203,7 +203,7 @@ typedef struct {
 
 static wboard_t wb[WB_MAX];
 static const gate_plan_t w_closed = { 0, 0, 0, 0, 0 };
-static const gate_plan_t w_legacy = { 1, 64, 320, 320, 64 };   /* v1: header open, own slot closed, rest open */
+static const gate_plan_t w_legacy = { 1, 64, 320, 320, 64 };   /* format 1: header open, own slot closed, rest open */
 
 static int wgate_open(const gate_plan_t *g, int n)
 {
@@ -456,7 +456,7 @@ static void wsim_board(int k, proto_mode_t mode, proto_t sticky, int legacy)
             if ((ev & (FT_FRAME_END | FT_PARTIAL)) == FT_FRAME_END) {
                 int from = b->cnt_from, to = b->cnt_ptr, w0 = to, nb = to - from;
                 b->frames_seen++;
-                /* wire check: v2 = this board's slot first and the header last, of one host frame */
+                /* wire check: VERSION 2 = this board's slot first and the header last, of one host frame */
                 if (nb >= 320 && in[from].frame == in[to - 1].frame) {
                     int hf = in[from].frame, base = 256 * (wboards + wext);
                     if (in[from].idx == 256 * k && in[from + 255].idx == 256 * k + 255 && in[to - 64].idx == base &&
@@ -674,7 +674,7 @@ static void test_wire(void)
         wrs = 0x2545F4914F6CDD1DULL;                     /* the normal run below as always */
     }
 
-    /* negative control: the v1 layout (header first). Board 0 sees header + slot; every later board only gets a
+    /* negative control: the format 1 layout (header first). Board 0 sees header + slot; every later board only gets a
      * header-only frame and then its slot as a frame without header (the closed gate's 320 us LOW ends the frame) */
     bad = 0;
     for (nb = 2; nb <= WB_MAX; nb++) {
@@ -683,11 +683,11 @@ static void test_wire(void)
         if (r.legacy_hits != 0 || wb[0].legacy_slot_frames == 0) bad++;
         if (wb[1].frames_seen < 2 * wb[0].frames_seen - 2) bad++;           /* board 1: two frames per frame */
     }
-    CHECK(bad == 0, "v1 layout: boards after the first never see the header with their slot (%d)", bad);
-    printf("  v1 layout (header first): board 1 splits every frame in two, boards 1..n never get header + slot "
+    CHECK(bad == 0, "format 1 layout: boards after the first never see the header with their slot (%d)", bad);
+    printf("  format 1 layout (header first): board 1 splits every frame in two, boards 1..n never get header + slot "
            "-> the bug is reproduced\n");
 
-    /* v2 layout, forced Ultra: every board sees its slot first and the header last, in every frame */
+    /* VERSION 2 layout, forced Ultra: every board sees its slot first and the header last, in every frame */
     bad = 0;
     worst = 0;
     for (nb = 1; nb <= WB_MAX; nb++) {
@@ -697,8 +697,8 @@ static void test_wire(void)
         for (int k = 0; k < nb; k++) if (wb[k].shown != 24) bad++;
         if (r.sync > worst) worst = (int)r.sync;
     }
-    CHECK(bad == 0, "v2 forced Ultra: every board, every frame, its own slot (%d)", bad);
-    printf("  v2 (header last), forced Ultra, 1-10 boards: every board applies its own slot from every frame; "
+    CHECK(bad == 0, "VERSION 2 forced Ultra: every board, every frame, its own slot (%d)", bad);
+    printf("  VERSION 2 (header last), forced Ultra, 1-10 boards: every board applies its own slot from every frame; "
            "clock reference within %d us of the frame end\n", worst);
 
     /* broadcast / extension slots (reserved, ultra_protocol.h): k = 1, 2 slots of types 0x80.. after the last board's

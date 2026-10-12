@@ -21,17 +21,17 @@ if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\isense" mkdir "%OUT%\isense"
 cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
    "%HERE%test_main.c" "%HERE%..\src\core\*.c"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\isense_tests.exe" /Fo:"%OUT%\isense\\" ^
    "%HERE%test_isense.c" "%HERE%..\src\core\isense.c"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 rem the same against a gain-50 amplifier (CSA220NA, board.h ISENSE_AMP_GAIN 50)
 if not exist "%OUT%\isense50" mkdir "%OUT%\isense50"
 cl /nologo /O2 /W4 /wd4996 /DISENSE_TEST_GAIN=50u /DISENSE_TEST_BW=50e3 /Fe:"%OUT%\isense_tests_g50.exe" ^
    /Fo:"%OUT%\isense50\\" "%HERE%test_isense.c" "%HERE%..\src\core\isense.c"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\host_tests.exe"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\isense_tests.exe"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\isense_tests_g50.exe"

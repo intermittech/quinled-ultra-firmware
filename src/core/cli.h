@@ -8,6 +8,7 @@
  *   period <steps>      raw PWM period, 1440..65535 timer counts (144 MHz / steps = PWM frequency)
  *   save                store settings now          defaults   factory reset (settings and power-on scene)
  *   identify            blink the feedback channel / D9
+ *   version             the firmware / bootloader lines (as at boot and in status), and blink the version
  * Boards with the input current sense: set ilimit <x 50 mA>, set ical <%> (calibration: 0 = the standard test at
  * 25 / 50 / 75 / 100 %), status shows the current, the calibration and the board limit in effect.
  * Every board: status shows the MCU (die) temperature and the 3.3 V rail from the internal sensor / VREFINT. */
@@ -19,7 +20,11 @@
 #include "scene.h"
 
 typedef struct {
-    const char *version;
+    const char *version;           /* "0.6.0-beta.1", or FW_VERSION + " (development build)" */
+    uint8_t  bl_version;           /* the bootloader's (UPD_BL_INFO), 0 = none (standalone build) */
+    uint8_t  hw_id, hw_rev;        /* from the bootloader info */
+    uint8_t  app_state;            /* 0 standalone, 1 trial (not confirmed), 2 confirmed */
+    char     bl_build[9];          /* the bootloader's build id */
     uint32_t uptime_ms;
     uint32_t reset_flags;          /* RCC RSTSCKR at boot */
     uint8_t  proto_mode, proto_locked, hdr_bits;
@@ -73,6 +78,9 @@ typedef struct {
 } cli_t;
 
 void cli_feed(cli_t *c, char ch);
+/* "QuinLED dig2analog-ultra firmware v<version>, Copyright (C) 2026 QuinLED, GPL-3.0, source: ..." and the
+ * bootloader / hardware / app line: at boot, first in `status`, and `version` */
+void cli_banner(cli_t *c);
 /* exposed for tests */
 void cli_exec(cli_t *c, const char *line);
 

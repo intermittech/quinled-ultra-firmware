@@ -392,7 +392,7 @@ static void host_idle(uint32_t us)
     }
 }
 
-/* a normal Ultra v2 frame: n slots of NOP + the trailer */
+/* a normal Ultra frame (wire VERSION 2): n slots of NOP + the trailer */
 static void host_normal(uint32_t nslots)
 {
     uint8_t f[48];

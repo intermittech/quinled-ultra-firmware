@@ -25,7 +25,7 @@ enum {
     CMD_STAGGER       = 0x06,   /* STAGGER_*: 0 off, 1 fixed, 2 fixed + spread, 3 adaptive, 4 adaptive + spread */
     CMD_DIM_FLOOR     = 0x07,   /* 0 skip pulses below the minimum pulse, 1 clamp, 2 off */
     CMD_SIGNAL_LOSS   = 0x08,   /* 0 hold (WS28xx behaviour), 1 off after 2 s, 2 fade off after 2 s */
-    CMD_IDENTIFY      = 0x09,   /* ARG ignored */
+    CMD_IDENTIFY      = 0x09,   /* ARG 1 = blink the firmware version (CFG_IDENTIFY_VERSION), else the identify blink */
     CMD_FACTORY_RESET = 0x0A,   /* ARG must be 0xA5 */
     CMD_SMOOTHING     = 0x0B,   /* 0 off, 1 WS2805 input only, 2 all input */
     CMD_GAMMA         = 0x0C,   /* WS2805 input: 0 linear, 1 gamma 2.2, 2 gamma 2.8 */
@@ -38,6 +38,9 @@ enum {
     CMD_ISENSE_LIMIT  = 0x12,   /* board current limit x 50 mA, 0 = the board rating (main.c stores it) */
     CMD_ISENSE_CAL    = 0x13,   /* current calibration: ARG 0 = each channel at 25 / 50 / 75 / 100 %, 5..100 = at ARG % */
 };
+
+/* CMD_IDENTIFY's ARG for the version blink (main.c, ack.h). Older firmware shows the identify blink for any ARG. */
+#define CFG_IDENTIFY_VERSION 1u
 
 /* stagger modes (CMD_STAGGER / Ultra CONFIG 7), each one followed by its spread-spectrum variant */
 enum {

@@ -73,7 +73,7 @@ def crc8(d):
 
 
 def u_header(t_us):
-    h = bytearray(struct.pack(">HBI", 0x5AD2, 0x20, t_us))           # version 2 (trailer), flags 0
+    h = bytearray(struct.pack(">HBI", 0x5AD2, 0x20, t_us))           # VERSION 2 (trailer), flags 0
     return bytes(h + bytes([crc8(h)]))
 
 

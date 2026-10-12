@@ -239,7 +239,7 @@ static inline int upd_desc_check(const uint8_t *d, uint32_t crc, uint32_t hw_id,
     return 0;
 }
 
-/* UPD frame trailer: 0 = a valid UPD header (magic, version 2, UPD flag, CRC-8) */
+/* UPD frame trailer: 0 = a valid UPD header (magic, VERSION 2, UPD flag, CRC-8) */
 static inline int upd_check_header(const uint8_t *h)
 {
     return (upd_get16(h) == UPD_HDR_MAGIC && (h[2] >> 4) == UPD_HDR_VERSION && (h[2] & UPD_HDR_FLAG) != 0u &&

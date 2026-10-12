@@ -27,6 +27,7 @@
 #include "../core/dither.h"
 #include "../core/frame_rx.h"
 #include "../core/frame_track.h"
+#include "../core/fwver.h"
 #include "../core/gamma.h"
 #include "../core/isense.h"
 #include "../core/mcutemp.h"
@@ -219,6 +220,9 @@ static scene_budget_t sbudget;             /* write budget of the scene log */
 static uint8_t scene_major_pend, scene_check, ultra_seen;
 /* firmware update, app side (core/upd_app.h) */
 static upd_app_t upd;
+/* the firmware version (core/fwver.h): the descriptor's in release builds, else FW_VERSION; 0 = development build */
+static uint32_t fw_version;
+static char fw_version_text[FWVER_TEXT_MAX];
 #if UPD_APP
 #define HO ((upd_handover_t *)UPD_HANDOVER_ADDR)  /* outside every linker section (Link_app.ld) */
 static uint8_t upd_wd_cleared;
@@ -583,7 +587,11 @@ static cfg_result_t handle_result(cfg_result_t r)
         ack_start(&ack, ACK_P_NACK, 0);
         break;
     case CFG_IDENTIFY:
-        ack_start(&ack, ACK_P_IDENTIFY, 0);
+        if (r.arg == CFG_IDENTIFY_VERSION) {
+            ack_start_version(&ack, fw_version);   /* config frame / console `version` */
+        } else {
+            ack_start(&ack, ACK_P_IDENTIFY, 0);
+        }
         break;
     default:
         break;
@@ -734,6 +742,8 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
             dark_hold(&dk, ms_now, (ul.identify_arg ? ul.identify_arg : 60u) * 1000u);
         } else if (ul.identify == ULTRA_IDENT_RELEASE) {
             dark_release(&dk, ms_now);
+        } else if (ul.identify == ULTRA_IDENT_VERSION) {
+            ack_start_version(&ack, fw_version);
         } else if (ul.identify == ULTRA_IDENT_ON) {      /* (ultra_on_slot drops unknown values) */
             ack_start(&ack, ACK_P_IDENTIFY, 0);
         } else {
@@ -1101,9 +1111,28 @@ int main(void)
     hw_temp_init();                        /* the ADC for the MCU temperature */
 #endif
     ul.board_limit_ext = is.enabled;
-    stat.version = FW_VERSION;
     stat.reset_flags = hw_reset_flags();
     upd_boot();                            /* UPD_APP: the reset flags from the hand-over, the bootloader's result */
+    fw_version = fwver_parse(FW_VERSION);
+    if (upd.info.desc_ok && upd.info.version != 0u) {
+        fw_version = upd.info.version;     /* release builds: the descriptor, what the boards compare in an update */
+    }
+    fwver_format(fw_version, fw_version_text);
+    stat.version = fw_version != 0u ? fw_version_text : FW_VERSION " (development build)";
+    stat.bl_version = upd.info.bl_version;
+    stat.hw_id = upd.info.hw_id;
+    stat.hw_rev = upd.info.hw_rev;
+    stat.app_state = upd.info.bl_version == 0u ? 0u : upd.info.confirmed ? 2u : 1u;
+#if UPD_APP
+    if (upd.info.bl_version != 0u) {
+        const upd_bl_info_t *bl = (const upd_bl_info_t *)UPD_BL_INFO;
+        uint32_t i;
+        for (i = 0; i < 8u && bl->build_id[i] >= ' ' && bl->build_id[i] <= '~'; i++) {
+            stat.bl_build[i] = (char)bl->build_id[i];
+        }
+        stat.bl_build[i] = 0;
+    }
+#endif
     cli.write = uart_write;
     cli.apply = cli_apply;
     cli.save_now = save_now;
@@ -1118,7 +1147,8 @@ int main(void)
         plan = g;
         rx_ready = 1;                      /* gate closed until the tracker arms (idle line) or a frame ends */
     }
-    uart_write("QuinLED dig2analog-ultra-5ch fw " FW_VERSION ", type help\r\n");
+    cli_banner(&cli);
+    uart_write("type help\r\n");
 
     for (;;) {
         watchdog_kick();

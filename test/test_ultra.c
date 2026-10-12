@@ -983,14 +983,20 @@ static void test_ultra_compat(void)
     }
     CHECK(ok && bad == 0, "EFFECT spare parameter bytes ignored (%u differing renders)", bad);
 
-    /* IDENTIFY values 5-255 and CAL arguments 1-4 / 101-255: ignored; the defined ones are taken */
+    /* IDENTIFY values 6-255 and CAL arguments 1-4 / 101-255: ignored; the defined ones (0-5) are taken */
     c_setup();
-    for (k = ULTRA_IDENT_RELEASE + 1u, bad = 0; k <= 0xFFu; k++) {
+    for (k = ULTRA_IDENT_VERSION + 1u, bad = 0; k <= 0xFFu; k++) {
         ultra_slot_identify(s, cseq++, ULTRA_IDENT_ON);
         s[ULTRA_PAYLOAD] = (uint8_t)k;
         c_reseal(s);
         if (!c_ignored(s, 10)) bad++;
     }
+    ultra_slot_identify(s, cseq++, ULTRA_IDENT_VERSION);   /* 5: the version blink (protocol 0.2.1) */
+    if (s[ULTRA_PAYLOAD] != ULTRA_IDENT_VERSION) bad++;
+    if (ultra_on_slot(&UB, s, tk(10)) != ULTRA_EV_IDENTIFY || UB.identify != ULTRA_IDENT_VERSION) bad++;
+    memcpy(&UB, &UA, sizeof UB);
+    ultra_slot_identify(s, cseq++, ULTRA_IDENT_VERSION + 1u);   /* the builder still maps reserved values to STOP */
+    if (s[ULTRA_PAYLOAD] != ULTRA_IDENT_STOP) bad++;
     for (k = 1; k <= 0xFFu; k++) {
         uint32_t ev;
         ultra_slot_calibrate(s, cseq++, 0);
@@ -1008,7 +1014,7 @@ static void test_ultra_compat(void)
         ultra_slot_identify(s, cseq++, (uint8_t)k);
         if (ultra_on_slot(&UB, s, tk(10)) != ULTRA_EV_IDENTIFY || UB.identify != k) bad++;
     }
-    CHECK(bad == 0, "IDENTIFY: values 5-255 and CAL arguments 1-4 / 101-255 ignored, 0-4 taken (%u)", bad);
+    CHECK(bad == 0, "IDENTIFY: values 6-255 and CAL arguments 1-4 / 101-255 ignored, 0-5 taken (%u)", bad);
 
     /* SCENE modes 2-255: ignored (the stored scene stays) */
     c_setup();

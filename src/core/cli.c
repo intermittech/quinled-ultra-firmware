@@ -62,6 +62,31 @@ static void kv(cli_t *c, const char *k, uint32_t v)
     c->write("\r\n");
 }
 
+void cli_banner(cli_t *c)
+{
+    static const char *const app[] = { "standalone build (no bootloader, no updates over the data line)",
+                                       "trial (not confirmed yet)", "confirmed" };
+    const cli_status_t *s = c->st;
+    c->write("QuinLED dig2analog-ultra firmware v");
+    c->write(s->version);
+    c->write(", Copyright (C) 2026 QuinLED, GPL-3.0, source: github.com/intermittech/quinled-ultra-firmware\r\n");
+    if (s->bl_version != 0u) {
+        c->write("bootloader rev ");
+        wnum(c, s->bl_version);
+        c->write(" (build ");
+        c->write(s->bl_build);
+        c->write("), hardware ");
+        wnum(c, s->hw_id);
+        c->write(" revision ");
+        wnum(c, s->hw_rev);
+        c->write(", app ");
+    } else {
+        c->write("app ");
+    }
+    c->write(app[s->app_state < 3u ? s->app_state : 0]);
+    c->write("\r\n");
+}
+
 static uint8_t get_key(const cli_t *c, uint8_t cmd)
 {
     const settings_t *s = c->set;
@@ -113,9 +138,7 @@ static void status(cli_t *c)
     static const char *const mode[] = { "auto", "WS2915", "WS2805", "Ultra" };
     static const char *const err[] = { "", "no edge", "no gap", "short", "truncated", "pulse" };
     uint32_t i;
-    c->write("QuinLED dig2analog-ultra-5ch fw ");
-    c->write(s->version);
-    c->write("\r\n");
+    cli_banner(c);
     kv(c, "uptime_ms", s->uptime_ms);
     c->write("reset=");
     c->write((s->reset_flags & 0x20000000u) ? "watchdog " : "");
@@ -269,7 +292,7 @@ void cli_exec(cli_t *c, const char *line)
         return;
     }
     if (streq(word, "help") || streq(word, "?")) {
-        c->write("status | get | set <key> <value> | period <steps> | save | defaults | identify\r\n");
+        c->write("status | get | set <key> <value> | period <steps> | save | defaults | identify | version\r\n");
         for (i = 0; i < NKEYS; i++) {
             c->write("  ");
             c->write(keys[i].key);
@@ -319,6 +342,9 @@ void cli_exec(cli_t *c, const char *line)
     } else if (streq(word, "identify")) {
         c->apply(CMD_IDENTIFY, 0);
         c->write("ok\r\n");
+    } else if (streq(word, "version")) {
+        cli_banner(c);
+        c->apply(CMD_IDENTIFY, CFG_IDENTIFY_VERSION);   /* and blink it */
     } else {
         c->write("error: unknown command, try help\r\n");
     }

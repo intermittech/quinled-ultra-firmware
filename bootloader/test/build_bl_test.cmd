@@ -24,9 +24,9 @@ if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\sender" mkdir "%OUT%\sender"
 cl /nologo /O2 /W4 /wd4996 /I"%HERE%.." /I"%HERE%..\..\src\core" /Fe:"%OUT%\bl_tests.exe" /Fo:"%OUT%\\" ^
    "%HERE%test_bl.c" "%HERE%..\bl_core.c" "%HERE%..\bl_rx.c"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\bl_tests.exe"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 set "ESPH=%HERE%..\..\..\..\esphome-ws2915\components\dig2analog_ultra"
 if not exist "%ESPH%\update_session.h" (
   echo esphome-ws2915 not found next to the firmware: sender test skipped
@@ -40,5 +40,5 @@ if errorlevel 1 (
 rem 4505 / 4611: test_bl.c's own tests are unused here; its setjmp is only used by those
 cl /nologo /O2 /W4 /wd4996 /wd4505 /wd4611 /EHsc /std:c++17 /I"%HERE%.." /I"%HERE%." /I"%HERE%..\..\src\core" /I"%ESPH%" ^
    /Fe:"%OUT%\sender_tests.exe" /Fo:"%OUT%\sender\\" "%HERE%test_sender.cpp" "%HERE%..\bl_core.c" "%HERE%..\bl_rx.c"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\sender_tests.exe"

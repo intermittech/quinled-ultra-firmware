@@ -172,6 +172,7 @@ static void test_decoder(void)
 #include "test_cal.c"
 #include "test_div64.c"
 #include "test_mcutemp.c"
+#include "test_version.c"
 
 /* ------------------------------------------------------------------------------------------------ proto */
 static void test_proto(void)
@@ -408,6 +409,7 @@ int main(void)
     test_dark();
     test_gamma_exact();
     test_mcutemp();
+    test_version();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;
 }

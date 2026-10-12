@@ -18,5 +18,5 @@ if not defined VSDIR (
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if not exist "%OUT%" mkdir "%OUT%"
 cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\isense_tests.exe" /Fo:"%OUT%\\" "%HERE%test_isense.c" "%HERE%..\src\core\isense.c"
-if errorlevel 1 exit /b 1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\isense_tests.exe"

@@ -345,8 +345,9 @@ uint32_t ultra_on_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
     if (light >= ULTRA_LIGHTS && light != ULTRA_LIGHT_BOARD) {
         return 0;                                        /* LIGHT 5-14: reserved */
     }
-    if ((type == ULTRA_IDENTIFY && (p[0] > ULTRA_IDENT_RELEASE || (p[0] == ULTRA_IDENT_CAL && p[1] != 0u &&
-                                    (p[1] < ULTRA_IDENT_CAL_MIN || p[1] > ULTRA_IDENT_CAL_MAX)))) ||
+    if ((type == ULTRA_IDENTIFY && ((p[0] > ULTRA_IDENT_RELEASE && p[0] != ULTRA_IDENT_VERSION) ||
+                                    (p[0] == ULTRA_IDENT_CAL && p[1] != 0u &&
+                                     (p[1] < ULTRA_IDENT_CAL_MIN || p[1] > ULTRA_IDENT_CAL_MAX)))) ||
         (type == ULTRA_SCENE && p[0] > 1u)) {
         return 0;                                        /* an IDENTIFY / SCENE of later firmware */
     }

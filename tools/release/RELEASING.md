@@ -1,7 +1,7 @@
 # Releasing board firmware
 
-The firmware repo (placeholder `OWNER/REPO`, not created yet) publishes releases that ESPHome installs over the data
-line. Design: `research/firmware-update.md`. Formats: `src/core/ultra_update.h`.
+The firmware repo, intermittech/quinled-ultra-firmware, publishes releases that ESPHome installs over the data line.
+Formats: `src/core/ultra_update.h`. The first release has its own checklist: [FIRST-RELEASE.md](FIRST-RELEASE.md).
 
 ## Versions and channels
 
@@ -11,8 +11,8 @@ line. Design: `research/firmware-update.md`. Formats: `src/core/ultra_update.h`.
 - **Channel manifests** on the `channels` branch: `stable.json`, `beta.json`, `alpha.json`, each with a `.sig`.
   - A channel points at the newest release at least as stable as itself: a stable release updates all three, a beta
     updates beta and alpha, an alpha only alpha. Never backwards.
-- **ESPHome** reads `https://raw.githubusercontent.com/OWNER/REPO/channels/<channel>.json`. The images come from the
-  release assets.
+- **ESPHome** reads `https://raw.githubusercontent.com/intermittech/quinled-ultra-firmware/channels/<channel>.json`.
+  The images come from the release assets.
 
 ## What a release contains
 
@@ -34,7 +34,7 @@ line. Design: `research/firmware-update.md`. Formats: `src/core/ultra_update.h`.
 3. **alpha / beta / rc:** signed with the CI key and published at once.
 4. **Stable:** the release stays a draft with an unsigned `stable.json`. On the signing PC (a Claude session can do
    this on request):
-   `python tools/release/sign_release.py stable --tag v0.6.0 --repo OWNER/REPO`
+   `python tools/release/sign_release.py stable --tag v0.6.0 --repo intermittech/quinled-ultra-firmware`
    - It downloads `stable.json`, checks it (version, channel, image URLs), shows it and signs it with the offline key.
    - It uploads `stable.json.sig` and starts `publish-stable.yml`.
    - That workflow checks the signature against `tools/release/keys/release_pub.pem`, puts both files on the
@@ -55,11 +55,10 @@ Program `...-factory.hex` with WCH-LinkUtility / wlink (WCH-LinkE on TP1-TP4):
 - The factory bootloader is built per board revision (`bootloader-rev<N>`). A board revision with its own bootloader
   needs its own factory hex.
 
-## Repo setup checklist (once)
+## Repo setup (once)
 
-1. Create the repo (public: ESPHome downloads without a token). Move `firmware/` there with `.github/workflows/`.
-2. Fill in `XPACK_GCC_SHA256` in `release.yml`: the SHA-256 of the xPack win32-x64 zip, from the xPack release page.
-3. Create the keys and secrets: KEY_MANAGEMENT.md, "Setting up".
-4. In the ESPHome component: replace `OWNER/REPO` (`DEFAULT_REPO` in `update.py`) and fill in the production public
-   keys (`fw_keys.h`: the `FW_PRODUCTION_KEYS` list, empty until then). Release the component.
-5. Push a first alpha tag and check the whole chain with an ESP32 on the alpha channel.
+The repository exists (public, so ESPHome downloads without a token). The rest of the setup is part of
+[FIRST-RELEASE.md](FIRST-RELEASE.md), step B:
+- the xPack checksum in `release.yml`;
+- the keys and the CI secret (KEY_MANAGEMENT.md, "Setting up");
+- the production public keys in the ESPHome component.

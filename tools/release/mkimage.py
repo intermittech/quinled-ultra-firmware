@@ -31,7 +31,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin", required=True, help="fw.bin of the app linked at 0x00002100")
     ap.add_argument("--elf", help="fw.elf: checks the entry point")
-    ap.add_argument("--version", required=True, help="1.2.3 or 1.2.3-alpha.N / -beta.N / -rc.N")
+    ap.add_argument("--version", required=True, help="0.6.0 or 0.6.0-alpha.N / -beta.N / -rc.N")
     ap.add_argument("--rev-mask", required=True, type=lambda s: int(s, 0),
                     help="board revisions it runs on (bit 0 v0.1 PB15 only, 1 PB11, 2 current sense)")
     ap.add_argument("--hw-id", type=int, default=qdu.HW_ID_D2A_ULTRA_5CH)

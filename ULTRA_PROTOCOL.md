@@ -1,4 +1,4 @@
-# QuinLED dig2analog Ultra protocol v2
+# QuinLED dig2analog Ultra protocol 0.2 (wire VERSION 2)
 
 **Ultra mode** is the third protocol of the QuinLED dig2analog-ultra-5ch board, next to WS2915 and WS2805
 emulation. In Ultra mode the board works as a co-processor of the controller (ESPHome):
@@ -29,11 +29,12 @@ Frame bits = 256 × N + 64. Every board sees one contiguous frame: its own slot 
 boards' 472 ns decision. The boards pass bits on without re-timing, so this leaves room for the pulse-width change of
 50 forwarding boards.
 
-**Why the header is last (v2).** In v1 the header came first and every board forwarded it, then blocked its slot.
+**Why the header is last.** In format 1 (withdrawn, never released) the header came first and every board
+forwarded it, then blocked its slot.
 The closed gate left a 320 µs LOW gap after the header on the next board's input, which is longer than a WS reset,
 so that board saw a header-only frame and then a frame without a header. Boards after the first never got their
-slot together with a header. The firmware's wire-level chain test (`test/test_wire.c`) reproduces this with the v1
-layout and passes with v2.
+slot together with a header. The firmware's wire-level chain test (`test/test_wire.c`) reproduces this with the
+format 1 layout and passes with wire VERSION 2.
 
 **Reading a frame.** The board decodes its slot from the start of the frame (a 256-bit capture, as before). The
 header is read at the frame end: when DIN has been quiet for 100-150 µs, the poll ISR copies the last 576 words
@@ -123,7 +124,7 @@ The hub reaches a WS-forced board with the board's own WS config frames: `ultra_
 | Header field | Bytes | |
 |---|---|---|
 | MAGIC | 2 | `0x5AD2` |
-| VERSION << 4 \| FLAGS | 1 | version 2; FLAGS 0x01 RW, 0x02 HINT, 0x04 EXT, 0x08 UPD: see [Compatibility rules](#compatibility-rules), [Reserved](#reserved-return-channel) and [Firmware update](#firmware-update-frames) (0 in normal frames) |
+| VERSION << 4 \| FLAGS | 1 | VERSION 2 (the wire format of protocol 0.2); FLAGS 0x01 RW, 0x02 HINT, 0x04 EXT, 0x08 UPD: see [Compatibility rules](#compatibility-rules), [Reserved](#reserved-return-channel) and [Firmware update](#firmware-update-frames) (0 in normal frames) |
 | TIME | 4 | host clock in µs (low 32 bits) **at the end of the frame**: the falling edge of the header's last bit |
 | CRC-8 | 1 | SMBus (poly 0x07) over the first 7 bytes |
 
@@ -173,7 +174,7 @@ Measured in the host test, two boards with HSI +2.0 % and −1.7 % stay within 8
 | 3 | EFFECT | effect (1), start ms (int32), parameters (≤ 22) |
 | 4 | STEP | index << 4 \| count (1), duration ms (2), transition ms (2), M, A ×5, B ×5 (like SET) |
 | 5 | CONFIG | up to 9 × (id (1), value (2)) |
-| 6 | IDENTIFY | 1 = blink the identify pattern (30 s), 0 = stop; 2 = current calibration (boards with the input current sense: zero, then each channel alone; payload byte 2 = 0: the standard test at 25 / 50 / 75 / 100 %, 0.95 s; 5..100: at that duty only, 0.18 s; visible; stored on the board; other boards ignore it); 3 = DARK: every output fades to dark (0.3 s) and stays dark for payload byte 2 s (0 = 60 s) or until 4 = RELEASE, which fades back; the light engine keeps running underneath, so states and effects continue. The hub calibrates a pin with them: DARK to every board, then one board's test after the other in chain order, then RELEASE. Values 5-255 and calibration arguments 1-4 / 101-255 are reserved (the slot is ignored) |
+| 6 | IDENTIFY | 1 = blink the identify pattern (30 s), 0 = stop; 2 = current calibration (boards with the input current sense: zero, then each channel alone; payload byte 2 = 0: the standard test at 25 / 50 / 75 / 100 %, 0.95 s; 5..100: at that duty only, 0.18 s; visible; stored on the board; other boards ignore it); 3 = DARK: every output fades to dark (0.3 s) and stays dark for payload byte 2 s (0 = 60 s) or until 4 = RELEASE, which fades back; the light engine keeps running underneath, so states and effects continue. The hub calibrates a pin with them: DARK to every board, then one board's test after the other in chain order, then RELEASE. 5 = VERSION (protocol 0.2.1): the board blinks its firmware version once on the feedback channel (3 fast, then major, minor, patch as value codes 1.2 s apart, then alpha 1 / beta 2 / rc 3 short; a development build: one long flash); a board without it ignores the slot, so no blink means older firmware. Values 6-255 and calibration arguments 1-4 / 101-255 are reserved (the slot is ignored) |
 | 7 | POLL | *reserved* for the return channel, see [Reserved](#reserved-return-channel); boards ignore it |
 | 8 | SCENE | mode (1: 0 not in the scene, 1 these values; 2-255 reserved), fade × 100 ms (1), M (2), A ×5 (2 each), B ×5 (2 each) |
 | 9 | LIGHT_OPT | flags (1: 0x01 dim to warm, 0x02 set points), CW LED mireds × 10 (2), WW LED mireds × 10 (2), warm end mireds × 10 (2), red assist (2, 0..65535 = 0..100 %), set points: 4 × (M (2), mireds × 10 (2)), unused = 0 |
@@ -328,7 +329,7 @@ current-sense revision). An unused pair is (0, 0).
 
 ## Compatibility rules
 
-Nothing has shipped yet, so these rules are part of v2 from the start. **A board ignores what it doesn't know**, so a
+Nothing has shipped yet, so these rules are part of protocol 0.2 from the start. **A board ignores what it doesn't know**, so a
 later feature never disturbs boards with older firmware. **The hub sends only defined values:** the builders in
 `ultra_protocol.h` can't produce anything else, and the ESPHome host test checks every frame the hub builds (also
 from 20,000 random calls with undefined inputs).
@@ -342,7 +343,7 @@ from 20,000 random calls with undefined inputs).
 | Role 8-15 | the channel isn't part of the light (as role 0) | same |
 | Unknown flag bits: slot FLAGS (other than SET's 0x01 / 0x02), LIGHT_DEF / LIGHT_OPT flags, the reserved nibble after CH5's role | ignored: the engine's state is byte-identical to the same slot without them | same |
 | Spare payload bytes: LIGHT_DEF 26, LIGHT_OPT 25-26, SCENE 24-26, IDENTIFY after its argument, EFFECT after its parameters | ignored | same |
-| IDENTIFY value 5-255, calibration argument 1-4 / 101-255 | ignores the slot | same |
+| IDENTIFY value 6-255 (5 before 0.2.1), calibration argument 1-4 / 101-255 | ignores the slot | same |
 | SCENE mode 2-255 | ignores the slot (the stored scene stays) | same |
 | Header FLAGS 0x02 HINT | processes the frame as usual | `test_ultra_compat` (frame_rx), `test_wire.c` |
 | Header FLAGS 0x04 EXT | keeps its lock and the clock sync, ignores every slot of the frame (as for RW) | same |
@@ -443,7 +444,8 @@ feature bitmap:
 | 7 | BOOT_PROTOCOL | CONFIG 22 |
 | 8 | STAGGER_ADAPTIVE | CONFIG 7 values 3 / 4 |
 | 9 | MCU_TEMP | STATUS carries the MCU temperature and the 3.3 V rail (below) |
-| 10-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
+| 10 | VERSION_BLINK | IDENTIFY 5 (protocol 0.2.1) |
+| 11-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
 | 24-31 | — | hardware-specific |
 
 - Firmware 0.4 would report 0x3A7 (bits 0, 1, 2, 5, 7, 8, 9), plus bits 3 and 4 with the board current sense and
@@ -544,7 +546,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
 - **Decode deadline:** a board must know RW and its POLL by t0 + 900 µs.
   - Its slot is decoded during the frame.
   - The header follows from the tail copy (in the poll ISR, at t0 + 100-150 µs) and its decode (130 µs). That is
-    less work after t0 than v1's whole-capture decode.
+    less work after t0 than format 1's whole-capture decode.
   - It is tight anyway: the adaptive stagger search blocks the main loop for up to ~0.5 ms. Firmware with the return
     channel must hold that search back while a frame end is pending (not done yet: a follow-up for that firmware).
 
@@ -555,7 +557,7 @@ one session; Ultra mode only. Formats and constants: `src/core/ultra_update.h` (
 for life; the ESPHome component keeps an identical copy). Design and decisions:
 [research/firmware-update.md](../research/firmware-update.md). Bootloader: [bootloader/README.md](bootloader/README.md).
 
-**Frame:** BLOCK (40 bytes) + HEADER (8, version 2, FLAGS = UPD) = **384 bits**, a length no other frame uses. It
+**Frame:** BLOCK (40 bytes) + HEADER (8, VERSION 2, FLAGS = UPD) = **384 bits**, a length no other frame uses. It
 is sent like any Ultra frame. 384 is not an Ultra length, so a board classifies it as "odd" and keeps its lock.
 
 | Bytes | Field | |
@@ -600,18 +602,24 @@ PING frames are sent outside sessions (after one, and when the line resyncs).
 
 ## Versions
 
-- **v1** (firmware 0.3, not run on hardware): the header first.
-- **v2**:
+Protocol releases are numbered 0.x.y while nothing is released as 1.0; the MINOR number is the wire VERSION
+(header byte 2). The master header and the changelog are in intermittech/quinled-ultra-protocol.
+
+- **Format 1** (firmware 0.3, withdrawn, never released, not run on hardware): the header first.
+- **Protocol 0.2.0** (wire VERSION 2):
   - the header as a trailer;
   - TIME at the frame end;
   - DARK preamble of full frames;
   - SCENE 7 → 8 and LIGHT_OPT 8 → 9, so POLL can take 7;
   - FLAGS RW / UPD and the return-channel constants reserved.
 
-  v1 and v2 reject each other's headers (version nibble), so the controller and the boards must match.
-- **From v2 on, the version changes only for an incompatible change** ([Compatibility rules](#compatibility-rules)).
+  Format 1 and VERSION 2 reject each other's headers (version nibble), so the controller and the boards must
+  match.
+- **Protocol 0.2.1:** IDENTIFY 5, the firmware version as blinks (feature bit 10). Compatible both ways.
+- **From VERSION 2 on, the wire VERSION changes only for an incompatible change** (the release then becomes
+  0.3.0; [Compatibility rules](#compatibility-rules)).
   Everything else goes into the reserved ranges, behind HINT / EXT, or into broadcast slots.
-- **Firmware update frames** use the UPD flag reserved in v2; no new protocol version. Their header version stays 2
+- **Firmware update frames** use the UPD flag reserved in 0.2.0; no new wire VERSION. Their header VERSION stays 2
   for good, whatever the version of normal frames becomes, because bootloaders are never updated.
 
 ## Board resources (CH32V203, 144 MHz)

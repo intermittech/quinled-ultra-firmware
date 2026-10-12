@@ -22,7 +22,7 @@ uint32_t hw_ms(void);                  /* ms since hw_full_init (call at least e
 uint32_t hw_ring_pos(void);            /* DMA write position in hw_ring */
 uint16_t hw_edges(void);               /* DIN falling edges since the last gate re-arm */
 void hw_gate_open(void);               /* FWD_EN high: forward everything; edge counter restarts */
-void hw_gate_ultra(void);              /* FWD_EN low for 256 bits, then high (an Ultra v2 board's own slot) */
+void hw_gate_ultra(void);              /* FWD_EN low for 256 bits, then high (an Ultra board's own slot, wire VERSION 2) */
 void hw_feedback(int on);              /* red channel 10 % + D9 */
 void hw_kick(void);
 void hw_puts(const char *s);           /* debug UART (TP5, 115200 8N1), blocking */

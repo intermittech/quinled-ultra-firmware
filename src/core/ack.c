@@ -58,6 +58,45 @@ void ack_start(ack_t *a, ack_kind_t kind, uint8_t value_code)
     a->active = 1;
 }
 
+/* one value code (value + 1 blinks: long = 5, short = 1, 300 ms off between), its last off-time `gap` */
+static void add_code(ack_t *a, uint32_t value, uint16_t gap)
+{
+    uint32_t code = (value > 29u ? 29u : value) + 1u, i;
+    for (i = 0; i < code / 5u; i++) {
+        add(a, 700, 300);
+    }
+    for (i = 0; i < code % 5u; i++) {
+        add(a, 200, 300);
+    }
+    a->ms[a->nseg - 1u] = gap;
+}
+
+void ack_start_version(ack_t *a, uint32_t version)
+{
+    uint32_t pre = version & 0xFFu;
+    a->nseg = 0;
+    a->repeat = 0;
+    if (version == 0u) {
+        add_ack(a, 900);                              /* a development build: 3 fast, then one long flash */
+        add(a, 1500, 1000);
+    } else {
+        add_ack(a, 900);
+        add_code(a, version >> 24, 1200);             /* major */
+        add_code(a, (version >> 16) & 0xFFu, 1200);   /* minor */
+        add_code(a, (version >> 8) & 0xFFu, 1200);    /* patch */
+        if (pre != 0xFFu) {                           /* alpha 1 short, beta 2 short, rc 3 short */
+            uint32_t i, n = pre >= 0x80u ? 3u : pre >= 0x40u ? 2u : 1u;
+            for (i = 0; i < n; i++) {
+                add(a, 200, 300);
+            }
+        }
+        a->ms[a->nseg - 1u] = 1000;                   /* final pause before normal output */
+    }
+    a->seg = 0;
+    a->left = a->ms[0];
+    a->active = 1;
+}
+
 void ack_stop(ack_t *a)
 {
     a->active = 0;
