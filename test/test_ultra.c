@@ -540,17 +540,22 @@ static void test_ultra_power(void)
     useq++;
     rend(&U, ms, o);
     CHECK(abs((int)o[0] - 32767) <= 1 && o[1] == 65535, "channel limit 500 of 1000 mA (%u)", o[0]);
+    CHECK(!U.board_limited && U.ch_limited, "a channel cap is not the board limit (no D9 limit blink): CH_LIMITING");
+    CHECK(U.board_total_ma >= 4499u && U.board_total_ma <= 4501u, "computed board current 500 + 4 x 1000 (%u mA)",
+          U.board_total_ma);
     ids[0] = ULTRA_CFG_BOARD_MAX; vals[0] = 2250;              /* 500 + 4 x 1000 = 4500 -> 0.5 */
     ultra_slot_config(s, useq++, ids, vals, 1);
     send(&U, ms, s);
     rend(&U, ms + 1, o);
     CHECK(abs((int)o[1] - 32767) <= 2 && abs((int)o[0] - 16383) <= 2, "board limit scales all (%u %u)", o[0], o[1]);
+    CHECK(U.board_limited, "board limit scaling flagged (D9 limit blink without the current sense)");
     printf("  limits ok (%u %u %u %u %u)\n", o[0], o[1], o[2], o[3], o[4]);
     /* current-sense boards: main.c takes CONFIG 21 as the measured limit (isense), the estimate skips it */
     U.board_limit_ext = 1;
     rend(&U, ms + 2, o);
     CHECK(abs((int)o[1] - 65535) <= 2 && abs((int)o[0] - 32767) <= 2, "measured board limit: estimate skips it (%u %u)",
           o[0], o[1]);
+    CHECK(!U.board_limited, "measured board limit: the flag is the current sense's (is.limiting)");
     U.board_limit_ext = 0;
     ultra_slot_calibrate(s, useq++, 40);
     CHECK(send(&U, ms, s) == ULTRA_EV_IDENTIFY && U.identify == ULTRA_IDENT_CAL && U.identify_arg == 40,

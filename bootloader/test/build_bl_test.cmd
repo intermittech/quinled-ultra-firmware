@@ -6,6 +6,8 @@ rem   bl_tests.exe      bl_core + bl_rx against a flash / board / host model (te
 rem   sender_tests.exe  the ESPHome component's update sender through the same model (test_sender.cpp), when
 rem                     quinled-ultra-esphome sits next to the firmware; also checks its copy of ultra_update.h
 rem Usage: bootloader\test\build_bl_test.cmd [output dir]   (default %TEMP%\bl_host; keeps clear of build\host)
+rem ULTRA_ESPHOME=<quinled-ultra-esphome folder>: use that one. Otherwise it is looked for next to the firmware
+rem   repository (..\..\..\quinled-ultra-esphome), then next to the hardware project (..\..\..\..\quinled-ultra-esphome).
 rem BL_TEST_IMAGE=<image from tools\release\mkimage.py>: also install that image (both programs).
 setlocal
 set HERE=%~dp0
@@ -27,9 +29,14 @@ cl /nologo /O2 /W4 /wd4996 /I"%HERE%.." /I"%HERE%..\..\src\core" /Fe:"%OUT%\bl_t
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\bl_tests.exe"
 if %errorlevel% neq 0 exit /b 1
-set "ESPH=%HERE%..\..\..\quinled-ultra-esphome\components\dig2analog_ultra"
+set "ESPH="
+if defined ULTRA_ESPHOME set "ESPH=%ULTRA_ESPHOME%\components\dig2analog_ultra"
+if not defined ESPH if exist "%HERE%..\..\..\quinled-ultra-esphome\components\dig2analog_ultra\update_session.h" (
+  set "ESPH=%HERE%..\..\..\quinled-ultra-esphome\components\dig2analog_ultra"
+)
+if not defined ESPH set "ESPH=%HERE%..\..\..\..\quinled-ultra-esphome\components\dig2analog_ultra"
 if not exist "%ESPH%\update_session.h" (
-  echo quinled-ultra-esphome not found next to the firmware: sender test skipped
+  echo quinled-ultra-esphome not found at ULTRA_ESPHOME or next to the firmware: sender test skipped
   exit /b 0
 )
 fc /b "%HERE%..\..\src\core\ultra_update.h" "%ESPH%\ultra_update.h" >nul

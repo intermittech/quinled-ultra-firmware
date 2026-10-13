@@ -805,11 +805,36 @@ static void test_disabled(void)
     for (k = 0; k < NCH; k++) CHECK(out[k] == req[k], "disabled: outputs changed");
 }
 
+/* the time to the retry after a trip (power events: POWER page retry seconds) */
+static void test_retry_left(void)
+{
+    isense_t is;
+    uint32_t ms, ev = 0;
+    isense_init(&is, 1, 10000, 8000);
+    isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16);
+    isense_set_limit(&is, 0);
+    CHECK(isense_retry_left_ms(&is) == 0u, "not tripped: no retry");
+    isense_tick(&is, 4095);
+    CHECK(isense_tick(&is, 4095) == 1u && isense_retry_left_ms(&is) == ISENSE_RETRY_MS, "short: the whole first wait");
+    isense_ms(&is, 4095u * 20u, 20, 4095);         /* registered: 1 ms of the wait gone */
+    CHECK(isense_retry_left_ms(&is) == ISENSE_RETRY_MS - 1u, "1 ms later (%u)", isense_retry_left_ms(&is));
+    for (ms = 1; ms < ISENSE_RETRY_MS && !(ev & ISENSE_EV_RELEASE); ms++) {
+        ev = isense_ms(&is, 0, 20, 0);
+    }
+    CHECK((ev & ISENSE_EV_RELEASE) && ms == ISENSE_RETRY_MS && isense_retry_left_ms(&is) == 0u, "released after 1 s");
+    isense_tick(&is, 4095);
+    isense_tick(&is, 4095);
+    isense_ms(&is, 4095u * 20u, 20, 4095);
+    CHECK(isense_retry_left_ms(&is) == 2u * ISENSE_RETRY_MS - 1u, "second trip: the wait doubles (%u)",
+          isense_retry_left_ms(&is));
+}
+
 int main(void)
 {
     printf("isense host test (amplifier gain %u, %.0f kHz, output <= %.2f V)\n", (unsigned)ISENSE_TEST_GAIN,
            ISENSE_TEST_BW / 1e3, ISENSE_TEST_VOMAX);
     test_disabled();
+    test_retry_left();
     test_measurement_accuracy();
     test_powerup();
     printf("legitimate steps 0 -> 100 %% (24 V, 25 kHz, spread)\n");

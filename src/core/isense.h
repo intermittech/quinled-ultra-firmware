@@ -181,6 +181,8 @@ int  isense_export(const isense_t *s, uint8_t ch25[ISENSE_CH], uint8_t *zero_ma)
 uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak_raw);
 /* the outputs to show for the requested ones (may be the same array) */
 void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t out[ISENSE_CH]);
+/* ms until the retry after a trip (0 = not tripped) */
+uint32_t isense_retry_left_ms(const isense_t *s);
 
 /* ---------------------------------------------------------------------------------------------- ISR side */
 /* 20 kHz poll tick: raw = newest ADC result. Returns 1 when the outputs must be forced off now (fast trip). */

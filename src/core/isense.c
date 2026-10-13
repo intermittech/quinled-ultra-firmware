@@ -296,6 +296,16 @@ static uint32_t retry_ms(uint8_t n)
     return t > ISENSE_RETRY_MAX_MS ? ISENSE_RETRY_MAX_MS : t;
 }
 
+uint32_t isense_retry_left_ms(const isense_t *s)
+{
+    uint32_t t;
+    if (s->tripped == ISENSE_TRIP_NONE) {
+        return 0;
+    }
+    t = retry_ms(s->retry_n);
+    return s->trip_cause == ISENSE_TRIP_NONE ? t : (s->off_ms >= t ? 0u : t - s->off_ms);   /* not registered yet: all */
+}
+
 /* the limiter state after a trip: the retry starts scaled so that the current seen at the trip lands at the
  * limit (a legitimate overload comes back regulated; a short trips again and backs off) */
 static void trip_scale(isense_t *s, uint32_t i_trip_ma)

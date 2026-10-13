@@ -96,6 +96,10 @@ typedef struct {
     uint8_t identify_arg;                 /* its second byte (calibration duty %) */
     uint8_t board_limit_ext;              /* set by main: the board limit (CONFIG 21) is measured (isense), so
                                              power_limit() leaves it out; set again after every ultra_init() */
+    uint8_t board_limited;                /* the last ultra_render() scaled the outputs to CONFIG 21 on the configured
+                                             channel currents (the computed board limit: D9's limit blink, ocled.h) */
+    uint8_t ch_limited;                   /* ... capped a channel at its CONFIG 16-20 limit (power events, pwrev.h) */
+    uint32_t board_total_ma;              /* ... the computed board current before the board limit, mA (CONFIG 11-15) */
     uint16_t out[5];
 } ultra_t;
 

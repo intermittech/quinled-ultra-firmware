@@ -173,6 +173,8 @@ static void test_decoder(void)
 #include "test_div64.c"
 #include "test_mcutemp.c"
 #include "test_version.c"
+#include "test_ocled.c"
+#include "test_pwrev.c"
 
 /* ------------------------------------------------------------------------------------------------ proto */
 static void test_proto(void)
@@ -410,6 +412,8 @@ int main(void)
     test_gamma_exact();
     test_mcutemp();
     test_version();
+    test_ocled();
+    test_pwrev();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;
 }

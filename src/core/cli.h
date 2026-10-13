@@ -11,12 +11,15 @@
  *   version             the firmware / bootloader lines (as at boot and in status), and blink the version
  * Boards with the input current sense: set ilimit <x 50 mA>, set ical <%> (calibration: 0 = the standard test at
  * 25 / 50 / 75 / 100 %), status shows the current, the calibration and the board limit in effect.
- * Every board: status shows the MCU (die) temperature and the 3.3 V rail from the internal sensor / VREFINT. */
+ * Every board: status shows the MCU (die) temperature and the 3.3 V rail from the internal sensor / VREFINT, the
+ * overcurrent signal on D9 (core/ocled.h: limit / trip, since when, the hold left) and the power events
+ * (core/pwrev.h: state, counters, latches, the last limit event and trip; what a Diff-Power ultra receiver reports). */
 #ifndef CLI_H
 #define CLI_H
 
 #include <stdint.h>
 #include "config.h"
+#include "pwrev.h"
 #include "scene.h"
 
 typedef struct {
@@ -64,6 +67,15 @@ typedef struct {
     /* MCU temperature (core/mcutemp.h), every board */
     int16_t  mcu_temp_c10;         /* 0.1 C, MCUTEMP_NA (-32768) = not valid */
     uint16_t vdda_mv;              /* the 3.3 V rail from VREFINT, 0 = not known */
+    /* the overcurrent signal on D9 (core/ocled.h), every board */
+    uint8_t  oc_show;              /* OCLED_*: 0 off, 1 limit, 2 trip */
+    uint8_t  oc_cause;             /* the last trip's cause: 1 short, 2 overload */
+    uint8_t  oc_limiting, oc_tripped;   /* the conditions now */
+    uint32_t oc_since_ms;          /* uptime when the shown pattern started */
+    uint32_t oc_hold_ms;           /* hold left (0 while the condition is on) */
+    /* the power events (core/pwrev.h), every board: STATUS byte 8 and the POWER page as a receiver would send them */
+    uint8_t  pw_state;             /* ULTRA_ST_LIMITING / _TRIPPED / _POWER_EVENT / _CH_LIMITING */
+    uint8_t  pw_page[PWREV_PAGE_BYTES];
 } cli_status_t;
 
 typedef struct {

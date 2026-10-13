@@ -970,10 +970,13 @@ static void light_out(const ultra_light_t *L, const ultra_vals_t *vp, uint32_t *
     }
 }
 
-/* power limit: per channel and per board, from the LED current of each channel at 100 % */
-static void power_limit(const ultra_t *u, uint32_t *res)
+/* power limit: per channel and per board, from the LED current of each channel at 100 %. Returns 1 when the board
+ * limit (CONFIG 21) scaled the outputs, | 2 when a channel limit (CONFIG 16-20) capped a channel; *total_ma = the
+ * computed board current before the board limit */
+static uint8_t power_limit(const ultra_t *u, uint32_t *res, uint32_t *total_ma)
 {
     uint32_t ch, total = 0;
+    uint8_t f = 0;
     for (ch = 0; ch < 5u; ch++) {
         uint32_t ia = u->cfg[ULTRA_CFG_CH_CURRENT + ch], imax = u->cfg[ULTRA_CFG_CH_MAX + ch];
         if (ia == 0u) {
@@ -981,22 +984,26 @@ static void power_limit(const ultra_t *u, uint32_t *res)
         }
         if (imax != 0u && res[ch] * ia > imax * 65535u) {
             res[ch] = imax * 65535u / ia;
+            f = 2u;
         }
         total += (res[ch] * ia + 32767u) / 65535u;
     }
+    *total_ma = total;
     if (!u->board_limit_ext && u->cfg[ULTRA_CFG_BOARD_MAX] != 0u && total > u->cfg[ULTRA_CFG_BOARD_MAX]) {
         for (ch = 0; ch < 5u; ch++) {
             if (u->cfg[ULTRA_CFG_CH_CURRENT + ch] != 0u) {
                 res[ch] = (uint32_t)(((uint64_t)res[ch] * u->cfg[ULTRA_CFG_BOARD_MAX]) / total);
             }
         }
+        f |= 1u;
     }
+    return f;
 }
 
 uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
 {
     uint32_t now = host_ms(u, tick), res[5] = { 0, 0, 0, 0, 0 }, l, ch;
-    uint8_t changed = 0;
+    uint8_t changed = 0, lim;
 
     for (l = 0; l < ULTRA_LIGHTS; l++) {
         ultra_light_t *L = &u->light[l];
@@ -1007,7 +1014,9 @@ uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
         light_values(L, now, &v);
         light_out(L, &v, res);
     }
-    power_limit(u, res);
+    lim = power_limit(u, res, &u->board_total_ma);
+    u->board_limited = (uint8_t)(lim & 1u);
+    u->ch_limited = (uint8_t)(lim >> 1);
 
     for (ch = 0; ch < 5u; ch++) {
         if (u->out[ch] != res[ch]) {
@@ -1021,7 +1030,7 @@ uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
 
 void ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out)
 {
-    uint32_t res[5] = { 0, 0, 0, 0, 0 }, l, ch;
+    uint32_t res[5] = { 0, 0, 0, 0, 0 }, l, ch, total;
     uint8_t mask = 0, keep = 0, fade = 0, have_fade = 0;
     for (l = 0; l < ULTRA_LIGHTS; l++) {
         const ultra_light_t *L = &u->light[l];
@@ -1049,7 +1058,7 @@ void ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out)
             res[ch] = 0;
         }
     }
-    power_limit(u, res);
+    (void)power_limit(u, res, &total);
     out->mask = (uint8_t)(mask | keep);
     for (ch = 0; ch < 5u; ch++) {
         out->v[ch] = (out->mask & (1u << ch)) ? (uint16_t)res[ch] : 0u;

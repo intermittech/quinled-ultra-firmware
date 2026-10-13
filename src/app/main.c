@@ -31,6 +31,8 @@
 #include "../core/gamma.h"
 #include "../core/isense.h"
 #include "../core/mcutemp.h"
+#include "../core/ocled.h"
+#include "../core/pwrev.h"
 #include "../core/proto.h"
 #include "../core/scene.h"
 #include "../core/smooth.h"
@@ -234,6 +236,11 @@ static uint32_t lim_ms;
 static uint16_t cal_cnt;
 static uint8_t cal_present, cal_save_pend;
 static dark_t dk;                          /* dark hold of the pin's calibration (Ultra IDENTIFY 3 / 4, core/dark.h) */
+/* the overcurrent signal on D9 (core/ocled.h) and D9's level as set; the power events (core/pwrev.h: the state a
+ * Diff-Power ultra receiver reports on its STATUS / POWER pages; local here) */
+static ocled_t ocl;
+static uint8_t led_now;
+static pwrev_t pw;
 /* MCU temperature (core/mcutemp.h): mt.c10 / mt.valid / mt.vdda_mv for the console and the telemetry (STATUS) */
 static mcutemp_t mt;
 static uint32_t temp_ms;
@@ -443,14 +450,12 @@ static void outputs_update(uint8_t ack_on)
         for (i = 0; i < 5u; i++) {
             v[i] = (eff.feedback_ch == 1u || (eff.feedback_ch == 0u && i == CH_R)) ? lvl : 0u;
         }
-        led_set(ack_on);
     } else {
         for (i = 0; i < 5u; i++) {
             v[i] = ultra_on ? uout[i] : sm.cur[i];
         }
         scene_mix(&srun, ms_now, v);       /* the power-on scene until data comes, then the cross-fade */
         dark_apply(&dk, ms_now, v);        /* the pin's calibration: dark (a test still overrides it below) */
-        led_set(0);
     }
 #if HW_ISENSE
     isense_apply(&is, v, v);               /* board limit (all channels scaled together), or the calibration pattern */
@@ -1019,6 +1024,50 @@ static void signal_loss_check(void)
     outputs_dirty = 1;
 }
 
+static uint16_t sat16(int32_t v)
+{
+    return (uint16_t)(v < 0 ? 0 : v > 65535 ? 65535 : v);
+}
+
+/* every ms: the power events (core/pwrev.h) and D9. The state comes from the current sense's limiter and trips, or
+ * without it from the Ultra power limit (CONFIG 21 on the configured channel currents: computed, no trips). D9 by
+ * priority: trip > acknowledge / identify / version > limit > off (core/ocled.h; the feedback channel still shows the
+ * acknowledge patterns, outputs_update) */
+static void power_service(uint8_t ack_on)
+{
+    pwrev_in_t in;
+    uint8_t lv;
+    in.limit_ma = clim.limit_ma;
+    in.limit_src = pwrev_src(clim.src);
+    in.ch_limiting = (uint8_t)(ultra_on && ul.ch_limited);
+    if (is.enabled) {
+        in.trip_cause = is.tripped;        /* ISENSE_TRIP_FAST / _OVL = ULTRA_PW_CAUSE_SHORT / _OVERLOAD */
+        in.limiting = (uint8_t)(is.limiting && in.trip_cause == ISENSE_TRIP_NONE);
+        in.i_ma = sat16(is.i_ms);
+        in.trip_ma = in.trip_cause == ISENSE_TRIP_FAST ? is.peak_ma : in.i_ma;
+        in.factor = (uint16_t)(is.k >= 65535u ? 65535u : is.k);
+        in.retry_ms = isense_retry_left_ms(&is);
+    } else {
+        uint32_t t = ultra_on ? ul.board_total_ma : 0u, f = 65535u;
+        in.trip_cause = ULTRA_PW_CAUSE_NONE;
+        in.limiting = (uint8_t)(ultra_on && ul.board_limited);
+        in.i_ma = sat16((int32_t)(t > 65535u ? 65535u : t));
+        in.trip_ma = 0;
+        if (in.limiting && t > ul.cfg[ULTRA_CFG_BOARD_MAX]) {
+            f = (uint32_t)ul.cfg[ULTRA_CFG_BOARD_MAX] * 65535u / t;
+        }
+        in.factor = (uint16_t)f;
+        in.retry_ms = 0;
+    }
+    pwrev_update(&pw, ms_now, &in);
+    ocled_update(&ocl, ms_now, in.limiting, in.trip_cause);
+    lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
+    if (lv != led_now) {
+        led_now = lv;
+        led_set(lv);
+    }
+}
+
 static void status_snapshot(void)
 {
     uint8_t i;
@@ -1066,6 +1115,14 @@ static void status_snapshot(void)
     stat.lim_conn_ma = clim.connected_ma;
     stat.mcu_temp_c10 = mt.c10;
     stat.vdda_mv = mt.vdda_mv;
+    stat.oc_show = ocl.show;
+    stat.oc_cause = ocl.last_cause;
+    stat.oc_limiting = ocl.limiting;
+    stat.oc_tripped = (uint8_t)(ocl.trip_cause != 0u);
+    stat.oc_since_ms = ocl.since_ms;
+    stat.oc_hold_ms = ocled_hold_left(&ocl, ms_now);
+    stat.pw_state = pwrev_state(&pw);
+    pwrev_page(&pw, stat.pw_page);
 }
 
 int main(void)
@@ -1083,6 +1140,8 @@ int main(void)
     scene_want = scene_stored;
     scene_boot(&srun, &scene_stored);
     dark_init(&dk);
+    ocled_init(&ocl);
+    pwrev_init(&pw, ms_now);
     scene_budget_init(&sbudget, 0);
     config_rx_init(&rx);
     frx_init(&frx, (proto_mode_t)set.protocol, (proto_t)set.last_proto);
@@ -1178,6 +1237,7 @@ int main(void)
 #if HW_ISENSE
             isense_service();              /* measurement of the last ms: limit, trips, calibration */
 #endif
+            power_service(ack_on);         /* power events, D9: overcurrent signal / acknowledge patterns */
             signal_loss_check();
             upd_service();
             temp_service();

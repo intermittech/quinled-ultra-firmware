@@ -116,7 +116,8 @@ the ESPHome component.
 - **End to end at sample level:** waveform → decoder → session → installed.
 - **`BL_TEST_IMAGE`:** a real release image from `tools/release/mkimage.py` installs (Python and C formats agree).
 
-**`sender_tests.exe`** (the ESPHome component's `update_session.h`)
+**`sender_tests.exe`** (the ESPHome component's `update_session.h`; runs when `build_bl_test.cmd` finds
+quinled-ultra-esphome: `ULTRA_ESPHOME`, else next to the firmware repository, else next to the hardware project)
 
 - 30.5 KB: 4.4 s on the wire at the hub's worst-case bit time.
 - Full slot (54,784 B): 7.2 s.

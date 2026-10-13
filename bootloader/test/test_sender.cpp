@@ -2,7 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 // The ESPHome component's update sender (quinled-ultra-esphome/components/dig2analog_ultra/update_session.h) against
 // the real bootloader logic: its exact frames and pauses go through the flash / board model of test_bl.c.
-// Built by build_bl_test.cmd when the ESPHome components are next to the firmware (..\..\..\quinled-ultra-esphome).
+// Built by build_bl_test.cmd when it finds quinled-ultra-esphome (ULTRA_ESPHOME, or next to the firmware).
 #define BL_TEST_NO_MAIN
 #include "test_bl.c"
 

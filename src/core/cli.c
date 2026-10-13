@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 #include "cli.h"
 #include "climit.h"
+#include "ultra_protocol.h"
 #include "presets.h"
 
 typedef struct {
@@ -258,6 +259,83 @@ static void status(cli_t *c)
         c->write(s->lim_need == CLIMIT_NEED_NO ? "no limit needed\r\n" : "the limit may engage\r\n");
     } else {
         c->write("not known\r\n");
+    }
+    /* the overcurrent signal on D9 (core/ocled.h) */
+    c->write("overcurrent_led=");
+    if (s->oc_show == 0u) {
+        c->write("off");
+    } else {
+        static const char *const cause[] = { "", " (short)", " (overload)" };
+        c->write(s->oc_show == 2u ? "trip" : "limit");
+        c->write(s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "");
+        c->write(", since ");
+        wnum(c, s->oc_since_ms);
+        c->write(" ms (");
+        wnum(c, s->uptime_ms - s->oc_since_ms);
+        c->write(" ms ago), ");
+        if (s->oc_show == 2u ? s->oc_tripped : s->oc_limiting) {
+            c->write(s->oc_show == 2u ? "outputs off" : "board limit active");
+        } else {
+            c->write("hold ");
+            wnum(c, s->oc_hold_ms);
+            c->write(" ms");
+        }
+    }
+    c->write("\r\n");
+    /* the power events (core/pwrev.h), decoded from the POWER page bytes a Diff-Power ultra receiver would send */
+    {
+        static const char *const cause[] = { "", "short", "overload" };
+        const uint8_t *g = s->pw_page;
+        uint8_t st = s->pw_state, lat = g[ULTRA_PW_LATCHED], cs = (uint8_t)(g[ULTRA_PW_SRC_CAUSE] & 0x0Fu);
+        uint32_t age;
+        c->write("power_state=");
+        c->write((st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED | ULTRA_ST_CH_LIMITING)) ? "" : "ok");
+        c->write((st & ULTRA_ST_LIMITING) ? "limiting" : "");
+        c->write((st & ULTRA_ST_TRIPPED) ? ((st & ULTRA_ST_LIMITING) ? ", tripped" : "tripped") : "");
+        c->write((st & ULTRA_ST_CH_LIMITING) ? ((st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED)) ? ", channel-limiting"
+                                                                                           : "channel-limiting") : "");
+        if (st & ULTRA_ST_TRIPPED) {
+            c->write(" (retry in ");
+            wnum(c, g[ULTRA_PW_RETRY_S]);
+            c->write(" s)");
+        } else if (st & ULTRA_ST_LIMITING) {
+            c->write(" (factor ");
+            wnum(c, ultra_get16(g + ULTRA_PW_FACTOR) * 1000u / 65535u);
+            c->write(" permille)");
+        }
+        c->write("\r\npower_events=limit ");
+        wnum(c, ultra_get16(g + ULTRA_PW_LIMIT_EVENTS));
+        c->write(", overload trips ");
+        wnum(c, ultra_get16(g + ULTRA_PW_OVL_TRIPS));
+        c->write(", short trips ");
+        wnum(c, ultra_get16(g + ULTRA_PW_SHORT_TRIPS));
+        c->write(lat ? ", latched:" : ", nothing latched");
+        c->write((lat & ULTRA_PW_EV_LIMITED) ? " limit" : "");
+        c->write((lat & ULTRA_PW_EV_OVERLOAD) ? " overload" : "");
+        c->write((lat & ULTRA_PW_EV_SHORT) ? " short" : "");
+        c->write("\r\npower_last_limit=");
+        age = ultra_get24(g + ULTRA_PW_LIMIT_AGE);
+        if (age == PWREV_AGE_NONE) {
+            c->write("none");
+        } else {
+            wnum(c, age);
+            c->write(" s ago, ");
+            wnum(c, ultra_get16(g + ULTRA_PW_EVENT_MA));
+            c->write(" mA");
+        }
+        c->write("\r\npower_last_trip=");
+        age = ultra_get24(g + ULTRA_PW_TRIP_AGE);
+        if (age == PWREV_AGE_NONE) {
+            c->write("none");
+        } else {
+            wnum(c, age);
+            c->write(" s ago, ");
+            c->write(cause[cs < 3u ? cs : 0]);
+            c->write(", ");
+            wnum(c, ultra_get16(g + ULTRA_PW_TRIP_MA));
+            c->write(" mA");
+        }
+        c->write("\r\n");
     }
     if (c->scene && c->scene->mask) {
         c->write("power-on scene R/G/B/W1/W2=");

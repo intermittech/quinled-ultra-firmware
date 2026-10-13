@@ -379,8 +379,8 @@ from 20,000 random calls with undefined inputs).
 | Effect | 0-9 | 10-127 official, 128-255 custom |
 | CONFIG id | 1-22 | 23-127 official, 128-255 hardware-specific (e.g. a Diff-Power receiver, a current-sense revision; 128 = the MCU temperature offset, reserved) |
 | Header FLAGS | 0x02 HINT, 0x04 EXT (no hint or extension defined yet); 0x01 RW, 0x08 UPD (reserved below) | — |
-| Return-channel page | 0x00-0x07 | 0x08-0x7F official, 0x80-0xFD hardware-specific; 0xFE BUSY, 0xFF UNSUPPORTED |
-| Feature bit (IDENTITY) | 0-9 | 10-23 official, 24-31 hardware-specific |
+| Return-channel page | 0x00-0x08 (0x08 POWER: protocol 0.2.2) | 0x09-0x7F official, 0x80-0xFD hardware-specific; 0xFE BUSY, 0xFF UNSUPPORTED |
+| Feature bit (IDENTITY) | 0-11 (11 POWER_EVENTS: protocol 0.2.2) | 12-23 official, 24-31 hardware-specific |
 
 ### Broadcast / extension slots (reserved)
 
@@ -445,11 +445,12 @@ IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version 
 | 8 | STAGGER_ADAPTIVE | CONFIG 7 values 3 / 4 |
 | 9 | MCU_TEMP | STATUS carries the MCU temperature and the 3.3 V rail (below) |
 | 10 | VERSION_BLINK | IDENTIFY 5 (protocol 0.2.1) |
-| 11-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
+| 11 | POWER_EVENTS | STATUS byte 8 and the POWER page: board limit and overcurrent events (protocol 0.2.2) |
+| 12-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
 | 24-31 | — | hardware-specific |
 
-- Firmware 0.4's features are 0x3A7 (bits 0, 1, 2, 5, 7, 8, 9), plus bits 3 and 4 with the board current sense and
-  bit 6 behind a bootloader; a Diff-Power ultra receiver would report them.
+- Firmware 0.4's features are 0x3A7 (bits 0, 1, 2, 5, 7, 8, 9), plus bits 3, 4 and 11 with the board current sense
+  and bit 6 behind a bootloader; a Diff-Power ultra receiver would report them.
 - **Until Diff-Power receivers answer, the host can't read this** (a dig2analog-ultra never answers). It sends what is configured, and a board without a feature
   falls back as above (e.g. firmware without SCENE would show nothing at power-up).
 
@@ -490,13 +491,15 @@ RW and UPD are never set together: the host never sends that, and a board ignore
 - **Response slot:** SYNC `0xA5` \| PAGE \| INDEX << 4 \| RFLAGS \| SEQ \| UID16 (2) \| DATA (24) \| CRC-16 (2).
 - **Pages:** 0x00 STATUS, 0x01 OUTPUTS, 0x02 ACKS, 0x03 ERRORS, 0x04 IDENTITY ([layout](#capability-reporting-reserved)),
   0x05 FW_UPDATE (research/return-channel.md §4.5), and for the current calibration (`research/current-calibration.md`)
-  below; 0x08-0x7F reserved for later pages, 0x80-0xFD hardware-specific:
+  and the power events (0x08 POWER, protocol 0.2.2) below; 0x09-0x7F reserved for later pages, 0x80-0xFD
+  hardware-specific:
 
   **0x00 STATUS**, the fields the firmware measures already (console `status`; `ULTRA_ST_*`). A Diff-Power ultra
   receiver reports them; on the dig2analog-ultra they stay local:
 
   | Off | Size | Field |
   |---|---|---|
+  | 8 | 1 | power state (protocol 0.2.2, `ULTRA_ST_STATE`): 0x01 LIMITING (the board limit reduces the outputs, held 2 s), 0x02 TRIPPED (outputs off until the retry), 0x04 POWER_EVENT (a POWER latch not acknowledged), 0x08 CH_LIMITING (a CONFIG 16-20 channel limit reduces a channel, held 2 s); details on the POWER page |
   | 9 | 2 | MCU temperature, int16, 0.1 °C; **0x8000 = not valid** (no good conversion yet, or 5 bad ones in a row) |
   | 15 | 2 | the 3.3 V rail (VDDA from VREFINT), mV; 0 = not known |
 
@@ -538,6 +541,37 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   - **Per-channel power** = V+ (STATUS 13) × the OUTPUTS current; while V+ isn't measured, the host uses its configured
     supply voltage.
   - **When to poll:** CALIBRATION after a test (~1 s after the command) and every few minutes; CAL_TEST on demand.
+
+  **0x08 POWER** (protocol 0.2.2, feature bit 11; boards with the input current sense, others answer 0xFF): the
+  board limit and the overcurrent events, so a controller can show them (e.g. in Home Assistant). The firmware keeps
+  them in one struct (`core/pwrev.c`), updated every ms from the limiter and the trips. On the dig2analog-ultra they
+  stay local (console `status`: `power_state`, `power_events`, `power_last_limit`, `power_last_trip`); a Diff-Power
+  ultra receiver answers from it.
+
+  | Off | Size | Field (`ULTRA_PW_*`) |
+  |---|---|---|
+  | 0 | 1 | NOW: the STATUS bits LIMITING, TRIPPED and CH_LIMITING |
+  | 1 | 1 | LATCHED since the controller's last acknowledge: 0x01 a limit event, 0x02 an overload trip, 0x04 a short-circuit trip |
+  | 2 | 2 | limit events since power-up (u16, wraps) |
+  | 4 | 2 | overload trips since power-up |
+  | 6 | 2 | short-circuit trips since power-up |
+  | 8 | 3 | s since the last limit event started (u24; 0xFFFFFF = none since power-up) |
+  | 11 | 3 | s since the last trip (u24; 0xFFFFFF = none) |
+  | 14 | 2 | board limit in effect, mA (0xFFFF = none) |
+  | 16 | 1 | limit source << 4 \| last trip cause: source as on CALIBRATION (0 board rating, 1 user, 2 PWM preset, 3 fuse); cause 0 none, 1 short circuit, 2 overload |
+  | 17 | 2 | measured board current when the last limit event started, mA |
+  | 19 | 2 | measured current at the last trip, mA (short circuit: the peak sample) |
+  | 21 | 2 | the limiter's factor now, 0-65535 = 0-1 (65535 = no reduction, 0 = tripped) |
+  | 23 | 1 | s until the retry after a trip (0 = not tripped, 255 = 255 s or more) |
+
+  - **A limit event** starts when the limiter reduces the outputs after 2 s without reducing them
+    (`ULTRA_PW_HOLD_MS`): one long overload is one event. Overload trip: above the limit's trip level for 200 ms.
+    Short-circuit trip: ≥ 1.5 × the fuse rating for 50-100 µs.
+  - **While a latch is set,** every answer carries RFLAGS EVENT and STATUS byte 8 POWER_EVENT.
+  - **Acknowledge:** a POLL of this page with payload byte 7 = 0x01 (`ULTRA_PW_ARG_ACK`) and bytes 8-13 = the three
+    counts the controller read (u16 each). A latch clears only when its count still equals the acknowledged one, so an
+    event after the read stays latched and a lost or repeated POLL does no harm. The answer shows the state after it.
+  - Everything is in RAM: a power cycle clears it (STATUS shows the reset cause).
 
 - **Forwarding gate during the window: held CLOSED** (DOUT LOW), not high-Z.
   - On a Diff-Power receiver, DIN sees every answer relayed back.

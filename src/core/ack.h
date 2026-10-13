@@ -8,7 +8,9 @@
  *   version      3 fast, 800 ms, then major, minor, patch as value codes 1.2 s apart, then the pre-release
  *                (alpha 1 short, beta 2 short, rc 3 short; nothing for stable). Unknown (0, a development build):
  *                3 fast, then one 1.5 s flash. research/firmware-version-display.md
- * Every pattern ends with 1 s off, then normal output resumes. */
+ * Every pattern ends with 1 s off, then normal output resumes.
+ * D9 is shared with the overcurrent signal (ocled.h): a trip's double flash overrides these on D9, and these override
+ * the limit blink. The feedback channel shows only these. */
 #ifndef ACK_H
 #define ACK_H
 
