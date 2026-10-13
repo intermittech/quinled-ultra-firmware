@@ -3,7 +3,7 @@
 """Run the compiled firmware functions in tools/rv32emu.py and report executed instructions / estimated cycles.
 
     python tools/measure.py            (after tools/build_target.sh)
-    FW_ELF=<path>/fw.elf python tools/measure.py   (another build, e.g. OUT=... EXTRA_CFLAGS=-DHW_ISENSE=1)
+    FW_ELF=<path>/fw.elf python tools/measure.py   (another build, e.g. OUT=... EXTRA_CFLAGS=-DISENSE_AMP_GAIN=50)
 """
 import os
 import random
@@ -278,7 +278,7 @@ def main():
     rows.append(("mcutemp_sample (once a second)", n, c, "%.1f C" % (struct.unpack("<h", emu.peek(mt + 6, 2))[0] / 10)))
 
     # ---- poll ISR paths
-    EDGE_CNT = 0x40000824                              # TIM4->CNT: DIN edges (HW_PWM_3TIMERS 1)
+    EDGE_CNT = 0x40000824                              # TIM4->CNT: DIN edges (TIM3 capture -> ITR2)
     DMA1_CH2_CNTR = 0x40020020
     sym = emu.addr
     emu.mmio[DMA1_CH2_CNTR] = 2048 - 700
@@ -289,13 +289,11 @@ def main():
             setup()
         return emu.call("poll_isr"), emu.cycles()
 
-    # current-sense builds (HW_ISENSE 1): every poll tick also sums the ADC result (isense_tick), so all poll ISR
-    # rows below include it when the amplifier is present
-    ADC1_RDATAR = 0x4001244C
-    isense = "hw_isense_init" in emu.syms
-    if isense:
-        emu.call("isense_init", [sym("is"), 1, 10000, 8000])
-        emu.mmio[ADC1_RDATAR] = 500                    # ~2 A
+    # every poll tick also sums the current-sense result (isense_tick), so all poll ISR rows below include it
+    ADC1_STATR, ADC1_RDATAR = 0x40012400, 0x4001244C
+    isense = True
+    emu.call("isense_init", [sym("is"), 1, 10000, 8000])
+    emu.mmio[ADC1_RDATAR] = 500                        # ~2 A
     FT = sym("ft")                                     # ftrack_t: last_cnt, idle, armed (+3), cap_state (+4), ...
     emu.wr(sym("rx_ready"), 1, 1)
     emu.wr(FT + 3, 1, 1)                               # armed
@@ -303,6 +301,17 @@ def main():
     emu.poke(plan, struct.pack("<BxHHHBx", 1, 32, 112, 112, 32))   # gate_plan_t: start_open, t1, t2, own, hdr
     n, c = isr(0)
     rows.append(("poll ISR, line idle", n, c, ""))
+    # every 20th tick (1 ms): the ADC injected group, the last sequence's 4 results read, the next one started
+    emu.wr(sym("adc_ready"), 1, 1)
+    emu.wr(sym("inj_run"), 1, 1)
+    emu.mmio[ADC1_STATR] = 0x4                         # JEOC
+    for a in range(0x4001243C, 0x4001244C, 4):         # IDATAR1-4
+        emu.mmio[a] = 1234
+    sub = [k for k in emu.syms if k.startswith("sub.")]  # poll_isr's static ms divider (GCC numbers it)
+    assert len(sub) == 1, sub
+    emu.wr(sym(sub[0]), 2, 19)
+    n, c = isr(0)
+    rows.append(("poll ISR, line idle, 1 ms tick (ADC injected read + start)", n, c, ""))
     n, c = isr(5)
     rows.append(("poll ISR, first edges of a frame (note ring pos)", n, c, ""))
     n, c = isr(60)

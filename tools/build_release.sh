@@ -17,9 +17,8 @@ PY="${PYTHON:-python}"
 mkdir -p "$OUT"
 
 # variant | compiler flags | board revisions it runs on (mask) | board revision of its factory bootloader
-#   hw1: PB11 wired to PWM_B (3 timers). Runs on revision 1 and on revision 2 (the current sense is simply unused).
-#   Add "isense|-DHW_ISENSE=1|0x4|2" once the current-sense board is in production.
-VARIANTS="hw1||0x6|1"
+#   rev04: the dig2analog-ultra-5ch rev 0.4, board revision 3 (core/ultra_update.h UPD_REV_D2A_R04), the only one.
+VARIANTS="rev04||0x8|3"
 
 for v in $VARIANTS; do
   IFS='|' read -r name flags mask rev <<< "$v"

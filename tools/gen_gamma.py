@@ -3,7 +3,7 @@
 """Reference values of the WS2805 gamma (8-bit input -> 16-bit output) for gamma 2.2 and 2.8:
 round(65535 * (in / 255) ^ gamma), an input above 0 never 0.
 
-src/core/gamma.c no longer holds these as tables (research/flash-size.md): it computes them with the board's exact
+src/core/gamma.c no longer holds these as tables (to save flash): it computes them with the board's exact
 power curve (ultra_gamma) plus a short list of one-count corrections, and the host test (test/test_cal.c,
 test_gamma_exact) checks all 512 values against this formula. This script prints the reference, e.g. to compare.
 """

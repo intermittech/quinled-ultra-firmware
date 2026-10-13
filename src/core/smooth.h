@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Inter-frame smoothing and fades (DESIGN_NOTES "Firmware feature set").
+/* Inter-frame smoothing and fades (README: features).
  *
  * Smoothing: a controller sends 50-200 frames/s; instead of jumping, the output glides linearly from its
  * current value to the new frame's value over the measured frame interval (EMA of the frame-to-frame time).

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Dark hold (Ultra IDENTIFY 3 / 4; the hub's current calibration of a pin, research/current-calibration.md).
+/* Dark hold (Ultra IDENTIFY 3 / 4; the hub's current calibration of a pin, wiki: Current sense).
  *
  * Every output fades to dark (DARK_FADE_MS) and stays dark while the light engine keeps running underneath. The
  * release, or the hold time running out, fades back to it: states, transitions and effects continue where they

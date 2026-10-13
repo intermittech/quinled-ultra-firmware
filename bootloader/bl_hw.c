@@ -7,8 +7,9 @@
  * decoder thresholds (bootloader/measure_bl.py: ~61 % CPU inside a frame). Flash operations run at HCLK / 2 (the
  * flash access clock must stay <= 60 MHz; the app's sequence, RM 32.1 note 2); the main loop resyncs the decoder
  * after each one, since the sampler ran at half speed meanwhile.
- * Pins: PA0 DIN -> TIM2_ETR (edge counter), PA1 FWD_EN = TIM2_CH2 (gate), PA5 / PA6 SPI1 SCK / MISO (DIN sampler,
- * 36 MHz), PA9 TIM1_CH2 = PWM_R (feedback, 10 %), PA4 D9, PA2 USART2_TX (TP5). All other PWM pins stay inputs: the
+ * Pins (rev 0.4, the app's pin map): PA6 DIN = SPI1_MISO (sampler, 36 MHz; SCK PA5 internal) and TIM3_CH1, whose
+ * capture trigger clocks TIM2 (ITR2): the edge counter; PA1 FWD_EN = TIM2_CH2 (gate); PA9 TIM1_CH2 = PWM_R
+ * (feedback, 10 %); PB15 D9; PA2 USART2_TX (TP5); PA0 / PA4 analog (unused here). All other PWM pins stay inputs: the
  * board's pull-downs keep their gate drivers off. */
 #include "ch32v20x.h"
 #include "bl_hw.h"
@@ -133,8 +134,8 @@ void hw_full_init(void)
 {
     clock_144();
     RCC->AHBPCENR |= RCC_DMA1EN | RCC_CRCEN;
-    RCC->APB2PCENR |= RCC_AFIOEN | RCC_IOPAEN | RCC_TIM1EN | RCC_SPI1EN;
-    RCC->APB1PCENR |= RCC_TIM2EN | RCC_PWREN | RCC_USART2EN;
+    RCC->APB2PCENR |= RCC_AFIOEN | RCC_IOPAEN | RCC_IOPBEN | RCC_TIM1EN | RCC_SPI1EN;
+    RCC->APB1PCENR |= RCC_TIM2EN | RCC_TIM3EN | RCC_PWREN | RCC_USART2EN;
 
     /* free-running 64-bit SysTick at HCLK (counts up from 0) */
     SysTick->CMP = 0xFFFFFFFFFFFFFFFFull;
@@ -152,20 +153,30 @@ void hw_full_init(void)
     /* PVD: flash is only written while VDD >= ~2.9 V */
     PWR->CTLR = (PWR->CTLR & ~PWR_CTLR_PLS) | PWR_CTLR_PLS_2V9 | PWR_CTLR_PVDE;
 
-    /* pins (no AFIO remap: TIM2 CH1/ETR/CH2 on PA0/PA1, TIM1_CH2 on PA9, USART2_TX on PA2) */
-    GPIOA->BSHR = (1u << (1 + 16)) | (1u << (4 + 16));   /* FWD_EN low until the timer drives it, D9 off */
-    pin_cfg(GPIOA, 0, CFG_IN_FLOAT);
+    /* pins (no AFIO remap: TIM2_CH2 on PA1, TIM3_CH1 on PA6, TIM1_CH2 on PA9, USART2_TX on PA2) */
+    GPIOA->BSHR = 1u << (1 + 16);                        /* FWD_EN low until the timer drives it */
+    GPIOB->BSHR = 1u << (15 + 16);                       /* D9 off */
+    pin_cfg(GPIOA, 0, 0x0u);                             /* analog: unused here */
+    pin_cfg(GPIOA, 4, 0x0u);
     pin_cfg(GPIOA, 6, CFG_IN_FLOAT);
     pin_cfg(GPIOA, 5, CFG_AF_PP);
     pin_cfg(GPIOA, 1, CFG_AF_PP);
     pin_cfg(GPIOA, 2, CFG_AF_PP);
-    pin_cfg(GPIOA, 4, CFG_OUT_PP);
     pin_cfg(GPIOA, 9, CFG_AF_PP);
+    pin_cfg(GPIOB, 15, CFG_OUT_PP);
 
-    /* gate: TIM2 counts DIN falling edges (external clock mode 2 on ETR, inverted, filter N = 2); CH2 drives FWD_EN */
+    /* gate: TIM3 CH1 captures DIN falling edges on PA6 (filter fCK, N = 2); its trigger output pulses on each capture
+     * (MMS = 011) and clocks TIM2 (external clock mode 1 on ITR2 = TIM3), so TIM2->CNT counts DIN edges, as in the
+     * app; TIM2 CH2 drives FWD_EN */
+    TIM3->PSC = 0;
+    TIM3->ATRLR = 0xFFFFu;
+    TIM3->CHCTLR1 = (uint16_t)(1u /* CC1S = TI1 */ | (1u << 4) /* IC1F: fCK, N = 2 */);
+    TIM3->CCER = TIM_CC1E | TIM_CC1P;
+    TIM3->CTLR2 = (uint16_t)(3u << 4);                   /* MMS = 011: compare pulse, also on capture */
+    TIM3->CTLR1 = TIM_CEN;
     TIM2->PSC = 0;
     TIM2->ATRLR = 0xFFFFu;
-    TIM2->SMCFGR = TIM_ECE | TIM_ETP | (1u << 8);
+    TIM2->SMCFGR = (uint16_t)((2u << 4) /* TS = ITR2 (TIM3) */ | 7u /* SMS: external clock mode 1 */);
     TIM2->CHCTLR1 = (uint16_t)(OCM_FORCE_HI << 12);      /* open: forward everything */
     TIM2->CCER = TIM_CC2E;
     TIM2->CTLR1 = TIM_CEN;
@@ -230,7 +241,7 @@ void hw_gate_ultra(void)
 void hw_feedback(int on)
 {
     TIM1->CH2CVR = on ? 100u : 0u;
-    GPIOA->BSHR = on ? (1u << 4) : (1u << (4 + 16));
+    GPIOB->BSHR = on ? (1u << 15) : (1u << (15 + 16)); /* D9 on PB15 */
 }
 
 void hw_kick(void)

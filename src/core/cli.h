@@ -12,6 +12,7 @@
  * Boards with the input current sense: set ilimit <x 50 mA>, set ical <%> (calibration: 0 = the standard test at
  * 25 / 50 / 75 / 100 %), status shows the current, the calibration and the board limit in effect.
  * Every board: status shows the MCU (die) temperature and the 3.3 V rail from the internal sensor / VREFINT, the
+ * voltage channels (the supply on PA5 when its divider is fitted, the spare input on TP8), the
  * overcurrent signal on D9 (core/ocled.h: limit / trip, since when, the hold left) and the power events
  * (core/pwrev.h: state, counters, latches, the last limit event and trip; what a Diff-Power ultra receiver reports). */
 #ifndef CLI_H
@@ -44,7 +45,7 @@ typedef struct {
     uint32_t saves;                /* flash records written since boot */
     uint16_t stagger_o2, stagger_o3;   /* adaptive stagger: TIM2 / TIM3 offsets, Q16 of the period */
     uint32_t stagger_moves, ripple_ma; /* moves so far, LED_+ ripple estimate (mA rms) */
-    /* board current sense (HW_ISENSE, amplifier present); shown when isense = 1 */
+    /* board current sense (core/isense.h); shown when isense = 1 */
     uint8_t  isense;
     uint8_t  ilimit50;             /* stored board limit x 50 mA (0 = the board rating) */
     uint8_t  i_model;              /* channel model: 0 none, 1 learned, 2 calibrated */
@@ -67,6 +68,10 @@ typedef struct {
     /* MCU temperature (core/mcutemp.h), every board */
     int16_t  mcu_temp_c10;         /* 0.1 C, MCUTEMP_NA (-32768) = not valid */
     uint16_t vdda_mv;              /* the 3.3 V rail from VREFINT, 0 = not known */
+    /* voltage channels (core/vsense.h): PA5 supply when its divider is fitted, PA0 the spare input on TP8 */
+    uint8_t  vs_supply_fitted;
+    uint32_t vs_supply_mv, vs_supply_min_mv, vs_supply_max_mv;   /* min / max: since the last status */
+    uint32_t vs_aux_mv;
     /* the overcurrent signal on D9 (core/ocled.h), every board */
     uint8_t  oc_show;              /* OCLED_*: 0 off, 1 limit, 2 trip */
     uint8_t  oc_cause;             /* the last trip's cause: 1 short, 2 overload */

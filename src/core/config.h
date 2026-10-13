@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Config frames and settings (DESIGN_NOTES "Config frames").
+/* Config frames and settings (wiki: WS modes and config frames).
  *
  * Message (40 bits): MAGIC (16) | CMD (8) | ARG (8) | CRC8 (8), CRC-8/SMBus (poly 0x07) over the first 4 bytes.
  *   WS2805 mode: the five channel bytes R, G, B, W1, W2 carry it.
@@ -34,7 +34,7 @@ enum {
     CMD_SCENE_FADE    = 0x0F,   /* power-on scene take-over fade, x 100 ms (0..255) */
     CMD_PERIOD_HI     = 0x10,   /* raw period (steps) high byte, applied by CMD_PERIOD_LO */
     CMD_PERIOD_LO     = 0x11,
-    /* boards with the input current sense (HW_ISENSE, core/isense.h); NACK on boards without it */
+    /* the input current sense (core/isense.h); NACK on a board without it */
     CMD_ISENSE_LIMIT  = 0x12,   /* board current limit x 50 mA, 0 = the board rating (main.c stores it) */
     CMD_ISENSE_CAL    = 0x13,   /* current calibration: ARG 0 = each channel at 25 / 50 / 75 / 100 %, 5..100 = at ARG % */
 };

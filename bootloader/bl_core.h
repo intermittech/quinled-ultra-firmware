@@ -4,7 +4,7 @@
  *
  * Boot decision (bl_decide), the update session (bl_sess_*), the erase plan, commit and verify. Flash and the
  * other board functions go through the bl_plat_* interface: bl_hw.c on the board, a flash model in the tests.
- * Formats and the flash map: src/core/ultra_update.h. Design: research/firmware-update.md section 3.4. */
+ * Formats and the flash map: src/core/ultra_update.h. Design: wiki, Updating over the data line. */
 #ifndef BL_CORE_H
 #define BL_CORE_H
 
@@ -22,7 +22,7 @@ extern "C" {
 #define BL_HW_ID UPD_HW_ID_D2A_ULTRA_5CH
 #endif
 #ifndef BL_HW_REV
-#define BL_HW_REV UPD_REV_PB11                 /* production builds one bootloader per board revision */
+#define BL_HW_REV UPD_REV_D2A_R04              /* production builds one bootloader per board revision */
 #endif
 
 #define BL_TRIAL_MS          150u              /* listen window of an unconfirmed app's boot */

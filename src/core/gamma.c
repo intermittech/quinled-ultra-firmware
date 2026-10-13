@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 /* WS2805 8-bit input -> 16-bit level: linear (x 257), or gamma 2.2 / 2.8 through the board's exact power curve
- * (core/ultra.c ultra_gamma) instead of two 512-byte tables (research/flash-size.md). The result is
+ * (core/ultra.c ultra_gamma) instead of two 512-byte tables (to save flash). The result is
  * round(65535 x (in / 255) ^ gamma), an input above 0 never 0, for every input: the curve's interpolation lands one
  * count off for the inputs in fix[], which are corrected (test_cal.c checks all 512 against the formula). */
 #include "gamma.h"

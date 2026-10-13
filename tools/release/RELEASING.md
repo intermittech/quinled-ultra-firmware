@@ -16,14 +16,15 @@ Formats: `src/core/ultra_update.h`. The first release has its own checklist: [FI
 
 ## What a release contains
 
-`tools/build_release.sh <version>` builds per variant (see the table in the script):
+`tools/build_release.sh <version>` builds per variant (see the table in the script; today one: `rev04`, the
+dig2analog-ultra-5ch rev 0.4 = board revision 3, mask 0x8):
 
 | File | What |
 |---|---|
-| `quinled-dig2analog-ultra-5ch-<version>-hw1.bin` | update image: descriptor (64 bytes) + the app linked at 0x2100 |
-| `...-hw1.json` | its metadata (version, revisions, size, SHA-256) for the manifest |
-| `...-hw1-factory.hex` | production: bootloader + app, marked verified + confirmed |
-| `bootloader-rev1.bin / .hex` | the bootloader alone, built for board revision 1 |
+| `quinled-dig2analog-ultra-5ch-<version>-rev04.bin` | update image: descriptor (64 bytes) + the app linked at 0x2100 |
+| `...-rev04.json` | its metadata (version, revisions, size, SHA-256) for the manifest |
+| `...-rev04-factory.hex` | production: bootloader + app, marked verified + confirmed |
+| `bootloader-rev3.bin / .hex` | the bootloader alone, built for board revision 3 (rev 0.4) |
 
 ## Making a release
 

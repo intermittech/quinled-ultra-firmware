@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* QuinLED dig2analog-ultra-5ch bootloader (research/firmware-update.md, README.md here).
+/* QuinLED dig2analog-ultra-5ch bootloader (wiki: Updating over the data line; README.md here).
  *
  * Every reset starts here, at HSI 8 MHz:
  *   fast path: descriptor CRC (CRC unit, 15 words) + status records -> confirmed app: jump (well under 0.1 ms, no

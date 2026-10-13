@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Compact 64-bit division for the RV32IMC target (research/flash-size.md).
+/* Compact 64-bit division for the RV32IMC target (smaller than libgcc's).
  *
  * libgcc's __udivdi3 / __divdi3 are 1.8 KB plus a 256-byte clz table. These are ~0.4 KB, about as fast:
  *  - dividend and divisor both 32 bits (most calls: products of two 16-bit values over a 16-bit divisor): divu;

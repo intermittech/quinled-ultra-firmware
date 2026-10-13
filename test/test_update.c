@@ -24,7 +24,7 @@ static void tu_desc(uint8_t *d, uint32_t version, uint8_t hw_id, uint16_t revmas
 }
 
 #define TU_V(a, b, c, pre) (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (pre))
-#define TU_REVS ((1u << UPD_REV_PB11) | (1u << UPD_REV_ISENSE))
+#define TU_REVS (1u << UPD_REV_D2A_R04)
 
 /* one session's frames into the app, as the board sees them: frame end (header) first decides transparency for
  * the frames after it; captured frames (384 bits) only while transparent */
@@ -70,7 +70,7 @@ static void tu_init(tu_board_t *b, uint32_t version, int bootloader, int confirm
 {
     upd_app_info_t info;
     info.hw_id = bootloader ? UPD_HW_ID_D2A_ULTRA_5CH : 0;
-    info.hw_rev = UPD_REV_PB11;
+    info.hw_rev = UPD_REV_D2A_R04;
     info.bl_version = bootloader ? 1 : 0;
     info.desc_ok = (uint8_t)(bootloader && version != 0u);
     info.confirmed = (uint8_t)confirmed;
@@ -121,7 +121,7 @@ static void test_update_chain(void)
         }
         memset(&wupd_info, 0, sizeof wupd_info);
         wupd_info.hw_id = UPD_HW_ID_D2A_ULTRA_5CH;
-        wupd_info.hw_rev = UPD_REV_PB11;
+        wupd_info.hw_rev = UPD_REV_D2A_R04;
         wupd_info.bl_version = 1;
         wupd_info.desc_ok = 1;
         wupd_info.confirmed = 1;
@@ -170,7 +170,7 @@ static void test_update(void)
     tu_desc(d_same, TU_V(0, 4, 0, 0xFF), 1, TU_REVS, 1);
     tu_desc(d_old, TU_V(0, 3, 9, 0xFF), 1, TU_REVS, 1);
     tu_desc(d_hw, TU_V(0, 5, 0, 0xFF), 2, TU_REVS, 1);
-    tu_desc(d_rev, TU_V(0, 5, 0, 0xFF), 1, 1u << UPD_REV_V01_PB15, 1);
+    tu_desc(d_rev, TU_V(0, 5, 0, 0xFF), 1, 1u << (UPD_REV_D2A_R04 - 1u), 1);
     tu_desc(d_bl, TU_V(0, 5, 0, 0xFF), 1, TU_REVS, 2);
 
     /* transparency */
@@ -290,10 +290,10 @@ static void test_update(void)
         memcpy(page, d_same, 64);
         page[64] = (uint8_t)(UPD_ST_VERIFIED & 0xFFu);
         page[65] = (uint8_t)(UPD_ST_VERIFIED >> 8);
-        memcpy(bl, "QDBL\x01\x01\x01\x00", 8);
+        memcpy(bl, "QDBL\x01\x01\x03\x00", 8);     /* bootloader 1, hardware 1, revision 3 (rev 0.4) */
         upd_app_read_info(&info, page, bl);
         CHECK(info.desc_ok && info.version == TU_V(0, 4, 0, 0xFF) && !info.confirmed && info.st_next == 1 &&
-              info.bl_version == 1 && info.hw_rev == UPD_REV_PB11, "descriptor page: version, records, bootloader");
+              info.bl_version == 1 && info.hw_rev == UPD_REV_D2A_R04, "descriptor page: version, records, bootloader");
         page[66] = (uint8_t)(UPD_ST_CONFIRMED & 0xFFu);
         page[67] = (uint8_t)(UPD_ST_CONFIRMED >> 8);
         memset(page + 68, 0xFF, 4);         /* the other erased reading */

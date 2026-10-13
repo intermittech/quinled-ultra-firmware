@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Board current sense (next board revision, HW_ISENSE): soldered fuse + 2 mohm shunt on the positive input, CSA
+/* Board current sense (dig2analog-ultra-5ch rev 0.4): soldered fuse + 2 mohm shunt on the positive input, CSA
  * (gain 100) -> 1 k / 47 nF -> PA7 (ADC_IN7). The shunt sits upstream of the bulk caps, so it sees this board's
  * smoothed input current (LED + logic); the pass-through J2 <-> J1 <-> J3 never crosses it.
- * Research: dig2analog-ultra-5ch/research/current-sense-efuse.md ("simplified plan").
+ * Wiki: Current sense.
  *
  * Pure logic, host-tested (test/test_isense.c). Two call sites:
  *  - the 20 kHz poll tick: isense_tick() with the newest ADC result (continuous conversion). It sums the samples
@@ -42,7 +42,7 @@
 #define ISENSE_CAL_SETTLE_MS 10u      /* calibration, single level: the zero and each step, settle + measure */
 #define ISENSE_CAL_MEAS_MS 20u
 #define ISENSE_LEVELS      4u         /* the standard test: 25 / 50 / 75 / 100 % per channel */
-/* the standard test (research/current-calibration.md, "Timing"): the zero 20 + 30 ms, each level 15 + 30 ms,
+/* the standard test (wiki: Current sense, calibration): the zero 20 + 30 ms, each level 15 + 30 ms,
  * 50 + 5 x 4 x 45 = 950 ms. The settle covers a slow supply's recovery from the load step; the measure averages
  * >= 65 PWM periods at every preset. */
 #ifndef ISENSE_CAL_ZERO_SETTLE_MS

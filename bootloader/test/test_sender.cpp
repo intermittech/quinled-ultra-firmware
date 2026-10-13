@@ -163,14 +163,15 @@ static void test_manifest(void)
           "image URLs: relative, root-relative, absolute");
 
     a.hw_id = 1;
-    a.hw_rev_mask = 0x6;   // revisions 1 and 2
+    a.hw_rev_mask = 0x8;   // revision 3 (rev 0.4)
     b.hw_id = 1;
-    b.hw_rev_mask = 0x1;   // v0.1 as first drawn
+    b.hw_rev_mask = 0x1;   // another revision (never built)
     m.images.push_back(b);
     m.images.push_back(a);
-    CHECK(fw_pick_image(m, 1, 1) == 1 && fw_pick_image(m, 1, 2) == 1 && fw_pick_image(m, 1, 0) == 0,
-          "image per board revision");
-    CHECK(fw_pick_image(m, 2, 1) == -1 && fw_pick_image(m, 1, 3) == -1, "no image for other hardware / revision");
+    CHECK(fw_pick_image(m, 1, UPD_REV_D2A_R04) == 1 && fw_pick_image(m, 1, 0) == 0, "image per board revision");
+    CHECK(fw_pick_image(m, UPD_HW_ID_DP_ULTRA_RX, UPD_REV_D2A_R04) == -1 && fw_pick_image(m, 1, 1) == -1 &&
+              fw_pick_image(m, 1, 2) == -1,
+          "no image for other hardware / revision");
     m.channel = "beta";
     m.version = "0.6.0-beta.1";
     CHECK(fw_check_manifest(m, FW_CH_BETA) == nullptr && m.version_word == V(0, 6, 0, 0x41), "manifest ok");
@@ -190,16 +191,16 @@ static void test_manifest(void)
     bad_sha[31] ^= 1;
     a.size = size;
     a.sha256 = hex_of(sha, 32);
-    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), 1) == nullptr, "image ok");
-    CHECK(fw_check_image(img, size, bad_sha, a, V(0, 6, 0, 0x41), 1) != nullptr, "SHA-256 differs");
-    CHECK(fw_check_image(img, size - 4, sha, a, V(0, 6, 0, 0x41), 1) != nullptr, "size differs");
-    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x42), 1) != nullptr, "version differs from the manifest");
+    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), UPD_REV_D2A_R04) == nullptr, "image ok");
+    CHECK(fw_check_image(img, size, bad_sha, a, V(0, 6, 0, 0x41), UPD_REV_D2A_R04) != nullptr, "SHA-256 differs");
+    CHECK(fw_check_image(img, size - 4, sha, a, V(0, 6, 0, 0x41), UPD_REV_D2A_R04) != nullptr, "size differs");
+    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x42), UPD_REV_D2A_R04) != nullptr, "version differs from the manifest");
     CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), 0) != nullptr, "revision not in the descriptor");
     img[UPD_D_HW_ID] ^= 3;
-    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), 1) != nullptr, "descriptor CRC broken");
+    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), UPD_REV_D2A_R04) != nullptr, "descriptor CRC broken");
     img[UPD_D_HW_ID] ^= 3;
     a.sha256[5] = 'x';
-    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), 1) != nullptr, "manifest SHA-256 not hex");
+    CHECK(fw_check_image(img, size, sha, a, V(0, 6, 0, 0x41), UPD_REV_D2A_R04) != nullptr, "manifest SHA-256 not hex");
 
     CHECK(fw_update_available(0, V(0, 5, 0, 0xFF)), "installed unknown: offered");
     CHECK(fw_update_available(V(0, 5, 0, 0x41), V(0, 5, 0, 0xFF)), "beta installed, stable out: offered");
@@ -308,8 +309,8 @@ static void test_release_image(const char *path, const uint8_t *buf, size_t n)
     info.sha256 = field("sha256");
     CHECK(parse_fw_version(field("version"), version), "release .json version %s", field("version").c_str());
     CHECK(fw_hex_to_bytes(info.sha256, sha, 32), "release .json sha256");   // computed by mkimage (hashlib)
-    CHECK(fw_check_image(buf, n, sha, info, version, 1) == nullptr, "release image passes the ESP32's checks: %s",
-          fw_check_image(buf, n, sha, info, version, 1) ? fw_check_image(buf, n, sha, info, version, 1) : "ok");
+    CHECK(fw_check_image(buf, n, sha, info, version, UPD_REV_D2A_R04) == nullptr, "release image passes the ESP32's checks: %s",
+          fw_check_image(buf, n, sha, info, version, UPD_REV_D2A_R04) ? fw_check_image(buf, n, sha, info, version, UPD_REV_D2A_R04) : "ok");
 }
 
 int main(void)

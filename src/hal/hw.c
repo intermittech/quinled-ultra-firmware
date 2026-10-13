@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 /* CH32V203F8U6 drivers: clock, GPIO, PWM timers + dither DMA, DIN edge counter / gate, DIN sampler, flash.
- * Register usage follows the CH32FV2x_V3xRM reference manual V2.5 (PDF/research/mcu-25khz). Items marked
- * BENCH need confirmation on real hardware. */
+ * Register usage follows the WCH CH32FV2x_V3xRM reference manual V2.5. Items marked BENCH need confirmation on real
+ * hardware. */
 #include "ch32v20x.h"
 #include "hw.h"
 #include "../core/store.h"
@@ -22,15 +22,15 @@ uint16_t din_copy[DIN_COPY_WORDS] __attribute__((aligned(4)));
 static uint32_t cur_steps;
 static uint8_t cur_stagger, cur_len, cur_spread;
 static uint16_t spread_arr[PATTERN_MAX_LEN];         /* spread spectrum: period - 1 of each table entry */
-#if HW_ISENSE
 static volatile uint8_t pwm_forced;                  /* isense trip: all PWM outputs forced low */
 static void pwm_outputs_mode(void);
-#endif
 
 /* GPIO CFGxR nibbles (STM32F1 style) */
 #define CFG_IN_FLOAT 0x4u
 #define CFG_OUT_PP   0x3u        /* 50 MHz push-pull */
 #define CFG_AF_PP    0xBu        /* 50 MHz alternate-function push-pull */
+#define CFG_ANALOG   0x0u
+#define CFG_IN_PULL  0x8u        /* input with pull-up / pull-down (ODR) */
 
 /* TIMx_CHCTLRx output compare modes */
 #define OCM_FROZEN   0u
@@ -65,9 +65,9 @@ static void pin_cfg(GPIO_TypeDef *g, uint32_t pin, uint32_t cfg)
 /* HSI 8 MHz, undivided into the PLL (EXTEN HSIPRE = 1), x18 = 144 MHz. HCLK and PCLK1 undivided (allowed up to
  * 144 MHz per the datasheet), so TIM2-4 run from 144 MHz. Called by the WCH startup.
  * PCLK2 = 72 MHz in every build, because the ADC clock may not exceed 14 MHz (datasheet table 4-27; ADCPRE only
- * divides by 2 / 4 / 6 / 8): ADC = 72 / 6 = 12 MHz, for the current sense (HW_ISENSE) and the MCU temperature (all
- * builds; with 144 MHz the ADC could only run at 18 MHz, and its 239.5-cycle sample time would be 13 us, under the
- * 17.1 us the sensor needs). TIM1 still counts at 144 MHz (RM clock tree: the APB2 timer clock is PCLK2 x 2 when
+ * divides by 2 / 4 / 6 / 8): ADC = 72 / 6 = 12 MHz, for the current sense, the voltage channels and the MCU
+ * temperature (with 144 MHz the ADC could only run at 18 MHz, and its 239.5-cycle sample time would be 13 us, under
+ * the 17.1 us the sensor needs). TIM1 still counts at 144 MHz (RM clock tree: the APB2 timer clock is PCLK2 x 2 when
  * the APB2 prescaler is not 1); SPI1 divides by 2 (36 MHz); USART2, TIM2-4 and SysTick are not on APB2. GPIO /
  * AFIO / TIM1 / SPI1 / ADC register accesses take one 72 MHz bus cycle (~14 ns) instead of 7 ns (the DMA write of
  * the forwarding gate to GPIOA: ~+10 ns, BENCH). */
@@ -87,7 +87,6 @@ void SystemInit(void)
 }
 
 /* ---------------------------------------------------------------------------------------------------- PWM */
-#if HW_PWM_3TIMERS
 /* Adaptive stagger: TIM2 / TIM3 move to new phase offsets (relative to TIM1) gradually. While a timer is off
  * target, its update interrupt changes the length of the next period by at most period / 512 (ARR, preloaded).
  * Only the off-time of left-aligned channels changes (< 0.2 % for that period). TIM3's right-aligned W2 ends at the
@@ -198,13 +197,6 @@ void slew3_isr(void)
         TIM3->DMAINTENR &= (uint16_t)~TIM_UIE;
     }
 }
-#else
-void pwm_set_phase(uint16_t o2, uint16_t o3)
-{
-    (void)o2;
-    (void)o3;
-}
-#endif
 
 uint8_t pwm_right_aligned(uint8_t ch)
 {
@@ -219,7 +211,6 @@ const uint16_t *pwm_spread_arr(void)
 
 uint16_t *pwm_table(uint8_t ch, uint8_t *stride)
 {
-#if HW_PWM_3TIMERS
     if (cur_spread) {
         switch (ch) {
         case CH_G: *stride = 4; return &pwm_tab1[2];
@@ -236,15 +227,6 @@ uint16_t *pwm_table(uint8_t ch, uint8_t *stride)
     case CH_W2: *stride = 2; return &pwm_tab3[0];
     default: *stride = 2; return &pwm_tab3[1];
     }
-#else
-    switch (ch) {
-    case CH_G: *stride = 3; return &pwm_tab1[0];
-    case CH_R: *stride = 3; return &pwm_tab1[1];
-    case CH_B: *stride = 3; return &pwm_tab1[2];
-    case CH_W2: *stride = 2; return &pwm_tab3[0];
-    default: *stride = 2; return &pwm_tab3[1];
-    }
-#endif
 }
 
 void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
@@ -254,36 +236,26 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     cur_steps = steps;
     cur_stagger = stagger;
     cur_len = len;
-#if HW_PWM_3TIMERS
     cur_spread = (uint8_t)(stagger_is_spread(stagger) && len >= 2u);
-#else
-    cur_spread = 0;
-#endif
     mg = pwm_right_aligned(CH_G) ? OCM_PWM2 : OCM_PWM1;
     mw2 = pwm_right_aligned(CH_W2) ? OCM_PWM2 : OCM_PWM1;
 
     TIM1->CTLR1 = 0;
-#if HW_PWM_3TIMERS
     TIM2->CTLR1 = 0;
     TIM2->DMAINTENR = 0;
     TIM3->DMAINTENR = 0;                                 /* phase slew off; back at the fixed offsets below */
     slew_pend2 = slew_pend3 = 0;
     DMA1_Channel1->CFGR = 0;
     /* TIM3 is not stopped: its CH1 captures DIN for the edge counter (TIM4) */
-#else
-    TIM3->CTLR1 = 0;
-#endif
     DMA1_Channel5->CFGR = 0;
     DMA1_Channel3->CFGR = 0;
 
-    /* TIM1: CH1 = G (PA8), CH2 = R (PA9); HW_PWM_3TIMERS 0 also CH3N = B (PB15, complementary output used
-     * alone: CC3E = 0, CC3NE = 1, MOE = 1 -> OC3N follows OC3REF; BENCH: confirm polarity, else set CC3NP) */
+    /* TIM1: CH1 = G (PA8), CH2 = R (PA9); CC1E / CC2E only (board.h: PA10 / PB14 / PB15 stay GPIO) */
     TIM1->PSC = 0;
     TIM1->ATRLR = (uint16_t)(steps - 1u);
     TIM1->RPTCR = 0;
     TIM1->CHCTLR1 = (uint16_t)((mg << 4) | TIM_OC1PE | (OCM_PWM1 << 12) | TIM_OC2PE);
     TIM1->BDTR = TIM_MOE;                                /* no dead time, no break */
-#if HW_PWM_3TIMERS
     TIM1->CCER = TIM_CC1E | TIM_CC2E;
     if (cur_spread) {
         uint32_t k;
@@ -304,18 +276,11 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
         TIM1->DMACFGR = (uint16_t)((1u << 8) | (TIM_OFS_CH1CVR / 4u));   /* burst of 2: CCR1, CCR2 */
         DMA1_Channel5->CNTR = (uint32_t)len * 2u;
     }
-#else
-    TIM1->CHCTLR2 = (uint16_t)((OCM_PWM1 << 4) | TIM_OC3PE);
-    TIM1->CCER = TIM_CC1E | TIM_CC2E | TIM_CC3NE;
-    TIM1->DMACFGR = (uint16_t)((2u << 8) | (TIM_OFS_CH1CVR / 4u));   /* burst of 3: CCR1..CCR3 */
-    DMA1_Channel5->CNTR = (uint32_t)len * 3u;
-#endif
     TIM1->DMAINTENR = TIM_UDE;
     DMA1_Channel5->PADDR = (uint32_t)&TIM1->DMAADR;      /* TIM1_UP = DMA1 channel 5 */
     DMA1_Channel5->MADDR = (uint32_t)pwm_tab1;
     DMA1_Channel5->CFGR = DMA_MEM2PER_16_CIRC | DMA_CFGR1_PL_1 | DMA_CFGR1_EN;
 
-#if HW_PWM_3TIMERS
     /* TIM2 (partial remap 2): CH4 = B (PB11). TIM2_UP shares DMA1 channel 2 with the DIN sampler, so CH3 (no
      * output) compares at count 2 of every period and requests DMA1 channel 1, which writes the next CCR4
      * (preloaded: used from the next period, like the update bursts of TIM1 / TIM3). */
@@ -323,7 +288,7 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     TIM2->ATRLR = (uint16_t)(steps - 1u);
     TIM2->CHCTLR2 = (uint16_t)((OCM_FROZEN << 4) | (OCM_PWM1 << 12) | TIM_OC4PE);
     TIM2->CH3CVR = 2u;
-    TIM2->CCER = TIM_CC4E;
+    TIM2->CCER = TIM_CC4E;                               /* only CH4: CC1E / CC2E / CC3E = 0 (board.h invariants) */
     TIM2->DMAINTENR = TIM_CC3DE_;
     if (cur_spread) {
         /* burst of 6 from ARR on the CH3 request (the burst mechanism works on any request of the timer) */
@@ -336,17 +301,12 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     }
     DMA1_Channel1->MADDR = (uint32_t)pwm_tab2;
     DMA1_Channel1->CFGR = DMA_MEM2PER_16_CIRC | DMA_CFGR1_PL_1 | DMA_CFGR1_EN;
-#endif
 
-    /* TIM3: CH3 = W2 (PB0), CH4 = W1 (PB1); HW_PWM_3TIMERS 1: CH1 = DIN capture, kept */
+    /* TIM3: CH3 = W2 (PB0), CH4 = W1 (PB1); CH1 = DIN capture, kept. CC2E stays 0 (PA7 is the current sense) */
     TIM3->PSC = 0;
     TIM3->ATRLR = (uint16_t)(steps - 1u);
     TIM3->CHCTLR2 = (uint16_t)((mw2 << 4) | TIM_OC3PE | (OCM_PWM1 << 12) | TIM_OC4PE);
-#if HW_PWM_3TIMERS
     TIM3->CCER = TIM_CC1E | TIM_CC1P | TIM_CC3E | TIM_CC4E;
-#else
-    TIM3->CCER = TIM_CC3E | TIM_CC4E;
-#endif
     if (cur_spread) {
         TIM3->DMACFGR = (uint16_t)((5u << 8) | (TIM_OFS_ATRLR / 4u));   /* burst of 6: ARR .. CCR4 */
         DMA1_Channel3->CNTR = (uint32_t)len * 6u;
@@ -363,7 +323,6 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
      * its G / W2 turn-off) x counts after TIM1 */
     TIM1->SWEVGR = TIM_UG;
     TIM3->SWEVGR = TIM_UG;
-#if HW_PWM_3TIMERS
     TIM2->SWEVGR = TIM_UG;
     TIM2->CNT = (uint16_t)(stagger ? steps - steps / 3u : 0u);           /* B at 1/3 of the period */
     TIM3->CNT = (uint16_t)(stagger ? steps - (2u * steps) / 3u : 0u);    /* W1 / W2 at 2/3 */
@@ -378,19 +337,11 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     TIM1->CTLR1 = TIM_ARPE | TIM_CEN;
     TIM2->CTLR1 = TIM_ARPE | TIM_CEN;
     TIM3->CTLR1 = TIM_ARPE | TIM_CEN;
-#else
-    TIM3->CNT = (uint16_t)(stagger ? steps / 2u : 0u);   /* W edges half a period away from R/G/B */
-    TIM1->CTLR1 = TIM_ARPE | TIM_CEN;
-    TIM3->CTLR1 = TIM_ARPE | TIM_CEN;
-#endif
-#if HW_ISENSE
     if (pwm_forced) {
         pwm_outputs_mode();                              /* a trip (poll tick) during the restart stays in force */
     }
-#endif
 }
 
-#if HW_ISENSE
 /* ---------------------------------------------------------------------------------------------------- isense */
 /* OCxM of the five PWM channels: force inactive (pin low: driver input low, FET off) or the PWM modes of
  * pwm_start. OCxM is not preloaded, so it acts at once; the DMA keeps loading CCRs meanwhile. Read-modify-write
@@ -402,11 +353,7 @@ static void pwm_outputs_mode(void)
     uint32_t mw2 = f ? OCM_FORCE_LO : (pwm_right_aligned(CH_W2) ? OCM_PWM2 : OCM_PWM1);
     uint32_t m = f ? OCM_FORCE_LO : OCM_PWM1;
     TIM1->CHCTLR1 = (uint16_t)((TIM1->CHCTLR1 & ~((7u << 4) | (7u << 12))) | (mg << 4) | (m << 12));
-#if HW_PWM_3TIMERS
     TIM2->CHCTLR2 = (uint16_t)((TIM2->CHCTLR2 & ~(7u << 12)) | (m << 12));
-#else
-    TIM1->CHCTLR2 = (uint16_t)((TIM1->CHCTLR2 & ~(7u << 4)) | (m << 4));
-#endif
     TIM3->CHCTLR2 = (uint16_t)((TIM3->CHCTLR2 & ~((7u << 4) | (7u << 12))) | (mw2 << 4) | (m << 12));
 }
 
@@ -416,27 +363,40 @@ void pwm_force_off(uint8_t off)
     pwm_outputs_mode();
 }
 
-#endif
 
 /* ---------------------------------------------------------------------------------------------------- ADC */
-/* ADC1 at 12 MHz. Regular group: PA7 = ADC_IN7 converted continuously (the current sense, when present), sample time
- * 71.5 cycles (6 us, any source up to 50 k), 84 cycles = 7 us per result.
- * Injected group (every build): the temperature sensor (IN16) and VREFINT (IN17), 239.5 cycles each (20 us, the
- * datasheet asks >= 17.1 us), started by software once a second. Scan mode (the regular group is one channel), so
- * the whole group converts; a running regular conversion is reset and resumes afterwards (84 us without a new PA7
- * result: the poll tick reads one or two stale values, so a short in that moment trips up to 84 us later). The group is 16, 17, 16, 17: whichever way IDATAR1-4 map
- * to the ranks, 1 + 3 and 2 + 4 are the two pairs. BENCH: start sequence (RM 12.2.2/12.2.4: ADON again starts,
- * CONT keeps converting), the injected insertion during continuous conversion, presence threshold with the real CSA. */
-static void adc_init(uint8_t pa7)
+/* ADC1 at 12 MHz, no DMA (all seven DMA1 channels are taken).
+ * Regular group: PA7 = ADC_IN7, the current sense, converted continuously: 71.5 cycles (6 us, any source up to 50 k),
+ * 84 cycles = 7 us per result; ISENSE_RAW() is the newest.
+ * Injected group, started by the poll tick once per ms (hw_adc_ms):
+ *  - the voltage channels: IN5, IN0, IN5, IN0 (with BOARD_VSENSE; else IN0 four times), 71.5 cycles each (28 us);
+ *  - instead, once a second when hw_temp_start() asked: the temperature sensor (IN16) and VREFINT (IN17), 16, 17,
+ *    16, 17 at 239.5 cycles (20 us each, the datasheet asks >= 17.1 us; 84 us).
+ * Either way 1 + 3 and 2 + 4 are the pairs, whichever way IDATAR1-4 map to the ranks. Scan mode (the regular group is
+ * one channel), so the whole group converts; a running regular conversion is reset and resumes afterwards: the poll
+ * tick reads a stale PA7 value for up to 28 us per ms (84 us once a second), so a short in that moment trips that
+ * much later. A sequence is read at the next ms (it ends well within it). BENCH: the start sequence (RM 12.2.2 /
+ * 12.2.4: ADON again starts, CONT keeps converting) and the injected insertion during continuous conversion. */
+#define INJ_SEQ(a, b) ((3u << 20) | ((uint32_t)(b) << 15) | ((uint32_t)(a) << 10) | ((uint32_t)(b) << 5) | (uint32_t)(a))
+#define INJ_VOLT      INJ_SEQ(BOARD_VSENSE ? 5u : 0u, 0u)
+#define INJ_TEMP      INJ_SEQ(16u, 17u)
+
+static volatile uint8_t inj_run;                         /* the sequence running: 0 none, 1 voltages, 2 temperature */
+static volatile uint8_t temp_req, temp_done;
+static volatile uint32_t temp_ts2, temp_vref2;
+static volatile uint32_t vs_acc[2], vs_n;                /* voltage pairs since the main loop's last take */
+static volatile uint8_t adc_ready;                       /* hw_adc_init done: the poll tick may start sequences */
+
+void hw_adc_init(void)
 {
     uint32_t i;
     RCC->APB2PCENR |= RCC_ADC1EN;
     ADC1->CTLR1 = ADC_SCAN;                              /* independent; scan: the injected group converts in full */
     ADC1->SAMPTR1 = (7u << 18) | (7u << 21);             /* SMP16, SMP17 = 111: 239.5 cycles */
-    ADC1->SAMPTR2 = 6u << 21;                            /* SMP7 = 110: 71.5 cycles */
+    ADC1->SAMPTR2 = (6u << 21) | (6u << 15) | 6u;        /* SMP7, SMP5, SMP0 = 110: 71.5 cycles */
     ADC1->RSQR1 = 0;                                     /* L = 0: one regular conversion */
     ADC1->RSQR3 = 7u;                                    /* SQ1 = channel 7 */
-    ADC1->ISQR = (3u << 20) | (17u << 15) | (16u << 10) | (17u << 5) | 16u;   /* JL = 3: 16, 17, 16, 17 */
+    ADC1->ISQR = INJ_VOLT;
     ADC1->CTLR2 = ADC_ADON | ADC_TSVREFE | ADC_JEXTTRIG | ADC_JEXTSEL;   /* power up; JEXTSEL 111: JSWSTART */
     for (i = 0; i < 1000u; i++) {                        /* tSTAB 1 us (and >= 2 ADC clocks before calibration) */
         __asm volatile("nop");
@@ -447,56 +407,70 @@ static void adc_init(uint8_t pa7)
     ADC1->CTLR2 |= ADC_CAL;
     for (i = 0; i < 100000u && (ADC1->CTLR2 & ADC_CAL); i++) {
     }
-    if (pa7) {
-        ADC1->CTLR2 |= ADC_CONT;
-        ADC1->CTLR2 |= ADC_ADON;                         /* ADON again: start; CONT: keep converting */
-    }
+    ADC1->CTLR2 |= ADC_CONT;
+    ADC1->CTLR2 |= ADC_ADON;                             /* ADON again: start; CONT: keep converting */
+    adc_ready = 1;
 }
 
-#if HW_ISENSE
-/* PA7 = ADC_IN7. Presence: with the input pull-up (~40 k) on, a v0.1 board's NC pad reads high; the CSA231 output
- * (1 k + 47 nF, ~0 V at idle) holds it low. Then analog input and the ADC (PA7 only when present). */
-uint8_t hw_isense_init(void)
+void hw_adc_ms(void)
 {
-    uint32_t i, present;
-    pin_cfg(GPIOA, 7, 0x8u);                             /* input with pull-up / pull-down */
-    GPIOA->BSHR = 1u << 7;                               /* ODR = 1: pull-up */
-    for (i = 0; i < 2000u; i++) {                        /* ~50 us: a floating pad charges in < 1 us */
-        __asm volatile("nop");
+    if (!adc_ready) {
+        return;
     }
-    present = (GPIOA->INDR & (1u << 7)) == 0u;
-    GPIOA->BCR = 1u << 7;
-    pin_cfg(GPIOA, 7, 0x0u);                             /* analog input */
-    adc_init((uint8_t)present);
-    return (uint8_t)present;
+    if (inj_run != 0u && (ADC1->STATR & ADC_JEOC)) {
+        uint32_t a = (ADC1->IDATAR1 & 0xFFFu) + (ADC1->IDATAR3 & 0xFFFu);
+        uint32_t b = (ADC1->IDATAR2 & 0xFFFu) + (ADC1->IDATAR4 & 0xFFFu);
+        if (inj_run == 2u) {
+            temp_ts2 = a;
+            temp_vref2 = b;
+            temp_done = 1;
+        } else {
+            vs_acc[0] += a;
+            vs_acc[1] += b;
+            vs_n++;
+        }
+    }
+    ADC1->STATR = ~(uint32_t)ADC_JEOC;                   /* rc_w0: only JEOC cleared */
+    if (temp_req) {
+        temp_req = 0;
+        ADC1->ISQR = INJ_TEMP;
+        inj_run = 2;
+    } else {
+        ADC1->ISQR = INJ_VOLT;
+        inj_run = 1;
+    }
+    ADC1->CTLR2 |= ADC_JSWSTART;
 }
-#else
-void hw_temp_init(void)
+
+void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
 {
-    adc_init(0);
+    __disable_irq();
+    sum2[0] = vs_acc[0];
+    sum2[1] = vs_acc[1];
+    *n = vs_n;
+    vs_acc[0] = vs_acc[1] = vs_n = 0;
+    __enable_irq();
 }
-#endif
 
 void hw_temp_start(void)
 {
-    ADC1->STATR = ~(uint32_t)ADC_JEOC;                   /* rc_w0: only JEOC cleared */
-    ADC1->CTLR2 |= ADC_JSWSTART;
+    temp_done = 0;
+    temp_req = 1;                                        /* converted at the poll tick's next ms */
 }
 
 uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2)
 {
-    if (!(ADC1->STATR & ADC_JEOC)) {
+    if (!temp_done) {
         return 0;
     }
-    *ts2 = (ADC1->IDATAR1 & 0xFFFu) + (ADC1->IDATAR3 & 0xFFFu);
-    *vref2 = (ADC1->IDATAR2 & 0xFFFu) + (ADC1->IDATAR4 & 0xFFFu);
+    *ts2 = temp_ts2;
+    *vref2 = temp_vref2;
     return 1;
 }
 
 /* ---------------------------------------------------------------------------------------------------- gate */
 static volatile uint16_t gate_t1, gate_t2;
 
-#if HW_PWM_3TIMERS
 /* TIM3 CH1 captures every DIN falling edge on PA6 (filter N = 2, the pin the SPI sampler reads too); its trigger
  * output pulses on each capture (MMS = 011) and clocks TIM4 (ITR2, external clock mode 1), so TIM4->CNT counts
  * DIN edges. TIM4 has no pins: at CNT == CCR2 its CC2 DMA request makes DMA1 channel 4 write GPIOA->BSHR, which
@@ -554,47 +528,6 @@ void gate_isr(void)
         TIM4->DMAINTENR = 0;                             /* hold the level until the next re-arm */
     }
 }
-#else
-/* TIM2 counts DIN falling edges (external clock mode 2: ETR = PA0, ETP inverts, ETF N = 2 filter).
- * CH2 (PA1, FWD_EN) is forced to the frame's start level at re-arm and toggles at CNT == t1; the CC2
- * interrupt then moves CCR2 to t2 (WS2915) or freezes the output. Counter keeps running: CNT at frame end
- * = bits in the frame (auto-detect). */
-static void gate_set_mode(uint32_t ocm)
-{
-    TIM2->CHCTLR1 = (uint16_t)((TIM2->CHCTLR1 & ~(7u << 12)) | (ocm << 12));
-}
-
-void gate_force_closed(void)
-{
-    gate_t1 = 0;
-    gate_t2 = 0;
-    gate_set_mode(OCM_FORCE_LO);
-}
-
-void gate_rearm(const gate_plan_t *g)
-{
-    TIM2->CNT = 0;
-    gate_set_mode(g->start_open ? OCM_FORCE_HI : OCM_FORCE_LO);
-    gate_t1 = g->t1;
-    gate_t2 = g->t2;
-    TIM2->INTFR = (uint16_t)~TIM_CC2IF;
-    if (g->t1 != 0u) {
-        TIM2->CH2CVR = g->t1;
-        gate_set_mode(OCM_TOGGLE);                       /* toggles from the forced level */
-    }
-}
-
-void gate_isr(void);                                     /* TIM2 CC2, entered via isr.S (HPE + mret) */
-void gate_isr(void)
-{
-    TIM2->INTFR = (uint16_t)~TIM_CC2IF;
-    if (gate_t2 != 0u && TIM2->CH2CVR == gate_t1) {
-        TIM2->CH2CVR = gate_t2;                          /* WS2915: reopen after our 80 bits */
-    } else {
-        gate_set_mode(OCM_FROZEN);                       /* hold the level until the next re-arm */
-    }
-}
-#endif
 
 uint32_t din_ring_pos(void)
 {
@@ -611,7 +544,7 @@ uint32_t hw_reset_flags(void)
 
 void led_set(uint8_t on)
 {
-    GPIOA->BSHR = on ? (1u << 4) : (1u << (4 + 16));
+    GPIOB->BSHR = on ? (1u << 15) : (1u << (15 + 16));  /* D9 on PB15 */
 }
 
 /* independent watchdog: LSI 25-60 kHz / 32, reload 500 -> resets after 0.27-0.64 s (typ. 0.41 s) without a
@@ -691,26 +624,35 @@ void hw_init(void)
     RCC->APB2PCENR |= RCC_AFIOEN | RCC_IOPAEN | RCC_IOPBEN | RCC_TIM1EN | RCC_SPI1EN;
     RCC->APB1PCENR |= RCC_TIM2EN | RCC_TIM3EN | (1u << 2) /* TIM4 */ | RCC_USART2EN;
 
-#if HW_PWM_3TIMERS
     /* TIM2 partial remap 2: CH3 / CH4 on PB10 / PB11 (CH1 / ETR / CH2 stay on PA0 / PA1, unused by TIM2).
      * Others default: TIM1 CH1 / CH2 = PA8 / PA9, TIM3 CH1 / CH3 / CH4 = PA6 / PB0 / PB1, SPI1 SCK / MISO =
      * PA5 / PA6, USART2 = PA2 / PA3 */
     AFIO->PCFR1 = (AFIO->PCFR1 & ~AFIO_PCFR1_TIM2_REMAP) | AFIO_PCFR1_TIM2_REMAP_PARTIALREMAP2;
-    pin_cfg(GPIOA, 0, CFG_IN_FLOAT);
+    pin_cfg(GPIOA, 0, CFG_ANALOG);                       /* the spare input on TP8 (receiver: V_B) */
     pin_cfg(GPIOA, 6, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 5, CFG_AF_PP);
+#if BOARD_VSENSE
+    pin_cfg(GPIOA, 5, CFG_ANALOG);                       /* the supply / bus voltage (SPI1 clocks internally) */
+#else
+    pin_cfg(GPIOA, 5, CFG_AF_PP);                        /* SPI1_SCK on the pin (bench check of the sampler) */
+#endif
     GPIOA->BSHR = 1u << (FWD_PIN + 16u);                 /* gate closed */
     pin_cfg(GPIOA, FWD_PIN, CFG_OUT_PP);
     pin_cfg(GPIOA, 2, CFG_AF_PP);
     pin_cfg(GPIOA, 3, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 4, CFG_OUT_PP);
+    pin_cfg(GPIOA, 4, CFG_ANALOG);                       /* unused (no connection) */
+    pin_cfg(GPIOA, 7, CFG_ANALOG);                       /* the current sense */
     pin_cfg(GPIOA, 8, CFG_AF_PP);
     pin_cfg(GPIOA, 9, CFG_AF_PP);
-    pin_cfg(GPIOB, 15, CFG_IN_FLOAT);                    /* PWM_B as first drawn: tied to PB11, stays an input */
+    GPIOA->BCR = 1u << 10;                               /* ODR 0: pull-down. PA10, PB10 (TP9), PB14: unused here */
+    pin_cfg(GPIOA, 10, CFG_IN_PULL);
+    GPIOB->BCR = (1u << 10) | (1u << 14);
+    pin_cfg(GPIOB, 10, CFG_IN_PULL);
+    pin_cfg(GPIOB, 14, CFG_IN_PULL);
+    led_set(0);
+    pin_cfg(GPIOB, 15, CFG_OUT_PP);                      /* status LED D9 */
     pin_cfg(GPIOB, 11, CFG_AF_PP);
     pin_cfg(GPIOB, 0, CFG_AF_PP);
     pin_cfg(GPIOB, 1, CFG_AF_PP);
-    led_set(0);
 
     /* interrupt priorities (nesting on, bit 7 = preemption): the gate ISR has a 100 us deadline (the first
      * toggle itself is written by DMA), so it may preempt the 20 kHz poll tick (longest path: ring copy) */
@@ -734,44 +676,10 @@ void hw_init(void)
     DMA1_Channel4->PADDR = (uint32_t)&GPIOA->BSHR;       /* TIM4_CH2 = DMA1 channel 4 */
     TIM4->CTLR1 = TIM_CEN;
     NVIC_EnableIRQ(TIM4_IRQn);
-#else
-    /* default remaps (no AFIO remap needed): TIM1 CH1/CH2/CH3N = PA8/PA9/PB15, TIM2 ETR/CH2 = PA0/PA1,
-     * TIM3 CH3/CH4 = PB0/PB1, SPI1 SCK/MISO = PA5/PA6, USART2 = PA2/PA3 */
-    pin_cfg(GPIOA, 0, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 6, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 5, CFG_AF_PP);
-    pin_cfg(GPIOA, 1, CFG_AF_PP);
-    pin_cfg(GPIOA, 2, CFG_AF_PP);
-    pin_cfg(GPIOA, 3, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 4, CFG_OUT_PP);
-    pin_cfg(GPIOA, 8, CFG_AF_PP);
-    pin_cfg(GPIOA, 9, CFG_AF_PP);
-    pin_cfg(GPIOB, 15, CFG_AF_PP);
-    pin_cfg(GPIOB, 11, CFG_IN_FLOAT);                    /* if PB11 is tied to PWM_B too, it stays an input */
-    pin_cfg(GPIOB, 0, CFG_AF_PP);
-    pin_cfg(GPIOB, 1, CFG_AF_PP);
-    led_set(0);
-
-    /* interrupt priorities (nesting on, bit 7 = preemption): the gate ISR has a 100 us deadline, so it may
-     * preempt the 20 kHz poll ISR (whose longest path, the ring copy, is ~22 us) */
-    NVIC_SetPriority(TIM2_IRQn, 0x00);
-    NVIC_SetPriority(TIM4_IRQn, 0x80);
-
-    /* DIN edge counter + gate (closed until the protocol is known) */
-    TIM2->PSC = 0;
-    TIM2->ATRLR = 0xFFFFu;
-    TIM2->SMCFGR = TIM_ECE | TIM_ETP | (1u << 8);
-    TIM2->CHCTLR1 = (uint16_t)(OCM_FORCE_LO << 12);
-    TIM2->CCER = TIM_CC2E;
-    TIM2->DMAINTENR = TIM_CC2IE;
-    TIM2->CTLR1 = TIM_CEN;
-    NVIC_EnableIRQ(TIM2_IRQn);
-#endif
 
     /* DIN sampler: SPI1 master, receive only, 16-bit frames, PCLK2 72 MHz / 2 = 36 MHz,
-     * DMA1 ch2 circular. BENCH: confirm the RX-only clock runs continuously (STM32F1 behaviour); fallback: full
-     * duplex with a dummy TX DMA, MOSI = PA7 is not connected on v0.1 (HW_ISENSE: PA7 is the ADC input, so the
-     * fallback would need MOSI unmapped or a different pin). */
+     * DMA1 ch2 circular. BENCH: confirm the RX-only clock runs continuously (STM32F1 behaviour). A full-duplex
+     * fallback would drive MOSI = PA7, the current-sense input, so it would need MOSI unmapped. */
     SPI1->CTLR1 = SPI_CTLR1_MSTR | SPI_CTLR1_SSM | SPI_CTLR1_SSI | SPI_CTLR1_RXONLY | SPI_CTLR1_DFF;
     SPI1->CTLR2 = SPI_CTLR2_RXDMAEN;
     DMA1_Channel2->PADDR = (uint32_t)&SPI1->DATAR;
@@ -782,18 +690,10 @@ void hw_init(void)
     SPI1->CTLR1 |= SPI_CTLR1_SPE;
 
     /* 20 kHz poll tick */
-#if HW_PWM_3TIMERS
     SysTick->CMP = 144000000u / POLL_HZ - 1u;            /* HCLK, auto-reload at CMP */
     SysTick->SR = 0;
     SysTick->CTLR = (1u << 5) /* INIT */ | (1u << 3) /* STRE */ | (1u << 2) /* HCLK */ | (1u << 1) /* STIE */ | 1u;
     NVIC_EnableIRQ(SysTicK_IRQn);
-#else
-    TIM4->PSC = 0;
-    TIM4->ATRLR = (uint16_t)(144000000u / POLL_HZ - 1u);
-    TIM4->DMAINTENR = TIM_UIE;
-    TIM4->CTLR1 = TIM_CEN;
-    NVIC_EnableIRQ(TIM4_IRQn);
-#endif
 
     /* debug UART 115200 8N1, DMA both ways (USART2_RX = DMA1 ch6, USART2_TX = DMA1 ch7) */
     USART2->BRR = (uint16_t)(144000000u / 115200u);
@@ -816,7 +716,7 @@ static uint32_t store_seq;
 static int store_free = -1;                              /* next slot to write, tracked in RAM (see below) */
 
 /* The chip copies the 64 KB zero-wait flash into SRAM at reset; whether a read after programming returns the new
- * data before the next reset is not documented (research/firmware-update.md 2.1). So the page is only read here,
+ * data before the next reset is not documented in the reference manual. So the page is only read here,
  * right after reset, and the write position is tracked in RAM from then on. */
 int settings_load(settings_t *s, store_ext_t *ext)
 {
@@ -841,7 +741,6 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
 {
     uint32_t i, stall_us = STORE_PROGRAM_US;
     gate_force_closed();
-#if HW_PWM_3TIMERS
     /* a phase slew pauses: no period may stay stretched while interrupts are off; it resumes afterwards */
     uint16_t slewing = (uint16_t)((TIM2->DMAINTENR | TIM3->DMAINTENR) & TIM_UIE);
     TIM2->DMAINTENR &= (uint16_t)~TIM_UIE;
@@ -851,7 +750,6 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
         TIM3->ATRLR = (uint16_t)(cur_steps - 1u);
     }
     slew_pend2 = slew_pend3 = 0;
-#endif
     __disable_irq();
     RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV2;
     FLASH->KEYR = FLASH_KEY1;
@@ -879,14 +777,12 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
 
     RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV1;
     __enable_irq();
-#if HW_PWM_3TIMERS
     if (slewing) {
         TIM2->INTFR = (uint16_t)~TIM_UIF;
         TIM3->INTFR = (uint16_t)~TIM_UIF;
         TIM2->DMAINTENR |= TIM_UIE;
         TIM3->DMAINTENR |= TIM_UIE;
     }
-#endif
     return stall_us;
 }
 

@@ -2,8 +2,8 @@
 # Copyright (C) 2026 QuinLED
 """Make an update image (descriptor + body) from an app built with LDSCRIPT=vendor/wch/Link_app.ld.
 
-    python tools/release/mkimage.py --elf <out>/fw.elf --bin <out>/fw.bin --version 0.5.0 --rev-mask 0x6 \
-        --build-id <git hash> --out quinled-dig2analog-ultra-5ch-0.5.0-hw1.bin
+    python tools/release/mkimage.py --elf <out>/fw.elf --bin <out>/fw.bin --version 0.5.0 --rev-mask 0x8 \
+        --build-id <git hash> --out quinled-dig2analog-ultra-5ch-0.5.0-rev04.bin
 
 Writes the image (what the ESP32 sends: ANNOUNCE = its first 64 bytes, DATA = the rest in 32-byte chunks) and a
 .json next to it (version, revisions, size, SHA-256, ...) for make_manifest.py.

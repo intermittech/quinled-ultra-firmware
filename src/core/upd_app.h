@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* The app's side of the firmware update over the data line (research/firmware-update.md 3.1-3.5; formats:
+/* The app's side of the firmware update over the data line (wiki: Updating over the data line; formats:
  * ultra_update.h; the other side: bootloader/). Portable, host-tested (test/test_update.c).
  *
  * UPD frames (BLOCK + Ultra header trailer with the UPD flag, 384 bits) are forwarded and acted on:

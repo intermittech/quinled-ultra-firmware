@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* 16-bit level -> per-period compare values (DESIGN_NOTES "Dither modes", "dim floor").
+/* 16-bit level -> per-period compare values (README: dither modes, dim floor).
  *
  * The DMA writes one table entry per PWM period into the compare register:
  *  - Dither: entries alternate between q and q + 1 so the average is the exact 16-bit level:

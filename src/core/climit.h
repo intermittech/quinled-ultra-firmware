@@ -4,7 +4,7 @@
  *
  * The limit = the lowest of: the board rating, the user's limit (Ultra CONFIG 21 / the stored `ilimit`) and the fuse
  * rating. There is no limit per PWM preset: realistic content keeps C10 within its ripple rating at every preset
- * (research/c10-ripple-limit.md; Quindor 2026-10-12: none until the bench check).
+ * (C10's ripple model; none until the bench check confirms it).
  * "No limit needed": the connected load (each channel at 100 %, calibrated / learned by the current sense, or
  * configured) can never draw more than the limit, so the limiter never engages.
  * Pure logic, host-tested (test/test_cal.c). */

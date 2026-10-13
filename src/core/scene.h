@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Power-on scene (DESIGN_NOTES "Power-on scene").
+/* Power-on scene (README: power-on scene).
  *
  * What the board shows from power-up until valid data arrives: 16-bit outputs for CH1..CH5 and the channels that
  * take part. The default is no scene (dark, as before). Then the controller takes over: its outputs cross-fade from

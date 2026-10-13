@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* PWM frequency presets (DESIGN_NOTES "PWM frequency presets").
+/* PWM frequency presets (README: PWM frequency presets).
  * Both PWM timers (TIM1 R/G/B, TIM3 W1/W2) count at 144 MHz; steps = period in timer counts (ARR + 1). */
 #ifndef PRESETS_H
 #define PRESETS_H

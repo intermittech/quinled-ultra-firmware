@@ -11,7 +11,7 @@ typedef struct {
     const char *help;
 } cli_key_t;
 
-static const cli_key_t keys[] = {        /* short help: the values (README / DESIGN_NOTES have the details) */
+static const cli_key_t keys[] = {        /* short help: the values (README / wiki: Console have the details) */
     { "protocol", CMD_PROTOCOL,      "0 auto 1 WS2915 2 WS2805 3 Ultra" },
     { "preset",   CMD_PWM_PRESET,    "0..14 = 2.2..100 kHz, 8 = 25 kHz" },
     { "dither",   CMD_DITHER_MODE,   "0 on 1 off-low 2 off" },
@@ -243,6 +243,27 @@ static void status(cli_t *c)
         wnum(c, s->vdda_mv);
         c->write("\r\n");
     }
+    c->write("supply_mv=");
+    if (!s->vs_supply_fitted) {
+        c->write("n/a (PA5 not read: BOARD_VSENSE 0)");
+    } else {
+        wnum(c, s->vs_supply_mv);
+        c->write(" (min ");
+        wnum(c, s->vs_supply_min_mv);
+        c->write(", max ");
+        wnum(c, s->vs_supply_max_mv);
+        c->write(" since the last status)");
+        if (s->isense) {
+            /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A) */
+            uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
+            c->write("\r\ninput_mw=");
+            wnum(c, s->vs_supply_mv / 10u * ma / 100u);
+            c->write(" (supply_mv x current_ma)");
+        }
+    }
+    c->write("\r\ntp8_mv=");
+    wnum(c, s->vs_aux_mv);
+    c->write(" (PA0, spare input)\r\n");
     c->write("board_limit=");
     if (s->lim_ma == 0xFFFFu) {
         c->write("none");

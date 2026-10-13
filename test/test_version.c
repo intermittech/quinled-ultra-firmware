@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* The firmware version display (research/firmware-version-display.md): version text <-> word (core/fwver.c, the
+/* The firmware version display (wiki: Console): version text <-> word (core/fwver.c, the
  * rules of tools/release/qdu.py and the ESPHome component's fw_version.h), the blink code (ack_start_version), the
  * console banner and `version`, the identify argument. Included by test_main.c after test_features.c (console
  * helpers). The Ultra side (IDENTIFY 5 taken, 6-255 ignored) is in test_ultra.c. */

@@ -3,7 +3,7 @@
 /* Firmware version text <-> version word (the update descriptor's format, ultra_update.h):
  *   major << 24 | minor << 16 | patch << 8 | pre,  pre = 0x00 + n alpha.n, 0x40 + n beta.n, 0x80 + n rc.n, 0xFF stable
  * As a number it sorts like semver. The same rules as tools/release/qdu.py and the ESPHome component's fw_version.h.
- * 0 = not a version ("0.4", a development build): research/firmware-version-display.md. */
+ * 0 = not a version ("0.4", a development build): wiki: Console. */
 #ifndef FWVER_H
 #define FWVER_H
 

@@ -8,7 +8,6 @@
     .section .text.isr_stubs, "ax", @progbits
     .align 2
 
-#if HW_PWM_3TIMERS
     .global TIM4_IRQHandler                 /* TIM4 CC2: gate, next toggle */
 TIM4_IRQHandler:
     call    gate_isr
@@ -28,14 +27,3 @@ TIM2_IRQHandler:
 TIM3_IRQHandler:
     call    slew3_isr
     mret
-#else
-    .global TIM2_IRQHandler                 /* TIM2 CC2: gate, next toggle */
-TIM2_IRQHandler:
-    call    gate_isr
-    mret
-
-    .global TIM4_IRQHandler                 /* 20 kHz poll tick */
-TIM4_IRQHandler:
-    call    poll_isr
-    mret
-#endif

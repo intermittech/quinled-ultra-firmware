@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* The app behind the bootloader (firmware update, src/core/ultra_update.h, research/firmware-update.md):
+/* The app behind the bootloader (firmware update, src/core/ultra_update.h, wiki: Updating over the data line):
  *   0x00000000-0x00001FFF  bootloader (8 KB, its own link: bootloader/bl.ld)
  *   0x00002000-0x000020FF  app descriptor page (written by the update / production, not part of this link)
  *   0x00002100-0x0000F5FF  this app (53.25 KB); its startup sets mtvec to its own vector table

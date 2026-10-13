@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* WS2915 / WS2805 framing, auto-detect and the forwarding-gate plan (DESIGN_NOTES "Protocol modes").
+/* WS2915 / WS2805 framing, auto-detect and the forwarding-gate plan (wiki: WS modes and config frames).
  *
  * Frame seen by this board (bits):  WS2915: H + 80 n  (H = 32 header bits, V1.3/V1.5, or 26, V1.1)
  *                                   WS2805: 40 m

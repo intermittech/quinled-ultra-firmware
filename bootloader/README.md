@@ -1,10 +1,14 @@
 # QuinLED dig2analog-ultra-5ch bootloader
 
 **Status: phase 1 built and host-tested, not run on hardware.** It updates the board's firmware over the data line
-from ESPHome (the `dig2analog_ultra` hub), with no back-channel and no case opening. Design and decisions:
-[`../../research/firmware-update.md`](../../research/firmware-update.md). Formats (frames, descriptor, status
-records, hand-over, flash map): [`../src/core/ultra_update.h`](../src/core/ultra_update.h), shared with the app and
-the ESPHome component.
+from ESPHome (the `dig2analog_ultra` hub), with no back-channel and no case opening. How to use it: the wiki page
+*Updating over the data line*. Formats (frames, descriptor, status records, hand-over, flash map):
+[`../src/core/ultra_update.h`](../src/core/ultra_update.h), shared with the app and the ESPHome component.
+
+**Board:** QuinLED dig2analog-ultra-5ch rev 0.4, hardware id 1, board revision 3 (`UPD_REV_D2A_R04`, the default of
+`build_bl.sh`). Its bootloader accepts only images for that hardware id whose revision mask includes bit 3; images
+for another board or revision are rejected before anything is erased. The Diff-Power ultra receiver (hardware id 2,
+no hardware yet) gets its own bootloader build.
 
 ## What it does
 
@@ -43,8 +47,13 @@ the ESPHome component.
 
 **Gate**
 
-- TIM2 counts DIN edges on ETR and drives FWD_EN on CH2 (the 2-timer app's mechanism).
+- TIM3 CH1 captures DIN's falling edges on PA6 (the pin the sampler reads too); its trigger output clocks TIM2
+  (ITR2), so TIM2 counts DIN edges, and TIM2 CH2 drives FWD_EN on PA1. The app counts with TIM4 the same way.
 - During sessions it stays open. In recovery it blocks the first 256 bits after a normal Ultra frame.
+
+**Pins (rev 0.4, the app's pin map):** PA6 DIN (SPI1_MISO + TIM3_CH1), PA1 FWD_EN (TIM2_CH2), PA9 PWM_R (TIM1_CH2,
+the 10 % feedback blink), PB15 D9, PA2 USART2_TX (TP5). PA0 / PA4 analog inputs; every other PWM pin stays an
+input, and the board's pull-downs keep the gate drivers off.
 
 ## Files
 
@@ -52,7 +61,7 @@ the ESPHome component.
 |---|---|
 | `bl_core.c/.h` | portable logic: boot decision, session, pool, erase plan, commit, verify (host-tested) |
 | `bl_rx.c/.h` | streaming decoder (host-tested) |
-| `bl_hw.c/.h` | CH32V203 registers: 144 MHz, SPI sampler, TIM2 gate, flash at HCLK / 2, CRC unit, IWDG, PVD, feedback PWM, UART |
+| `bl_hw.c/.h` | CH32V203 registers: 144 MHz, SPI sampler, TIM3 → TIM2 gate, flash at HCLK / 2, CRC unit, IWDG, PVD, feedback PWM, UART |
 | `bl_main.c` | reset flow and main loop; `upd_bl_info_t` at 0x08000010 |
 | `bl_start.S`, `bl.ld` | startup (no vector table) and the 8 KB link; RAM after the 32-byte hand-over block |
 | `build_bl.sh` | `OUT=<dir> BL_HW_REV=<n> bash bootloader/build_bl.sh` |
@@ -137,8 +146,8 @@ quinled-ultra-esphome: `ULTRA_ESPHOME`, else next to the firmware repository, el
 | 4 | After programming the zero-wait area, do CPU reads see the new data before a reset? | the design doesn't depend on it (VERIFY runs after a reset) |
 | 5 | Upper 160 KB (staging, option B): ESIG_FLACAP, erase / program / verify, retention | option A only (as built) |
 | 6 | CPU and DMA during a page program at HCLK / 2: does the decoder resync in the host's 2.7 ms pause? | longer page pause |
-| 7 | SPI1 RX-only clock keeps running with DMA (as the app) | full-duplex master with a dummy TX DMA |
-| 8 | TIM2 ETR edge counter + CH2 toggle at 256 edges on FWD_EN (recovery gate) | gate stays open in recovery (downstream boards shift by one slot) |
+| 7 | SPI1 RX-only clock keeps running with DMA (as the app) | as the app's fallback (firmware README, the SPI1 bench row) |
+| 8 | TIM3 CH1 capture → TIM2 (ITR2) edge counter + TIM2 CH2 toggle at 256 edges on FWD_EN (recovery gate) | gate stays open in recovery (downstream boards shift by one slot) |
 | 9 | Bootloader → app jump: relocated `mtvec`, HPE, IWDG, the app's SystemInit from reset clocks | soft reset with BOOT_ONCE before the jump |
 | 10 | App → bootloader by software reset with the hand-over block intact; IWDG state after a software reset | longer IWDG timeout in the bootloader |
 | 11 | Power-on to first PWM with a confirmed app: no more than ~0.1 ms more than without a bootloader (Diff-Power) | none needed |

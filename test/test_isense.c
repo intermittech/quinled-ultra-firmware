@@ -20,7 +20,7 @@
 #include "../src/core/isense.h"
 
 /* amplifier under test (gain, bandwidth, highest output at VS 3.3 V):
- *   default: 3PEAK TPA158A3 (gain 100, 1 MHz, VS - 0.15 V), the part of fix list v0.1 item 12;
+ *   default: 3PEAK TPA158A3 (gain 100, 1 MHz, VS - 0.15 V), the part on rev 0.4;
  *   /DISENSE_TEST_GAIN=50u /DISENSE_TEST_BW=50e3 /DISENSE_TEST_VOMAX=3.28: analogysemi CSA220NA;
  *   /DISENSE_TEST_BW=90e3 /DISENSE_TEST_VOMAX=3.28: analogysemi CSA231PA.
  * Firmware: ISENSE_AMP_GAIN in board.h (default 100). */

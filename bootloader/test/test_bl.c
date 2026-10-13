@@ -186,7 +186,7 @@ static void make_image(image_t *im, uint32_t len, uint32_t version, uint8_t hw_i
 }
 
 #define V(a, b, c, pre) (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (pre))
-#define REV_OK ((1u << UPD_REV_PB11) | (1u << UPD_REV_ISENSE))
+#define REV_OK (1u << UPD_REV_D2A_R04)
 
 /* production: chip erased, bootloader + app + VERIFIED + CONFIRMED written by the programmer */
 static void factory(const image_t *im)
@@ -551,7 +551,7 @@ static void test_desc_check(void)
         CHECK(bl_desc_check(d) == -2, "rejects %s", what);                                                         \
     } while (0)
     FIELD_TEST(d[UPD_D_HW_ID] = 2, "another hardware id");
-    FIELD_TEST(upd_put16(d + UPD_D_HW_REV_MASK, 1u << UPD_REV_V01_PB15), "another revision");
+    FIELD_TEST(upd_put16(d + UPD_D_HW_REV_MASK, 1u << (UPD_REV_D2A_R04 - 1u)), "another revision");
     FIELD_TEST(upd_put32(d + UPD_D_BODY_LEN, UPD_APP_BODY_MAX + 4u), "a body that doesn't fit");
     FIELD_TEST(upd_put32(d + UPD_D_BODY_LEN, 1022), "an odd length");
     FIELD_TEST(upd_put32(d + UPD_D_BODY_LEN, 0), "length 0");
@@ -698,7 +698,7 @@ static void test_rejects(void)
     im_same = im_old;
     make_image(&im_older, 20000, V(0, 4, 9, 0xFF), 1, REV_OK, 1, 32);
     make_image(&im_hw, 20000, V(0, 6, 0, 0xFF), 2, REV_OK, 1, 33);
-    make_image(&im_rev, 20000, V(0, 6, 0, 0xFF), 1, 1u << UPD_REV_V01_PB15, 1, 34);
+    make_image(&im_rev, 20000, V(0, 6, 0, 0xFF), 1, 1u << (UPD_REV_D2A_R04 - 1u), 1, 34);
     make_image(&im_minbl, 20000, V(0, 6, 0, 0xFF), 1, REV_OK, BL_VERSION + 1u, 35);
     make_image(&im_big, 1024, V(0, 6, 0, 0xFF), 1, REV_OK, 1, 36);
     upd_put32(im_big.desc + UPD_D_BODY_LEN, UPD_APP_BODY_MAX + 256u);

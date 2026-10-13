@@ -24,7 +24,7 @@ SLOT board 0 (32 bytes) | SLOT board 1 (32) | ... | SLOT board N-1 (32) | HEADER
 
 Frame bits = 256 × N + 64. Every board sees one contiguous frame: its own slot at the start, the header at the end.
 
-**Chain length:** officially up to **50 boards per data pin** (`../research/chain-50-boards.md`): 12,864 bits =
+**Chain length:** officially up to **50 boards per data pin**: 12,864 bits =
 16.7-17.4 ms per frame. The hub sends '0' = 250 ns and '1' = 700 ns high (1.30 / 1.35 µs per bit), centred on the
 boards' 472 ns decision. The boards pass bits on without re-timing, so this leaves room for the pulse-width change of
 50 forwarding boards.
@@ -215,7 +215,7 @@ out = min + out × (max − min)    (0 stays 0 with zero_means_zero)
 power limit per channel, then per board (CONFIG 11-21)
 ```
 
-Boards with the input current sense (next board revision, `HW_ISENSE`; DESIGN_NOTES "Board current sense") hold
+Boards with the input current sense (the dig2analog-ultra-5ch rev 0.4; wiki: Current sense) hold
 CONFIG 21 on the measured input current instead, after rendering; the per-channel limits (16-20) stay estimates
 from 11-15. Adaptive stagger then uses the measured channel currents as weights.
 
@@ -429,7 +429,7 @@ IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version 
 | 12 | 4 | firmware version word: major << 24 \| minor << 16 \| patch << 8 \| pre-release (`ultra_update.h`); 0 = unknown |
 | 16 | 1 | bootloader version (0 = none) |
 | 17 | 1 | hardware id |
-| 18 | 2 | hardware capabilities ([research/return-channel.md](../research/return-channel.md) §4.5) |
+| 18 | 2 | hardware capabilities (reserved; wiki: Reserved extensions) |
 | 20 | 4 | firmware features, below |
 
 | Bit | Name | Feature |
@@ -449,8 +449,8 @@ IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version 
 | 12-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
 | 24-31 | — | hardware-specific |
 
-- Firmware 0.4's features are 0x3A7 (bits 0, 1, 2, 5, 7, 8, 9), plus bits 3, 4 and 11 with the board current sense
-  and bit 6 behind a bootloader; a Diff-Power ultra receiver would report them.
+- Firmware 0.5.0's features are 0xFBF (bits 0-5 and 7-11: the board current sense is always in on rev 0.4), 0xFFF
+  behind a bootloader (bit 6, release builds); a Diff-Power ultra receiver would report them.
 - **Until Diff-Power receivers answer, the host can't read this** (a dig2analog-ultra never answers). It sends what is configured, and a board without a feature
   falls back as above (e.g. firmware without SCENE would show nothing at power-up).
 
@@ -462,7 +462,7 @@ calibration) stays on the board.
 
 Not implemented. These values are reserved so later firmware and hosts can add it without another change to the
 frame layout. Constants: `ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTRA_RW_*`, `ULTRA_RSP_*`,
-`ULTRA_PAGE_*`). Design: [research/return-channel.md](../research/return-channel.md) §4.
+`ULTRA_PAGE_*`). Background: wiki, Reserved extensions.
 
 | FLAGS bit | Name | Meaning | What a board of this firmware does |
 |---|---|---|---|
@@ -490,7 +490,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
 
 - **Response slot:** SYNC `0xA5` \| PAGE \| INDEX << 4 \| RFLAGS \| SEQ \| UID16 (2) \| DATA (24) \| CRC-16 (2).
 - **Pages:** 0x00 STATUS, 0x01 OUTPUTS, 0x02 ACKS, 0x03 ERRORS, 0x04 IDENTITY ([layout](#capability-reporting-reserved)),
-  0x05 FW_UPDATE (research/return-channel.md §4.5), and for the current calibration (`research/current-calibration.md`)
+  0x05 FW_UPDATE, and for the current calibration (wiki: Current sense)
   and the power events (0x08 POWER, protocol 0.2.2) below; 0x09-0x7F reserved for later pages, 0x80-0xFD
   hardware-specific:
 
@@ -593,8 +593,8 @@ RW and UPD are never set together: the host never sends that, and a board ignore
 
 Release builds put an 8 KB bootloader in front of the app. The hub sends a signed image to every board of a pin in
 one session; Ultra mode only. Formats and constants: `src/core/ultra_update.h` (frozen: every bootloader parses it
-for life; the ESPHome component keeps an identical copy). Design and decisions:
-[research/firmware-update.md](../research/firmware-update.md). Bootloader: [bootloader/README.md](bootloader/README.md).
+for life; the ESPHome component keeps an identical copy). How to use it: wiki, Updating over the data line.
+Bootloader: [bootloader/README.md](bootloader/README.md).
 
 **Frame:** BLOCK (40 bytes) + HEADER (8, VERSION 2, FLAGS = UPD) = **384 bits**, a length no other frame uses. It
 is sent like any Ultra frame. 384 is not an Ultra length, so a board classifies it as "odd" and keeps its lock.
@@ -612,6 +612,15 @@ is sent like any Ultra frame. 384 is not an Ultra length, so a board classifies 
 **Image** = a 64-byte descriptor (magic `QDU5`, hardware id, board-revision mask, version, body length and CRC-32,
 oldest bootloader that can install it, build id, CRC-32) + the body: the app linked at 0x0800_2100. The hub checks
 the image's ECDSA P-256 signature before it sends anything; the boards check the CRCs.
+
+**Hardware ids and board revisions** (`ultra_update.h`). An image installs only on the hardware id and the
+revisions in its mask: the app and the bootloader both check it, and the hub picks, per pin, the image whose mask
+holds the line's `board_revision`.
+
+| Hardware id | Board | Revisions (bit of the mask) |
+|---|---|---|
+| 1 | QuinLED dig2analog-ultra-5ch | 3 = rev 0.4 (`UPD_REV_D2A_R04`, mask 0x8). 0-2 stay unused: drawings that were never built |
+| 2 | QuinLED Diff-Power ultra receiver | reserved, no hardware yet |
 
 **Session, as the hub sends it** (`update_session.h` in the ESPHome component):
 1. Lead-in: ANNOUNCE halves, alternating, for 500 ms + 15 ms per board.

@@ -10,8 +10,10 @@ CH32V203) in the QuinLED dig2analog+ form factor. On the data line it works in o
 
 | Board | Firmware | |
 |---|---|---|
-| QuinLED dig2analog-ultra-5ch (production revision, PB11 wired) | release images `-hw1` | In development |
-| QuinLED dig2analog-ultra-5ch with input current sense | `-hw1` (current sense unused); an `-isense` image follows | Next board revision |
+| QuinLED dig2analog-ultra-5ch rev 0.4 (hardware 1, board revision 3) | release images `-rev04`, firmware 0.5.0 and later | First prototypes |
+| QuinLED Diff-Power ultra receiver (hardware 2) | — | Planned |
+
+An image for one board type or revision never installs on another. Pins: [Pin map](https://github.com/intermittech/quinled-ultra-firmware/wiki/Pin-Map).
 
 ## Getting the firmware onto a board
 
@@ -55,7 +57,8 @@ See the **[wiki](https://github.com/intermittech/quinled-ultra-firmware/wiki)**:
 | [WS modes and config frames](https://github.com/intermittech/quinled-ultra-firmware/wiki/WS-Modes-And-Config-Frames) | WS2805 / WS2915 emulation, board settings from the data line, WLED |
 | [Console](https://github.com/intermittech/quinled-ultra-firmware/wiki/Console) | The UART console: status, settings |
 | [Ultra protocol](https://github.com/intermittech/quinled-ultra-firmware/wiki/Ultra-Protocol) | Summary; the full specification is in [quinled-ultra-protocol](https://github.com/intermittech/quinled-ultra-protocol) |
-| [Current sense](https://github.com/intermittech/quinled-ultra-firmware/wiki/Current-Sense) | Board current limit, short protection, calibration (next board revision); local on the board, not reported back |
+| [Current sense](https://github.com/intermittech/quinled-ultra-firmware/wiki/Current-Sense) | Board current limit, short protection, calibration, the D9 overcurrent signal; local on the board, not reported back |
+| [Pin map](https://github.com/intermittech/quinled-ultra-firmware/wiki/Pin-Map) | The rev 0.4 pins, the voltage channels, hardware ids and revisions |
 | [Building](https://github.com/intermittech/quinled-ultra-firmware/wiki/Building) · [Flashing over SWD](https://github.com/intermittech/quinled-ultra-firmware/wiki/Flashing-Over-SWD) | For developers |
 | [Development and tests](https://github.com/intermittech/quinled-ultra-firmware/wiki/Development-And-Tests) · [Bench plan](https://github.com/intermittech/quinled-ultra-firmware/wiki/Bench-Plan) | Layout, host tests, measurements, what still needs hardware |
 | [Releases and signing](https://github.com/intermittech/quinled-ultra-firmware/wiki/Releases-And-Signing) | For maintainers |

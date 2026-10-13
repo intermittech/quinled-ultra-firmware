@@ -3,7 +3,7 @@
 # Copyright (C) 2026 QuinLED
 # Build the bootloader (8 KB at 0x08000000). Same compiler choice as tools/build_target.sh.
 # Options (environment): OUT=<dir> (default build/bootloader), BL_HW_REV=<0..15> (board revision this bootloader
-# is built for, default 1 = PB11 wired to PWM_B; 2 = with current sense), BL_BUILD_ID=<8 chars>, EXTRA_CFLAGS.
+# is built for, default 3 = dig2analog-ultra-5ch rev 0.4), BL_BUILD_ID=<8 chars>, EXTRA_CFLAGS.
 # Output: bl.elf / .bin / .hex / .map / .lst, size report; fails if it doesn't fit 8 KB or its RAM.
 set -e
 FW="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,7 +15,7 @@ else echo "no RISC-V GCC (set RISCV_GCC)"; exit 1
 fi
 PFX="${GCC%gcc}"
 OUT="${OUT:-$FW/build/bootloader}"
-BL_HW_REV="${BL_HW_REV:-1}"
+BL_HW_REV="${BL_HW_REV:-3}"
 BL_BUILD_ID="${BL_BUILD_ID:-$(date +%Y%m%d)}"
 # at most 8 characters, and only ones that stay one word in CFLAGS (a short id padded with spaces split it)
 BL_BUILD_ID="$(printf '%s' "$BL_BUILD_ID" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-8)"

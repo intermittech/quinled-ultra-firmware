@@ -3,18 +3,18 @@
 /* QuinLED dig2analog-ultra-5ch firmware.
  *
  * Data path (no CPU in the forwarding path):
- *   DIN --> edge counter (TIM3 CH1 capture -> TIM4, or TIM2 ETR) --> FWD_EN at the planned edge counts (DMA write,
- *       |   or TIM2 CH2 toggle) --> U2 (AND) --> data out                              (board.h: HW_PWM_3TIMERS)
+ *   DIN --> edge counter (TIM3 CH1 capture -> TIM4) --> FWD_EN at the planned edge counts (DMA write)
+ *       |   --> U2 (AND) --> data out                                                   (pin map: hal/board.h)
  *       \-> SPI1 RX-only 36 MHz --> DMA ring --> (poll ISR copies the frame) --> decoder in the main loop
  * Output path: WS frames -> gamma (WS2805) -> smoothing / fades,  or  Ultra commands -> light engine (ultra.c)
  *              -> dither + dim floor tables --> DMA bursts them into TIM1 / TIM3 CCRs, one entry per PWM period.
- * The 20 kHz poll tick (SysTick, or TIM4) reads the edge count: frame start / end (DIN idle 100-150 us), gate re-arm, ring copy
+ * The 20 kHz poll tick (SysTick) reads the edge count: frame start / end (DIN idle 100-150 us), gate re-arm, ring copy
  * of the frame start (own bits) and of its end (the Ultra header trailer), 50 us tick / 1 ms time base
  * (core/frame_track.h). The main loop decodes both, decides per frame (core/frame_rx.c: show, classify, lock) and
  * hands the gate plan for the following frames back to the ISR.
  * Boot: the tracker arms on an idle line, so the first complete frame after power-up is used; in a forced protocol
  * mode, or in auto mode with the protocol stored at the last lock ("sticky auto"), that frame is gated and decoded.
- * Firmware update (core/upd_app.h, research/firmware-update.md): UPD frames make the board transparent (forward and
+ * Firmware update (core/upd_app.h; wiki: Updating over the data line): UPD frames make the board transparent (forward and
  * capture whole 384-bit frames); an ANNOUNCE it takes hands over to the bootloader by a software reset. UPD_APP = 1
  * (the build behind the bootloader, tools/build_release.sh) uses the hand-over block and the descriptor page. */
 #include "ch32v20x.h"
@@ -33,6 +33,7 @@
 #include "../core/mcutemp.h"
 #include "../core/ocled.h"
 #include "../core/pwrev.h"
+#include "../core/vsense.h"
 #include "../core/proto.h"
 #include "../core/scene.h"
 #include "../core/smooth.h"
@@ -42,7 +43,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.4"     /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.5.0"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -76,8 +77,8 @@ static uint32_t edge_tick;                 /* ISR: tick and ring position of the
 static uint16_t edge_pos;
 static volatile uint32_t ms_now, tick_now; /* 1 ms and 50 us time bases */
 static volatile uint32_t frames;
-/* board current sense (HW_ISENSE board revision, core/isense.h): the tick sums the ADC samples and trips; the
- * main loop limits (isense_apply in outputs_update), calibrates and retries. Disabled (no-op) without it. */
+/* board current sense (core/isense.h): the tick sums the ADC samples and trips; the main loop limits (isense_apply
+ * in outputs_update), calibrates and retries */
 static isense_t is;
 
 #define HINT_WORDS 135u                    /* 60 us at 36 MHz, 16 samples per word */
@@ -122,12 +123,11 @@ void poll_isr(void)
     if (++sub >= POLL_HZ / 1000u) {
         sub = 0;
         ms_now++;
+        hw_adc_ms();                       /* the ADC's injected group: voltage channels / MCU temperature */
     }
-#if HW_ISENSE
     if (is.enabled && isense_tick(&is, ISENSE_RAW())) {
         pwm_force_off(1);                  /* a short: all outputs off now, no table rebuild */
     }
-#endif
     if (!rx_ready) {
         return;
     }
@@ -209,10 +209,8 @@ static uint16_t built_v[5];                /* value each channel's table holds *
 static uint8_t built_ok;
 static uint16_t st_o2 = STAGGER_FIXED_O2, st_o3 = STAGGER_FIXED_O3;
 static uint8_t st_force;
-#if HW_PWM_3TIMERS
 static uint16_t st_seen[5];
 static uint32_t st_ms;
-#endif
 /* power-on scene (core/scene.h): shown from power-up until data comes, kept in its own flash log */
 #define SCENE_TAKEOVER_MS 3000u            /* Ultra: hold it at most this long after the first header */
 static scene_run_t srun;
@@ -245,6 +243,17 @@ static pwrev_t pw;
 static mcutemp_t mt;
 static uint32_t temp_ms;
 static uint8_t temp_started;
+/* voltage channels (core/vsense.h): PA5 supply (BOARD_VSENSE), PA0 the spare input on TP8 */
+static vsense_t vs_sup, vs_aux;
+
+/* every ms: the injected group's voltage pairs of that ms */
+static void vsense_service(void)
+{
+    uint32_t sum2[2], n;
+    hw_vsense_take(sum2, &n);
+    vsense_add(&vs_sup, sum2[0], n);
+    vsense_add(&vs_aux, sum2[1], n);
+}
 
 /* once a second, in the main loop: read the conversion started a second ago, start the next one. Not while a current
  * calibration runs (its 30 ms windows read PA7 alone; the injected group would hold the PA7 results for 84 us). */
@@ -306,7 +315,6 @@ static uint16_t isense_limit_ma(void)
     return (uint16_t)(l > 65535u ? 65535u : l);
 }
 
-#if HW_PWM_3TIMERS
 /* a channel's LED current at 100 % (stagger weights without the current sense): Ultra CONFIG 11-15 when set, else
  * the default */
 static uint16_t cfg_load_ma(uint8_t ch)
@@ -315,32 +323,16 @@ static uint16_t cfg_load_ma(uint8_t ch)
     uint8_t id = (uint8_t)(ULTRA_CFG_CH_CURRENT + ch);
     return (ultra_on && (ul.cfg_valid & (1u << id)) && ul.cfg[id] != 0u) ? ul.cfg[id] : def_ma[ch];
 }
-#endif
 
 /* The board limit in effect (core/climit.h): the lowest of the board rating, the user's limit (stored ilimit / Ultra
- * CONFIG 21) and the fuse. With the current sense the soft limiter holds it (measured) and the connected load is the
- * calibrated / learned one. Without it this is for status only (CONFIG 21 is the Ultra power limit's, on the computed
- * current, core/ultra.c), and the connected load is known only when CONFIG 11-15 are all set. Every apply_settings,
- * limit command, finished calibration and once a second (the learned model drifts). */
+ * CONFIG 21) and the fuse. The current sense's soft limiter holds it (measured); the connected load is the calibrated /
+ * learned one. Every apply_settings, limit command, finished calibration and once a second (the learned model
+ * drifts). */
 static void limit_update(void)
 {
-    uint32_t conn = 0;
-    uint8_t i;
     lim_ms = ms_now;
-    if (is.enabled) {
-        climit_eval(&clim, isense_limit_ma(), ISENSE_BOARD_MA, ISENSE_FUSE_MA, isense_connected_ma(&is));
-        isense_set_limit(&is, clim.limit_ma);
-        return;
-    }
-    for (i = 0; i < 5u; i++) {
-        uint8_t id = (uint8_t)(ULTRA_CFG_CH_CURRENT + i);
-        if (!ultra_on || !(ul.cfg_valid & (1u << id))) {
-            conn = 0;
-            break;
-        }
-        conn += ul.cfg[id];
-    }
-    climit_eval(&clim, isense_limit_ma(), 0, 0, conn);
+    climit_eval(&clim, isense_limit_ma(), ISENSE_BOARD_MA, ISENSE_FUSE_MA, isense_connected_ma(&is));
+    isense_set_limit(&is, clim.limit_ma);
 }
 
 /* calibration (config frame, console, Ultra IDENTIFY 2): duty_pct 0 = the standard test (each channel alone at
@@ -359,7 +351,6 @@ static uint8_t isense_calibrate(uint8_t duty_pct)
 static void flash_stall_begin(void);
 static void flash_stall_end(uint32_t us);
 
-#if HW_ISENSE
 /* every ms, before the outputs are rendered: the tick's samples of that ms -> limit, trips, calibration */
 static void isense_service(void)
 {
@@ -393,7 +384,6 @@ static void isense_service(void)
         limit_update();                    /* the connected load is known now */
     }
 }
-#endif
 
 static void apply_settings(void)
 {
@@ -411,7 +401,7 @@ static void apply_settings(void)
         steps = s;
         run_stagger = eff.stagger;
         len = pattern_len_for(steps);
-        if (HW_PWM_3TIMERS && stagger_is_spread(eff.stagger) && len < STAGGER_SPREAD_LEN) {
+        if (stagger_is_spread(eff.stagger) && len < STAGGER_SPREAD_LEN) {
             len = STAGGER_SPREAD_LEN;            /* spread spectrum: a longer period sequence */
         }
         pwm_start(steps, len, eff.stagger);
@@ -457,9 +447,7 @@ static void outputs_update(uint8_t ack_on)
         scene_mix(&srun, ms_now, v);       /* the power-on scene until data comes, then the cross-fade */
         dark_apply(&dk, ms_now, v);        /* the pin's calibration: dark (a test still overrides it below) */
     }
-#if HW_ISENSE
     isense_apply(&is, v, v);               /* board limit (all channels scaled together), or the calibration pattern */
-#endif
     for (i = 0; i < 5u; i++) {
         out_now[i] = v[i];
     }
@@ -688,7 +676,7 @@ static void handle_slot(const slot_t *slot, proto_t p)
         ramp = (uint8_t)(set.smoothing != 0u);
     } else {
         for (i = 0; i < 5u; i++) {
-            tgt[i] = slot->ch[i];          /* WS2915 gain header ignored (see DESIGN_NOTES) */
+            tgt[i] = slot->ch[i];          /* WS2915 gain header ignored (wiki: WS modes) */
         }
         ramp = (uint8_t)(set.smoothing == 2u);
     }
@@ -962,7 +950,6 @@ static void process_frame_end(void)
  * from Ultra's CONFIG, else 3 A (R/G/B) and 5 A (W1/W2). */
 static void stagger_adapt(void)
 {
-#if HW_PWM_3TIMERS
     uint16_t peak[5];
     stagger_result_t r;
     uint8_t i, changed = st_force;
@@ -999,7 +986,6 @@ static void stagger_adapt(void)
     }
     stat.stagger_o2 = st_o2;
     stat.stagger_o3 = st_o3;
-#endif
 }
 
 static void signal_loss_check(void)
@@ -1040,25 +1026,12 @@ static void power_service(uint8_t ack_on)
     in.limit_ma = clim.limit_ma;
     in.limit_src = pwrev_src(clim.src);
     in.ch_limiting = (uint8_t)(ultra_on && ul.ch_limited);
-    if (is.enabled) {
-        in.trip_cause = is.tripped;        /* ISENSE_TRIP_FAST / _OVL = ULTRA_PW_CAUSE_SHORT / _OVERLOAD */
-        in.limiting = (uint8_t)(is.limiting && in.trip_cause == ISENSE_TRIP_NONE);
-        in.i_ma = sat16(is.i_ms);
-        in.trip_ma = in.trip_cause == ISENSE_TRIP_FAST ? is.peak_ma : in.i_ma;
-        in.factor = (uint16_t)(is.k >= 65535u ? 65535u : is.k);
-        in.retry_ms = isense_retry_left_ms(&is);
-    } else {
-        uint32_t t = ultra_on ? ul.board_total_ma : 0u, f = 65535u;
-        in.trip_cause = ULTRA_PW_CAUSE_NONE;
-        in.limiting = (uint8_t)(ultra_on && ul.board_limited);
-        in.i_ma = sat16((int32_t)(t > 65535u ? 65535u : t));
-        in.trip_ma = 0;
-        if (in.limiting && t > ul.cfg[ULTRA_CFG_BOARD_MAX]) {
-            f = (uint32_t)ul.cfg[ULTRA_CFG_BOARD_MAX] * 65535u / t;
-        }
-        in.factor = (uint16_t)f;
-        in.retry_ms = 0;
-    }
+    in.trip_cause = is.tripped;            /* ISENSE_TRIP_FAST / _OVL = ULTRA_PW_CAUSE_SHORT / _OVERLOAD */
+    in.limiting = (uint8_t)(is.limiting && in.trip_cause == ISENSE_TRIP_NONE);
+    in.i_ma = sat16(is.i_ms);
+    in.trip_ma = in.trip_cause == ISENSE_TRIP_FAST ? is.peak_ma : in.i_ma;
+    in.factor = (uint16_t)(is.k >= 65535u ? 65535u : is.k);
+    in.retry_ms = isense_retry_left_ms(&is);
     pwrev_update(&pw, ms_now, &in);
     ocled_update(&ocl, ms_now, in.limiting, in.trip_cause);
     lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
@@ -1115,6 +1088,10 @@ static void status_snapshot(void)
     stat.lim_conn_ma = clim.connected_ma;
     stat.mcu_temp_c10 = mt.c10;
     stat.vdda_mv = mt.vdda_mv;
+    stat.vs_supply_fitted = BOARD_VSENSE;
+    stat.vs_supply_mv = vs_sup.valid ? vs_sup.mv : 0u;
+    vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
+    stat.vs_aux_mv = vs_aux.valid ? vs_aux.mv : 0u;
     stat.oc_show = ocl.show;
     stat.oc_cause = ocl.last_cause;
     stat.oc_limiting = ocl.limiting;
@@ -1149,11 +1126,12 @@ int main(void)
     ultra_init(&ul, 1);
     hw_init();
     mcutemp_init(&mt);
-#if HW_ISENSE
+    vsense_init(&vs_sup, VSENSE_SUPPLY_RT, VSENSE_SUPPLY_RB, VSENSE_VREF_MV);
+    vsense_init(&vs_aux, VSENSE_AUX_RT, VSENSE_AUX_RB, VSENSE_VREF_MV);
+    hw_adc_init();                         /* PA7 continuously, the injected group from the poll tick */
     {
-        uint8_t present = hw_isense_init();                              /* PA7 off if the amplifier is not there */
         __disable_irq();                   /* the tick is running: no half-initialised trip level */
-        isense_init(&is, present, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
+        isense_init(&is, 1, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
         isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16 * 100u / ISENSE_AMP_GAIN);   /* board.h: amplifier gain */
         __enable_irq();
     }
@@ -1165,10 +1143,6 @@ int main(void)
             cal_present = 1;
         }
     }
-#else
-    isense_init(&is, 0, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
-    hw_temp_init();                        /* the ADC for the MCU temperature */
-#endif
     ul.board_limit_ext = is.enabled;
     stat.reset_flags = hw_reset_flags();
     upd_boot();                            /* UPD_APP: the reset flags from the hand-over, the bootloader's result */
@@ -1234,13 +1208,12 @@ int main(void)
                 outputs_dirty = 1;
             }
             was_active = ack.active;
-#if HW_ISENSE
             isense_service();              /* measurement of the last ms: limit, trips, calibration */
-#endif
             power_service(ack_on);         /* power events, D9: overcurrent signal / acknowledge patterns */
             signal_loss_check();
             upd_service();
             temp_service();
+            vsense_service();
             if (ms_now - lim_ms >= 1000u) {
                 limit_update();            /* the learned connected load drifts */
             }

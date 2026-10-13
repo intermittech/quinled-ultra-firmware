@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Diff-Power mixed chains at the wire level (research/diff-power-mixed-chains.md). Standalone runner:
+/* Diff-Power mixed chains at the wire level (old and ultra receivers in one chain). Standalone runner:
  * test\build_mixed.cmd (not part of test_main.c; test_wire.c's chain model, extended).
  *
  * Devices:
@@ -18,7 +18,7 @@
  * Every bit keeps its own rise and high time, so hops and gates act on each pulse.
  * Positions: every device takes the next slot of what it sees. A receiver's output feeds the next receiver (RS-485)
  * and its local chain (single-ended J101) alike, so the local chain mirrors the next receiver's positions.
- * Long chains (research/chain-50-boards.md): up to 64 dig2analog-ultra boards board to board on one data pin, every hop
+ * Long chains: up to 64 dig2analog-ultra boards board to board on one data pin, every hop
  * with a pulse-width change (DIN divider + AND gate + output into the cable), at the hub's default and centred
  * timing. */
 #include <math.h>
@@ -752,7 +752,7 @@ int main(int argc, char **argv)
     hub_t0h = 0.34f;
     }
 
-    /* long chains of dig2analog-ultra boards on one data pin (research/chain-50-boards.md) */
+    /* long chains of dig2analog-ultra boards on one data pin */
     printf("Long chains, board to board on one data pin (single-ended), 36 MHz decoder with HSI +-2.2 %%\n");
     {
         mchain_t c;
