@@ -22,13 +22,14 @@
 #include "vsense.h"
 
 #define VDIP_LOG         ULTRA_SU_LOG
-#define VDIP_HOLDOFF_MS  250u      /* after boot: the divider's RC and the supply settle, then the reference starts */
+#define VDIP_HOLDOFF_MS  250u      /* after boot: the divider's RC and the supply settle (this many readings, 1 per ms),
+                                      then the reference starts */
 #define VDIP_ENTER_PCT   90u
 #define VDIP_LEAVE_PCT   93u
 #define VDIP_MIN_MS      3u
 
 typedef struct {
-    uint32_t t_ms;                 /* uptime at its first low reading */
+    uint32_t t_s;                  /* uptime (s) at its first low reading */
     uint16_t min_x;                /* its lowest reading (pair sum) */
     uint16_t ref_x;                /* the reference when it began (pair sum; 0 = no dip here) */
     uint16_t dur_ms;               /* how long it lasted (65535 = longer) */
@@ -37,7 +38,9 @@ typedef struct {
 
 typedef struct {
     uint32_t ref_q12;              /* the reference: running mean of the pair sums, Q12 (0 = not started) */
-    uint16_t run;                  /* ms in a row below ENTER (outside a dip) / above LEAVE (in a dip) */
+    uint32_t start_ms;             /* the ms of cur's first low reading (its length) */
+    uint16_t run;                  /* ms in a row below ENTER (outside a dip) / above LEAVE (in a dip); before the
+                                      reference: the hold-off's readings */
     uint16_t count;                /* dips since boot (wraps) */
     uint8_t  in_dip;
     uint8_t  n_log;                /* dips in the log */
@@ -48,13 +51,15 @@ typedef struct {
 } vdip_t;
 
 void vdip_init(vdip_t *d);
-/* every ms: sum2 = the 1 ms pair sums of PA4, n pairs (0: none this ms), i_ma = the board current of that ms */
-void vdip_ms(vdip_t *d, uint32_t now, uint32_t sum2, uint32_t n, int32_t i_ma);
+/* every ms: now / now_s = the ms counter and the uptime in s, sum2 = the 1 ms pair sums of PA4, n pairs (0: none this
+ * ms), i_ma = the board current of that ms. No absolute time: any start value, any wrap. */
+void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, uint32_t n, int32_t i_ma);
 /* the k-th newest logged dip (0 = the newest), NULL past the log */
 const vdip_ev_t *vdip_event(const vdip_t *d, uint32_t k);
 /* a dip's lowest reading in % of its reference */
 uint32_t vdip_pct(const vdip_ev_t *e);
-/* SUPPLY page DATA (protocol 0.2.3, ULTRA_SU_*): now_mv = the supply now, arg = the logged dip to show */
-void vdip_page(const vdip_t *d, const vsense_t *vs, uint32_t now, uint32_t now_mv, uint8_t arg, uint8_t out[24]);
+/* SUPPLY page DATA (protocol 0.2.3, ULTRA_SU_*): now_s = the uptime in s, now_mv = the supply now, arg = the logged
+ * dip to show */
+void vdip_page(const vdip_t *d, const vsense_t *vs, uint32_t now_s, uint32_t now_mv, uint8_t arg, uint8_t out[24]);
 
 #endif

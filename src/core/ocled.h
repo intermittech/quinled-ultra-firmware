@@ -40,14 +40,14 @@ typedef struct {
     uint8_t  hold_limit, hold_trip;   /* the condition was on and its hold hasn't run out */
     uint32_t limit_last_ms;           /* last ms the condition was on */
     uint32_t trip_last_ms;
-    uint32_t since_ms;                /* show != OFF: when the pattern started */
+    uint32_t since_s;                 /* show != OFF: when the pattern started (uptime, s) */
     uint32_t phase_ms;                /* the pattern's origin (events and counters: pwrev.h) */
 } ocled_t;
 
 void ocled_init(ocled_t *o);
-/* every ms: limiting = a board current limit reduces the outputs now; trip_cause = a trip holds them off now
- * (0 none, 1 short, 2 overload) */
-void ocled_update(ocled_t *o, uint32_t now, uint8_t limiting, uint8_t trip_cause);
+/* every ms (now_s: the uptime in s): limiting = a board current limit reduces the outputs now; trip_cause = a trip
+ * holds them off now (0 none, 1 short, 2 overload) */
+void ocled_update(ocled_t *o, uint32_t now, uint32_t now_s, uint8_t limiting, uint8_t trip_cause);
 /* the pattern's level at now (0 when nothing is shown) */
 uint8_t ocled_level(const ocled_t *o, uint32_t now);
 /* D9: trip > ack_active (acknowledge / identify / version at level ack_on) > limit > off */

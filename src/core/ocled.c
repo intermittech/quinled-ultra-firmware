@@ -12,7 +12,7 @@ void ocled_init(ocled_t *o)
     }
 }
 
-void ocled_update(ocled_t *o, uint32_t now, uint8_t limiting, uint8_t trip_cause)
+void ocled_update(ocled_t *o, uint32_t now, uint32_t now_s, uint8_t limiting, uint8_t trip_cause)
 {
     uint8_t want;
     if (trip_cause != 0u) {
@@ -34,7 +34,7 @@ void ocled_update(ocled_t *o, uint32_t now, uint8_t limiting, uint8_t trip_cause
     if (want != o->show) {
         o->show = want;
         o->phase_ms = now;                 /* a new pattern starts with a flash */
-        o->since_ms = now;
+        o->since_s = now_s;
     }
 }
 

@@ -561,6 +561,29 @@ void led_set(uint8_t on)
     GPIOB->BSHR = on ? (1u << 15) : (1u << (15 + 16));  /* D9 on PB15 */
 }
 
+/* the stack (Link_sections.ld: _susrstack .. _eusrstack, 2 KB at the top of RAM): painted below the caller's frame at
+ * boot; the lowest word no longer holding the pattern is the deepest the stack (main loop + nested ISRs) went */
+#define STACK_PAINT 0xC5A3965Au
+extern uint32_t _susrstack[], _eusrstack[];
+
+void stack_paint(void)
+{
+    uint32_t *p = _susrstack, *sp;
+    __asm volatile("mv %0, sp" : "=r"(sp));
+    for (sp -= 8; p < sp; p++) {                         /* (this frame's words stay) */
+        *p = STACK_PAINT;
+    }
+}
+
+uint32_t stack_used(void)
+{
+    const uint32_t *p = _susrstack;
+    while (p < _eusrstack && *p == STACK_PAINT) {
+        p++;
+    }
+    return (uint32_t)((const uint8_t *)_eusrstack - (const uint8_t *)p);
+}
+
 /* independent watchdog: LSI 25-60 kHz / 32, reload 500 -> resets after 0.27-0.64 s (typ. 0.41 s) without a
  * kick. The main loop kicks every pass; its longest stall is a settings write with a page erase (~18 ms). */
 void watchdog_kick(void)

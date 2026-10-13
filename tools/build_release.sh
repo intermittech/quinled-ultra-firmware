@@ -8,6 +8,8 @@
 #   quinled-dig2analog-ultra-5ch-<version>-<variant>-factory.hex   production: bootloader + app, verified + confirmed
 #   bootloader-rev<N>.bin / .hex                                     the bootloader alone, per board revision
 # BUILD_ID (default: git hash if any, else the date) goes into the descriptor and the bootloader info.
+# BL_BUILD_ID (8 characters, default: BUILD_ID's first 8): the bootloader info's alone, so a release whose bootloader
+# didn't change ships the same binary (0.5.0 - 0.6.2: BL_BUILD_ID=20261013).
 set -e
 FW="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:?usage: build_release.sh <version> [out dir]}"
@@ -24,7 +26,7 @@ for v in $VARIANTS; do
   IFS='|' read -r name flags mask rev <<< "$v"
   echo "=== $name (revisions $mask, factory bootloader rev $rev)"
   BL_OUT="$OUT/obj/bl-rev$rev"
-  OUT="$BL_OUT" BL_HW_REV="$rev" BL_BUILD_ID="$(printf '%-8.8s' "$BUILD_ID")" bash "$FW/bootloader/build_bl.sh" | tail -1
+  OUT="$BL_OUT" BL_HW_REV="$rev" BL_BUILD_ID="$(printf '%-8.8s' "${BL_BUILD_ID:-$BUILD_ID}")" bash "$FW/bootloader/build_bl.sh" | tail -1
   cp "$BL_OUT/bl.bin" "$OUT/bootloader-rev$rev.bin"
   cp "$BL_OUT/bl.hex" "$OUT/bootloader-rev$rev.hex"
   APP_OUT="$OUT/obj/app-$name"

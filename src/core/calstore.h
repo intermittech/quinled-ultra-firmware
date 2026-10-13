@@ -7,8 +7,10 @@
  * records, appended one per calibration; only a full page is erased. The newest valid record (highest sequence
  * number, CRC ok) wins at boot. A record with levels = 0 clears the calibration (factory reset).
  * Wear: 4 calibrations per erase, 10k erase cycles (datasheet minimum) = 40k calibrations (a daily schedule:
- * 100 years). A power loss during the erase of a full page loses the calibration (the regression relearns; test
- * again). */
+ * 100 years). Write budget (0.6.2, main.c): CAL_BUDGET_CAP tests stored at once, then one per CAL_REFILL_MS, so an
+ * automation running the test all the time costs at most one erase a day (>= 27 years); a test waiting for its token
+ * is in use already, and the newest one is stored when the token comes.
+ * A power loss during the erase of a full page loses the calibration (the regression relearns; test again). */
 #ifndef CALSTORE_H
 #define CALSTORE_H
 
@@ -19,6 +21,8 @@
 #define CAL_REC_BYTES     64u
 #define CAL_RECS          (CAL_PAGE_BYTES / CAL_REC_BYTES)
 #define CAL_MAGIC         0x324C4143u   /* "CAL2": the test as isense_cal_t (0.6.1) */
+#define CAL_BUDGET_CAP    4u
+#define CAL_REFILL_MS     21600000u     /* one test stored per 6 h sustained */
 
 typedef struct {
     uint32_t magic;

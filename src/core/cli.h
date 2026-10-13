@@ -2,7 +2,8 @@
  * Copyright (C) 2026 QuinLED */
 /* UART diagnostics console (USART2 on TP5 TX / TP6 RX, 115200 8N1, line based, CR or LF ends a line).
  *   help | ?            command list
- *   status              firmware, uptime, reset cause, protocol, frame / error counters, frame rate, outputs
+ *   status              firmware, uptime, reset cause, stack used, protocol, frame / error counters, frame rate,
+ *                       outputs
  *   get                 all settings as key=value
  *   set <key> <value>   change a setting (same validation, blink feedback and saving as config frames)
  *   period <steps>      raw PWM period, 1440..65535 timer counts (144 MHz / steps = PWM frequency)
@@ -32,7 +33,8 @@ typedef struct {
     uint8_t  hw_id, hw_rev;        /* from the bootloader info */
     uint8_t  app_state;            /* 0 standalone, 1 trial (not confirmed), 2 confirmed */
     char     bl_build[9];          /* the bootloader's build id */
-    uint32_t uptime_ms;
+    uint32_t uptime_s;             /* s since boot (32 bits: 136 years) */
+    uint32_t stack_max;            /* the stack's high-water mark, bytes (painted at boot; 0 = not known) */
     uint32_t reset_flags;          /* RCC RSTSCKR at boot */
     uint8_t  proto_mode, proto_locked, hdr_bits;
     uint8_t  proto_provisional;    /* auto: the locked protocol is the stored one, not confirmed yet */
@@ -70,14 +72,12 @@ typedef struct {
     int16_t  mcu_temp_c10;         /* 0.1 C, MCUTEMP_NA (-32768) = not valid */
     uint16_t vdda_mv;              /* the 3.3 V rail from VREFINT, 0 = not known */
     int16_t  mcu_peak_c10;         /* the highest since boot, 0.1 C (MCUTEMP_NA: none yet) */
-    uint32_t mcu_peak_ms;          /* uptime then */
+    uint32_t mcu_peak_s;           /* uptime then (s) */
     int32_t  i_now_ch_ma[5];       /* each channel's current now: the model at its output, mA (watch) */
     /* voltage channels (core/vsense.h): PA4 the supply, PA0 the spare input on TP8 */
     uint32_t vs_supply_mv, vs_supply_min_mv, vs_supply_max_mv;   /* min / max: since the last status */
     uint32_t vs_aux_mv;
     uint32_t en_boot_mwh, en_total_wh;   /* energy (core/energy.h): since boot, lifetime */
-    uint32_t en_saved_ms;          /* uptime when the lifetime value was last stored (en_saved) */
-    uint8_t  en_saved;
     const health_t *hl;            /* channel health (core/health.h), NULL = none */
     const vdip_t *dip;             /* supply dips (core/vdip.h), NULL = none */
     const vsense_t *dip_vs;        /* ... their scaling (the supply channel) */
@@ -87,7 +87,7 @@ typedef struct {
     uint8_t  oc_show;              /* OCLED_*: 0 off, 1 limit, 2 trip */
     uint8_t  oc_cause;             /* the last trip's cause: 1 short, 2 overload */
     uint8_t  oc_limiting, oc_tripped;   /* the conditions now */
-    uint32_t oc_since_ms;          /* uptime when the shown pattern started */
+    uint32_t oc_since_s;           /* uptime (s) when the shown pattern started */
     uint32_t oc_hold_ms;           /* hold left (0 while the condition is on) */
     /* the power events (core/pwrev.h), every board: what a Diff-Power ultra receiver reports (STATUS byte 8, the
      * POWER page) */

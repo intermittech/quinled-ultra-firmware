@@ -255,12 +255,13 @@ def measure_monitor(emu, scratch):
                 wn, wc = n, emu.cycles()
         return wn, wc
 
-    emu.poke(vd, bytes(84))                                          # (static, zero: vdip_init isn't linked)
-    emu.call("vdip_ms", [vd, 300, 2604, 1, 2000])                     # the reference: 24 V
-    n, c = worst([("vdip_ms", [vd, t, 2604 + (t & 3), 1, 2000]) for t in range(301, 400)])
+    emu.poke(vd, bytes(88))                                          # (static, zero: vdip_init isn't linked)
+    for t in range(49, 301):                                         # the hold-off (250 readings), the reference
+        emu.call("vdip_ms", [vd, t, 0, 2604, 1, 2000])               # (24 V); args: now (ms), now_s, sum2, n, i_ma
+    n, c = worst([("vdip_ms", [vd, t, 0, 2604 + (t & 3), 1, 2000]) for t in range(301, 400)])
     rows.append(("vdip_ms, steady supply (every 1 ms)", n, c, ""))
-    dip = [("vdip_ms", [vd, t, 2080, 1, 6000]) for t in range(400, 410)]
-    dip += [("vdip_ms", [vd, t, 2604, 1, 2000]) for t in range(410, 414)]
+    dip = [("vdip_ms", [vd, t, 0, 2080, 1, 6000]) for t in range(400, 410)]
+    dip += [("vdip_ms", [vd, t, 0, 2604, 1, 2000]) for t in range(410, 414)]
     n, c = worst(dip)
     rows.append(("vdip_ms, a dip: start / its end into the log (worst)", n, c, ""))
     emu.call("energy_init", [en, 1000, 0])

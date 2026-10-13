@@ -386,7 +386,7 @@ static void test_cli(void)
                           "energy=0.00 Wh since boot, 0 Wh lifetime\r\ntp8=1.65 V\r\ntest_mode=off\r\n") != NULL,
           "status voltages, input power (24.012 V x 5432 mA)");
     /* uptime h:mm:ss (days beyond 24 h), outputs in %, the stagger offsets in % of the period, ripple in A */
-    st.uptime_ms = 3723000u;
+    st.uptime_s = 3723u;
     st.out[0] = 34078; st.out[1] = 0; st.out[2] = 65535; st.out[3] = 655; st.out[4] = 21627;
     st.stagger_moves = 3;
     st.stagger_o2 = 22938;
@@ -397,10 +397,16 @@ static void test_cli(void)
     CHECK(strstr(cli_out, "uptime=1:02:03\r\n") && strstr(cli_out, "out R/G/B/W1/W2=52.0/0.0/100.0/1.0/33.0 %\r\n") &&
           strstr(cli_out, "stagger_tim2=35.0 %\r\nstagger_tim3=66.7 %\r\nstagger_moves=3\r\nripple_rms=1.23 A\r\n") &&
           strstr(cli_out, "current_scale=81.2 %\r\n"), "status: uptime, outputs, stagger, ripple, scale");
-    st.uptime_ms = 90061000u;                  /* 1 d 1:01:01 */
+    st.uptime_s = 90061u;                     /* 1 d 1:01:01 */
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "uptime=1d 1:01:01\r\n") != NULL, "status: uptime with days");
-    st.uptime_ms = 0;
+    st.uptime_s = 200u * 86400u + 3661u;      /* past the ms counter's 49.7 days (0.6.2: the uptime in s) */
+    st.stack_max = 864u;
+    run_cli(&c, "status\r");
+    CHECK(strstr(cli_out, "uptime=200d 1:01:01\r\nreset=") && strstr(cli_out, "\r\nstack=864 B used\r\nprotocol="),
+          "status: 200 days of uptime, the stack's high-water mark");
+    st.uptime_s = 0;
+    st.stack_max = 0;
     /* volts with two decimals, rounded to 10 mV, no float */
     {
         static const struct { uint32_t mv; const char *txt; } VR[] = {

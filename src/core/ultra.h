@@ -106,7 +106,7 @@ typedef struct {
     uint8_t synced, rated;                /* rated: rate measured at least once */
     uint8_t gap;                          /* the local tick stopped for a while: restart the rate interval */
     uint32_t ref_tick, last_tick;
-    uint64_t ref_us, last_us, ext_us;     /* host time, unwrapped to 64 bit */
+    uint64_t ref_us, last_us;             /* host time, unwrapped to 64 bit */
     uint32_t rate_q16;                    /* host us per local tick, Q16 */
 } ultra_clock_t;
 
@@ -141,6 +141,11 @@ void     ultra_all_off(ultra_t *u, uint32_t tick, uint32_t dur_ms);
 /* the local tick did not run for a while (flash write): the next header restarts the rate measurement, the
  * phase error is corrected as usual */
 void     ultra_clock_gap(ultra_t *u);
+/* every ms (main.c): after ULTRA_TEND_TICKS without a header (none yet: the power-on effect; the host gone while
+ * signal loss holds) the clock's reference moves along its line, so the engine's time stays continuous over any
+ * uptime and across the 32-bit tick's wrap */
+#define ULTRA_TEND_TICKS 0x20000000u      /* 7.5 h of ticks */
+void     ultra_clock_tend(ultra_t *u, uint32_t tick);
 /* Power-on scene from the lights' SCENE values, computed like render() (gamma, constant brightness, min / max
  * power, power limit). Channels of a defined light that has not sent its SCENE yet keep `stored`; channels of no
  * defined light are not part of it. */

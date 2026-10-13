@@ -28,6 +28,7 @@ MEASURED void energy_ms(energy_t *e, uint32_t now, uint32_t mv, int32_t ma, uint
     }
     if (lit) {
         e->lit_ms = now;
+        e->lit_new = lit;
     }
 }
 
@@ -42,8 +43,7 @@ MEASURED uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips)
     if (dips != e->dips) {
         e->dips = dips;                                  /* a new supply dip: the power may be going */
         why = ENERGY_DUE_DIP;
-    } else if ((int32_t)(e->lit_ms - e->saved_ms) > 0 &&
-               (now - e->saved_ms >= ENERGY_SAVE_MS || now - e->lit_ms >= ENERGY_DARK_MS)) {
+    } else if ((now - e->saved_ms >= ENERGY_SAVE_MS || now - e->lit_ms >= ENERGY_DARK_MS) && e->lit_new) {
         why = ENERGY_DUE_ERASE;                          /* lit since the last write: hourly, or dark again */
     }
     if (why == ENERGY_DUE_NONE || energy_total_wh(e) == e->saved_wh || !budget_take(&e->budget, now, 1u)) {
@@ -52,11 +52,13 @@ MEASURED uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips)
     return why;
 }
 
-void energy_saved(energy_t *e, uint32_t now)
+void energy_saved(energy_t *e, uint32_t now, uint32_t now_s)
 {
     e->saved_wh = energy_total_wh(e);
     e->saved_ms = now;
+    e->saved_s = now_s;
     e->saved = 1;
+    e->lit_new = 0;
 }
 
 uint32_t energy_log_find(const uint8_t *page)
@@ -71,9 +73,9 @@ uint32_t energy_log_find(const uint8_t *page)
     return best;
 }
 
-void energy_page(const energy_t *e, uint32_t now, uint32_t power_mw, uint8_t out[24])
+void energy_page(const energy_t *e, uint32_t now_s, uint32_t power_mw, uint8_t out[24])
 {
-    uint32_t i, age = (now - e->saved_ms) / 1000u;
+    uint32_t i, age = now_s - e->saved_s;
     for (i = 0; i < 24u; i++) {
         out[i] = 0;
     }

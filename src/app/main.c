@@ -47,12 +47,12 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.1"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.2"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
 #endif
-#define UPD_WD_CLEAR_MS  10000u    /* the bootloader's watchdog-loop count is cleared after this long running */
+#define UPD_WD_CLEAR_S   10u       /* the bootloader's watchdog-loop count is cleared after this long running */
 #define LOSS_TIMEOUT_MS  2000u     /* WS modes: signal loss = no valid frame for 2 s */
 #define LOSS_FADE_MS     1000u     /* fade-off duration */
 #define SAVE_DEBOUNCE_MS 2000u     /* settings saved 2 s after the last change */
@@ -226,6 +226,8 @@ static uint8_t outputs_dirty = 1, settings_dirty, signal_lost;
 static uint32_t steps;
 static uint8_t len, run_stagger = 0xFF;
 static uint32_t last_data_ms, changed_ms;
+static scene_budget_t set_budget;          /* write budget of the settings page (store.h STORE_BUDGET_*) */
+static uint32_t up_s;                      /* uptime in s: `uptime` and the long ages (ms_now wraps after 49.7 days) */
 static uint16_t out_now[5];                /* output values in use (for the adaptive stagger) */
 static uint16_t built_v[5];                /* value each channel's table holds */
 static uint8_t built_ok;
@@ -255,6 +257,7 @@ static climit_t clim;
 static uint32_t lim_ms;
 static uint16_t cal_cnt;
 static uint8_t cal_present, cal_save_pend;
+static scene_budget_t cal_budget;          /* write budget of the calibration page (calstore.h CAL_BUDGET_*) */
 static dark_t dk;                          /* dark hold of the pin's calibration (Ultra IDENTIFY 3 / 4, core/dark.h) */
 /* the overcurrent signal on D9 (core/ocled.h) and D9's level as set; the power events (core/pwrev.h: the state a
  * Diff-Power ultra receiver reports on its STATUS / POWER pages; local here) */
@@ -265,8 +268,8 @@ static pwrev_t pw;
 static mcutemp_t mt;
 static uint32_t temp_ms;
 static uint8_t temp_started;
-static int16_t temp_peak = MCUTEMP_NA;     /* the highest valid MCU temperature since boot, and when */
-static uint32_t temp_peak_ms;
+static int16_t temp_peak = MCUTEMP_NA;     /* the highest valid MCU temperature since boot, and when (uptime, s) */
+static uint32_t temp_peak_s;
 /* voltage channels (core/vsense.h): PA4 the supply, PA0 the spare input on TP8 */
 static vsense_t vs_sup, vs_aux;
 static vdip_t vdip;                        /* supply dips on PA4 (core/vdip.h) */
@@ -292,7 +295,7 @@ static void vsense_service(void)
     hw_vsense_take(sum2, &n);
     vsense_add(&vs_sup, sum2[0], n);
     vsense_add(&vs_aux, sum2[1], n);
-    vdip_ms(&vdip, ms_now, sum2[0], n, is.i_ms);
+    vdip_ms(&vdip, ms_now, up_s, sum2[0], n, is.i_ms);
     for (i = 0; i < 5u; i++) {
         lit |= out_now[i];
     }
@@ -303,7 +306,7 @@ static void vsense_service(void)
         i = energy_store(energy_total_wh(&en), (uint8_t)(n == ENERGY_DUE_ERASE));
         flash_stall_end(i);
         if (i != 0u) {
-            energy_saved(&en, ms_now);
+            energy_saved(&en, ms_now, up_s);
         }
     }
 }
@@ -329,7 +332,7 @@ static void temp_service(void)
         mcutemp_sample(&mt, ts2, vref2);
         if (mt.valid && mt.c10 > temp_peak) {
             temp_peak = mt.c10;
-            temp_peak_ms = ms_now;
+            temp_peak_s = up_s;
         }
     }
     temp_started = (uint8_t)(is.cal_step == 0u);
@@ -1032,7 +1035,7 @@ static void upd_service(void)
 {
     upd_action(upd_app_poll(&upd, ms_now));
 #if UPD_APP
-    if (!upd_wd_cleared && ms_now >= UPD_WD_CLEAR_MS && upd_ho_valid(HO)) {
+    if (!upd_wd_cleared && up_s >= UPD_WD_CLEAR_S && upd_ho_valid(HO)) {
         HO->wd_resets = 0;                 /* running fine: the bootloader starts counting again */
         upd_ho_seal(HO);
         upd_wd_cleared = 1;
@@ -1206,7 +1209,7 @@ static void power_service(uint8_t ack_on)
     in.retry_ms = isense_retry_left_ms(&is);
     in.dips = vdip.count;
     pwrev_update(&pw, ms_now, &in);
-    ocled_update(&ocl, ms_now, in.limiting, in.trip_cause);
+    ocled_update(&ocl, ms_now, up_s, in.limiting, in.trip_cause);
     lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
     if ((tj.active || tj.rst >= TJ_RST_ARMED) && ocl.show == OCLED_OFF && !ack.active) {
         lv = tj_led(&tj, ms_now);          /* test jig: on, off at each cycle start; the reset gesture armed: fast
@@ -1243,7 +1246,8 @@ static void testjig_service(void)
 static inline __attribute__((always_inline)) void status_snapshot(void)
 {
     uint8_t i;
-    stat.uptime_ms = ms_now;
+    stat.uptime_s = up_s;
+    stat.stack_max = stack_used();
     stat.proto_mode = (uint8_t)frx.ps.mode;
     stat.proto_locked = (uint8_t)proto_active(&frx.ps);
     stat.proto_provisional = frx.ps.provisional;
@@ -1278,7 +1282,7 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
     stat.mcu_temp_c10 = mt.c10;
     stat.vdda_mv = mt.vdda_mv;
     stat.mcu_peak_c10 = temp_peak;
-    stat.mcu_peak_ms = temp_peak_ms;
+    stat.mcu_peak_s = temp_peak_s;
     for (i = 0; i < 5u; i++) {
         stat.i_now_ch_ma[i] = (int32_t)isense_ch_ma(&is, i, is.applied[i]);
     }
@@ -1289,23 +1293,22 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
     stat.dip_ref_mv = vsense_mv(&vs_sup, vdip.ref_q12 >> 8, 16u);   /* Q12 as 16 pairs */
     stat.en_boot_mwh = en.boot_mwh;
     stat.en_total_wh = energy_total_wh(&en);
-    stat.en_saved_ms = en.saved_ms;
-    stat.en_saved = en.saved;
     stat.oc_show = ocl.show;
     stat.oc_cause = ocl.last_cause;
     stat.oc_limiting = ocl.limiting;
     stat.oc_tripped = (uint8_t)(ocl.trip_cause != 0u);
-    stat.oc_since_ms = ocl.since_ms;
+    stat.oc_since_s = ocl.since_s;
     stat.oc_hold_ms = ocled_hold_left(&ocl, ms_now);
 
 }
 
 int main(void)
 {
-    uint32_t last_ms = 0, fps_ms = 0, fps_frames = 0, watch_t = 0;
+    uint32_t last_ms = 0, fps_ms = ms_now, fps_frames = 0, watch_t = 0;
     uint8_t ack_on = 0, was_active = 0;
     int ch;
 
+    stack_paint();                         /* the high-water mark in `status` */
     if (settings_load(&set, &sext) != 0) {
         settings_default(&set);            /* (the extension is cleared too) */
     }
@@ -1317,7 +1320,7 @@ int main(void)
     ultra_init(&ul, hw_uid_hash());        /* (a seed per board: the power-on effects' randomness) */
     fx_mask = ultra_fx_load(&ul, (const uint8_t *)SCENE_FX_ADDR, fx_crc);   /* the power-on effects: from here on */
     fx_chk = fx_want(fx_crc, 1) & 0x7FFFFFFFu;
-    ultra_scene_fx_start(&ul, fx_mask, 0);
+    ultra_scene_fx_start(&ul, fx_mask, tick_now);
     for (ch = 0; ch < (int)ULTRA_LIGHTS; ch++) {
         if (fx_mask & (1u << ch)) {
             fx_ch |= ul.light[ch].mask;
@@ -1325,18 +1328,20 @@ int main(void)
     }
     srun.sc.mask |= fx_ch;
     srun.hold |= fx_ch;
-    budget_init(&fx_budget, 0, FX_BUDGET_CAP, FX_REFILL_MS);
+    budget_init(&fx_budget, ms_now, FX_BUDGET_CAP, FX_REFILL_MS);   /* (the time bases: any start value, any wrap) */
+    budget_init(&set_budget, ms_now, STORE_BUDGET_CAP, STORE_REFILL_MS);
+    budget_init(&cal_budget, ms_now, CAL_BUDGET_CAP, CAL_REFILL_MS);
     dark_init(&dk);
     ocled_init(&ocl);
     tj_init(&tj, TJ_CYCLE_MS);
     pwrev_init(&pw, ms_now);
-    scene_budget_init(&sbudget, 0);
+    scene_budget_init(&sbudget, ms_now);
     config_rx_init(&rx);
     frx_init(&frx, (proto_mode_t)set.protocol, (proto_t)set.last_proto);
     smooth_init(&sm);
     hw_init();
     mcutemp_init(&mt);
-    energy_init(&en, energy_load(), 0);
+    energy_init(&en, energy_load(), ms_now);
     health_init(&hl);
     ss_init(&ss, hw_uid_hash());
     vsense_init(&vs_sup, VSENSE_SUPPLY_RT, VSENSE_SUPPLY_RB, VSENSE_VREF_MV);
@@ -1441,6 +1446,7 @@ int main(void)
                 outputs_dirty = 1;         /* the dark hold fades: every ms */
             }
             stagger_adapt();
+            ultra_clock_tend(&ul, tick_now);   /* the engine's time: continuous without headers, across the wrap */
             if (ultra_on || fx_ch) {       /* (the power-on effect: also before a protocol is there) */
                 if (ultra_render(&ul, tick_now, uout)) {
                     outputs_dirty = 1;     /* 1 kHz updates: every PWM period after this uses the new value */
@@ -1456,11 +1462,14 @@ int main(void)
             if (ms_now - fps_ms >= 1000u) {
                 stat.fps = frames - fps_frames;
                 fps_frames = frames;
-                fps_ms = ms_now;
+                fps_ms += 1000u;           /* (whole seconds: the uptime) */
+                up_s++;
             }
-            /* save 2 s after the last change, not while a pattern is blinking (except its final dark pause) */
+            /* save 2 s after the last change, not while a pattern is blinking (except its final dark pause), with a
+             * token of the settings' write budget: a burst, then one per STORE_REFILL_MS. The newest values wait for
+             * the token, so the last change is never lost (only stored later). */
             if (settings_dirty && ms_now - changed_ms >= SAVE_DEBOUNCE_MS &&
-                (!ack.active || ack.seg + 1u == ack.nseg)) {
+                (!ack.active || ack.seg + 1u == ack.nseg) && budget_take(&set_budget, ms_now, 1u)) {
                 save_now();
             }
             scene_service();
@@ -1472,7 +1481,7 @@ int main(void)
             outputs_dirty = 0;
             outputs_update(ack_on);
         }
-        if (cal_save_pend) {
+        if (cal_save_pend && budget_take(&cal_budget, ms_now, 1u)) {   /* (a newer test meanwhile: that one) */
             isense_cal_t c;
             cal_save_pend = 0;
             if (isense_cal_get(&is, &c)) {

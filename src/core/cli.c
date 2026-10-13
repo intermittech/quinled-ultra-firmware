@@ -44,7 +44,7 @@ static int streq(const char *a, const char *b)
 /* ---------------------------------------------------------------------------------------------------- output */
 /* The console's one formatter: fmt with one argument per %-code. Readable units on the console (V, A, W, %, s);
  * telemetry and the data structures stay raw (mV, mA, 16-bit outputs).
- *   %s string            %u decimal (uint32)       %t ms as [Nd ]h:mm:ss          %% a '%'
+ *   %s string            %u decimal (uint32)       %t s as [Nd ]h:mm:ss           %% a '%'
  *   n / d rounded with 1 or 2 decimals:
  *   %v uint32 / 10, 2 decimals (mV in V, 10 mWh in Wh)    %a int32 mA in A, 2 decimals (negative: 0)
  *   %V int32 / 10, 2 decimals, signed                      %p 16-bit level in %, 1 decimal
@@ -144,7 +144,7 @@ static void cf(cli_t *c, const char *f, ...)
         case 'H': cf_fix(&o, va_arg(ap, uint32_t), 100u, 2u); break;
         case 'q': cf_fix(&o, va_arg(ap, uint32_t) * 1000u, 65536u, 1u); break;
         case 't': {
-            uint32_t ms = va_arg(ap, uint32_t), sec = ms / 1000u, m = sec / 60u, h = m / 60u;
+            uint32_t sec = va_arg(ap, uint32_t), m = sec / 60u, h = m / 60u;
             if (h >= 24u) {
                 cf_dec(&o, h / 24u, 1u);
                 cf_ch(&o, 'd');
@@ -268,9 +268,10 @@ static void status(cli_t *c)
     static const char *const cause[] = { "-", "short", "overload" };
     uint32_t i;
     cli_banner(c);
-    cf(c, "uptime=%t\r\nreset=%s%s%s%s\r\nprotocol=%s, active %s%s, stored %s\r\nframes=%u\r\nfps=%u\r\ndecoded=%u\r\n",
-       s->uptime_ms, (s->reset_flags & 0x20000000u) ? "watchdog " : "", (s->reset_flags & 0x08000000u) ? "power-on " : "",
-       (s->reset_flags & 0x04000000u) ? "pin " : "", (s->reset_flags & 0x10000000u) ? "software " : "",
+    cf(c, "uptime=%t\r\nreset=%s%s%s%s\r\nstack=%u B used\r\nprotocol=%s, active %s%s, stored %s\r\nframes=%u\r\n"
+          "fps=%u\r\ndecoded=%u\r\n",
+       s->uptime_s, (s->reset_flags & 0x20000000u) ? "watchdog " : "", (s->reset_flags & 0x08000000u) ? "power-on " : "",
+       (s->reset_flags & 0x04000000u) ? "pin " : "", (s->reset_flags & 0x10000000u) ? "software " : "", s->stack_max,
        mode[s->proto_mode < 4u ? s->proto_mode : 0], proto[s->proto_locked < 5u ? s->proto_locked : 0],
        s->proto_provisional ? " (stored, not confirmed yet)" : "", proto[c->set->last_proto < 5u ? c->set->last_proto : 0],
        s->frames, s->fps, s->decoded);
@@ -316,7 +317,7 @@ static void status(cli_t *c)
         c->write("mcu_temp=n/a\r\n");
     } else {
         cf(c, "mcu_temp=%K C (die), vdda=%v V, peak %K C %t ago\r\n", (int32_t)s->mcu_temp_c10, (uint32_t)s->vdda_mv,
-           (int32_t)s->mcu_peak_c10, s->uptime_ms - s->mcu_peak_ms);
+           (int32_t)s->mcu_peak_c10, s->uptime_s - s->mcu_peak_s);
     }
     cf(c, "supply=%v V (min %v V, max %v V)\r\n", s->vs_supply_mv, s->vs_supply_min_mv, s->vs_supply_max_mv);
     if (s->dip) {                          /* supply dips (core/vdip.h): the deepest, then the log, newest first */
@@ -327,7 +328,7 @@ static void status(cli_t *c)
            s->dip_ref_mv);
         for (k = 0; e != 0; e = vdip_event(d, k++)) {
             cf(c, k ? "\r\nsupply_dip %u=" : "\r\nsupply_dip_deepest=", k);
-            cf(c, "%t ago, %v V (%u %%), %u ms, %a A", s->uptime_ms - e->t_ms, vsense_mv(s->dip_vs, e->min_x, 1u),
+            cf(c, "%t ago, %v V (%u %%), %u ms, %a A", s->uptime_s - e->t_s, vsense_mv(s->dip_vs, e->min_x, 1u),
                vdip_pct(e), (uint32_t)e->dur_ms, (int32_t)e->i_ma);
         }
         c->write("\r\n");
@@ -351,8 +352,8 @@ static void status(cli_t *c)
     if (s->oc_show == 0u) {
         c->write("overcurrent_led=off");
     } else {
-        cf(c, s->oc_show == 2u ? "overcurrent_led=trip (%s), since %t (%h s ago), " : "overcurrent_led=limit%s, since %t (%h s ago), ",
-           s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "", s->oc_since_ms, s->uptime_ms - s->oc_since_ms);
+        cf(c, s->oc_show == 2u ? "overcurrent_led=trip (%s), since %t (%u s ago), " : "overcurrent_led=limit%s, since %t (%u s ago), ",
+           s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "", s->oc_since_s, s->uptime_s - s->oc_since_s);
         if (s->oc_show == 2u ? s->oc_tripped : s->oc_limiting) {
             c->write(s->oc_show == 2u ? "outputs off" : "board limit active");
         } else {
@@ -428,7 +429,7 @@ static void status(cli_t *c)
 void cli_watch(cli_t *c)
 {
     const cli_status_t *s = c->st;
-    cf(c, "%t %v V %a A %h W  ch %A A  out %P %%  ", s->uptime_ms, s->vs_supply_mv, s->i_ma,
+    cf(c, "%t %v V %a A %h W  ch %A A  out %P %%  ", s->uptime_s, s->vs_supply_mv, s->i_ma,
        s->vs_supply_mv / 10u * clamp0(s->i_ma) / 100u, s->i_now_ch_ma, s->out);   /* the power as `input` in status */
     if (s->mcu_temp_c10 != -32768) {
         cf(c, "%K C  ", (int32_t)s->mcu_temp_c10);

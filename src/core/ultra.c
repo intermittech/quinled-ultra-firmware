@@ -126,17 +126,27 @@ static uint32_t sin16(uint32_t q)         /* sin(pi/2 * q / 65536) for q 0..6553
 }
 
 /* ================================================================================================ clock */
+/* Before the first header the engine runs on its own clock (the power-on effect without a controller): the same line
+ * from ref (tick 0, time 0 at the init) at the nominal rate. ultra_clock_tend moves ref along, so the time stays
+ * continuous across the tick's wrap (2.5 days) and a tick difference never leaves the int32 range. */
 uint64_t ultra_host_us(const ultra_t *u, uint32_t tick)
 {
     const ultra_clock_t *c = &u->clk;
     int32_t dt = (int32_t)(tick - c->ref_tick);
-    if (!c->synced) {
-        return (uint64_t)tick * ULTRA_TICK_US;
-    }
-    if (dt >= 0) {
+    if (dt >= 0 || !c->synced) {
         return c->ref_us + (((uint64_t)(uint32_t)dt * c->rate_q16) >> 16);
     }
     return c->ref_us - (((uint64_t)(uint32_t)(-dt) * c->rate_q16) >> 16);
+}
+
+void ultra_clock_tend(ultra_t *u, uint32_t tick)
+{
+    ultra_clock_t *c = &u->clk;
+    if (tick - c->ref_tick >= ULTRA_TEND_TICKS) {
+        c->ref_us = ultra_host_us(u, tick);
+        c->ref_tick = tick;
+        c->gap = 1;                                      /* the next header restarts the rate interval */
+    }
 }
 
 static uint32_t host_ms(const ultra_t *u, uint32_t tick)
@@ -169,18 +179,16 @@ MEASURED void ultra_on_header(ultra_t *u, uint32_t tick, uint32_t host_us)
     ultra_clock_t *c = &u->clk;
     uint64_t h, est;
     int64_t err;
-    /* unwrap the 32-bit us clock (wraps every 71.6 min; headers come every few 100 ms) */
-    h = c->synced ? c->ext_us + (uint64_t)(int64_t)(int32_t)(host_us - (uint32_t)c->ext_us) : host_us;
-    c->ext_us = h;
-    u->frame_ms = (uint32_t)(h / 1000u);
+    /* unwrap the 32-bit us clock (wraps every 71.6 min) around the board's own estimate, which runs on without headers:
+     * after a gap of hours or days (the host gone) the header lands where the estimate is, within +-35.8 min (0.6.1:
+     * around the last header, so a gap over 35.8 min looked like a host reboot: times rebased, commands taken again) */
     est = ultra_host_us(u, tick);
+    h = c->synced ? est + (uint64_t)(int64_t)(int32_t)(host_us - (uint32_t)est) : host_us;
+    u->frame_ms = (uint32_t)(h / 1000u);
     err = (int64_t)(h - est);
     if (!c->synced || err > 200000 || err < -200000) {   /* first header / host rebooted / long gap */
         rebase(u, u->frame_ms - (uint32_t)(est / 1000u));
         c->synced = 1;
-        if (c->rate_q16 == 0u) {
-            c->rate_q16 = RATE_NOMINAL;
-        }
         c->ref_tick = c->last_tick = tick;
         c->ref_us = c->last_us = h;
         return;
@@ -232,6 +240,7 @@ MEASURED void ultra_init(ultra_t *u, uint32_t seed)
         u->light[i].g_q16 = 183501u;                      /* 2.8 until LIGHT_DEF */
     }
     u->cfg[ULTRA_CFG_LOSS_TIMEOUT] = 30u;                 /* 3 s */
+    u->clk.rate_q16 = RATE_NOMINAL;                       /* its own clock until the first header */
 }
 
 static void ramp_eval(const ultra_ramp_t *r, uint32_t now, ultra_vals_t *o)

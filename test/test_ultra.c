@@ -682,6 +682,158 @@ static void test_ultra_uptime(void)
     CHECK(inrange && U.light[2].fx_k == 1, "breathe keeps running (rebased %u)", U.light[2].fx_k);
 }
 
+/* ------------------------------------------------------------------------------------------------ clock tend */
+/* 0.6.2: the engine's time without headers. Four one-channel lights: candle (CH1), flicker (CH2), random (CH3),
+ * breathe (CH4), at M 0.8.
+ *  (a) the power-on effect on the board's own clock from boot (tick 0) for 3 days: past the tick's wrap (2.49 days);
+ *  (b) a host for a minute, then gone (signal loss "hold": the effects keep running) for 3 days: past 1.24 days (the
+ *      int32 of the ticks since the last header) and past the wrap.
+ * Rendered every second, and every ms for 65 s windows from 5 s before those points; ultra_clock_tend as main.c calls
+ * it. The negative control runs without it (0.6.1's clock): the engine's time jumps there, and on the board's own
+ * clock (a) it jumps back 2.5 days: candle, flicker and random freeze. */
+typedef struct { uint32_t chg[5], maxstep[5]; int32_t dh_min, dh_max; } tw_stat_t;
+
+static void tw_window(ultra_t *u, uint64_t t0, uint32_t ms, int tend, tw_stat_t *st)
+{
+    uint16_t o[5], prev[5];
+    uint32_t i, k;
+    uint64_t hp = 0;
+    memset(st, 0, sizeof *st);
+    st->dh_min = 0x7FFFFFFF;
+    st->dh_max = -0x7FFFFFFF;
+    for (k = 0; k <= ms; k++) {
+        uint32_t tick = (uint32_t)(t0 + 20u * (uint64_t)k);
+        uint64_t h;
+        if (tend) ultra_clock_tend(u, tick);
+        ultra_render(u, tick, o);
+        h = ultra_host_us(u, tick);
+        if (k) {
+            int64_t d64 = (int64_t)(h - hp);             /* (a jump of 2^32 ticks is a multiple of 2^32 us) */
+            int32_t dh = d64 < -0x7FFFFFFF ? -0x7FFFFFFF : d64 > 0x7FFFFFFF ? 0x7FFFFFFF : (int32_t)d64;
+            for (i = 0; i < 5u; i++) {
+                uint32_t d = (uint32_t)abs((int)o[i] - (int)prev[i]);
+                st->chg[i] += d != 0u;
+                if (d > st->maxstep[i]) st->maxstep[i] = d;
+            }
+            if (dh < st->dh_min) st->dh_min = dh;
+            if (dh > st->dh_max) st->dh_max = dh;
+        }
+        memcpy(prev, o, sizeof o);
+        hp = h;
+    }
+}
+
+static void tw_sparse(ultra_t *u, uint64_t t0, uint64_t t1, int tend)
+{
+    uint16_t o[5];
+    uint64_t t;
+    for (t = t0; t < t1; t += 20000u) {                 /* every second */
+        if (tend) ultra_clock_tend(u, (uint32_t)t);
+        ultra_render(u, (uint32_t)t, o);
+    }
+}
+
+/* the four lights: defined, SCENE (power-on, case a) or SET (case b) at M 0.8, and their effect */
+static void tw_lights(ultra_t *u, int host, uint32_t tick)
+{
+    static const uint8_t fx[4] = { ULTRA_FX_CANDLE, ULTRA_FX_FLICKER, ULTRA_FX_RANDOM, ULTRA_FX_BREATHE };
+    uint8_t p[4][8] = { { 0x9C, 0x40, 0, 100 },                       /* intensity 0.61, speed 100 % */
+                        { 0xF3, 0x32, 0x03, 0xD7, 0, 16 },            /* alpha 0.95, intensity 0.015, 16 ms */
+                        { 0, 0, 200, 0, 0x01, 0xF4 },                 /* transition 200 ms, interval 500 ms */
+                        { 0, 0x0F, 0xA0, 0x27, 0x10, 0xFF, 0xFF } };  /* 4 s, 0.15 .. 1 */
+    uint8_t s[32], roles[5];
+    uint16_t a[5], b[5];
+    uint32_t l, i;
+    for (l = 0; l < 4u; l++) {
+        for (i = 0; i < 5u; i++) {
+            roles[i] = i == l ? ULTRA_ROLE_BRIGHTNESS : ULTRA_ROLE_NONE;
+            a[i] = 0;
+            b[i] = 65535;
+        }
+        ultra_slot_light_def(s, (uint8_t)l, useq++, roles, 2800, 0, a, b);
+        (void)ultra_on_slot(u, s, tick);
+        for (i = 0; i < 5u; i++) a[i] = 65535;
+        if (host) {
+            ultra_slot_set(s, (uint8_t)l, useq++, 0, f16(0.8), a, b, 0, 0);
+            (void)ultra_on_slot(u, s, tick);
+            ultra_slot_effect(s, (uint8_t)l, useq++, fx[l], 0, p[l], 8);
+        } else {
+            ultra_slot_scene(s, (uint8_t)l, useq++, 1, 10, f16(0.8), a, b);
+            (void)ultra_on_slot(u, s, tick);
+            ultra_slot_scene_effect(s, (uint8_t)l, useq++, fx[l], p[l], 8);
+        }
+        (void)ultra_on_slot(u, s, tick);
+    }
+    if (!host) {
+        ultra_scene_fx_start(u, 0x0Fu, tick);
+    }
+}
+
+/* case (a) / (b), with or without the tend: the stats of the reference window and of the windows after the points */
+static void tw_case(int host, int tend, tw_stat_t *ref, tw_stat_t *p1, tw_stat_t *p2)
+{
+    const uint64_t TW = 0x100000000ull;                 /* the tick's wrap */
+    uint64_t t;
+    ultra_init(&U, 77);
+    if (!host) {
+        tw_lights(&U, 0, 0);                             /* boot: tick 0 */
+        tw_window(&U, 0, 65000, tend, ref);
+        tw_sparse(&U, 1300000u, TW - 100000u, tend);
+        tw_window(&U, TW - 100000u, 65000, tend, p1);
+        tw_sparse(&U, TW + 1300000u, TW + 10000000ull, tend);
+        *p2 = *p1;
+        return;
+    }
+    for (t = 1000; t < 1000u + 1200000u; t += 2000u) {   /* a minute of headers, every 100 ms */
+        ultra_on_header(&U, (uint32_t)t, 0xFFF00000u + (uint32_t)((t - 1000u) * 50u));   /* (host us wraps 1 s in) */
+        if (t == 1000u) tw_lights(&U, 1, (uint32_t)t);
+    }
+    t -= 2000u;                                          /* the last header's tick */
+    tw_window(&U, t + 20u, 65000, tend, ref);            /* the first minute without */
+    tw_sparse(&U, t + 1320000u, t + 0x80000000ull - 100000u, tend);
+    tw_window(&U, t + 0x80000000ull - 100000u, 65000, tend, p1);   /* 2^31 ticks after the last header */
+    tw_sparse(&U, t + 0x80000000ull + 1200000u, TW - 100000u, tend);
+    tw_window(&U, TW - 100000u, 65000, tend, p2);        /* the tick's wrap */
+}
+
+static int tw_alive(const tw_stat_t *r, const tw_stat_t *s)
+{
+    return s->chg[0] * 2u >= r->chg[0] && s->chg[1] * 2u >= r->chg[1] && s->chg[2] * 2u >= r->chg[2] &&
+           s->maxstep[3] <= r->maxstep[3] + 64u && s->dh_min >= 950 && s->dh_max <= 1050;
+}
+
+static void test_ultra_tend(void)
+{
+    tw_stat_t r, a, b;
+    int h;
+    printf("ultra: no headers for 3 days (power-on effect from boot; host gone with signal loss hold)\n");
+    for (h = 0; h < 2; h++) {
+        const char *what = h ? "host gone" : "power-on effect";
+        tw_case(h, 1, &r, &a, &b);
+        printf("  %s: changes per minute candle / flicker / random %u / %u / %u, breathe max step %u; after %s:"
+               " %u / %u / %u, %u, host time per ms %d..%d us\n", what, r.chg[0], r.chg[1], r.chg[2], r.maxstep[3],
+               h ? "2^31 ticks" : "the tick wrap", a.chg[0], a.chg[1], a.chg[2], a.maxstep[3], a.dh_min, a.dh_max);
+        CHECK(r.chg[0] > 1000u && r.chg[1] > 1000u && r.chg[2] > 1000u, "%s: the effects run (%u / %u / %u)", what,
+              r.chg[0], r.chg[1], r.chg[2]);
+        CHECK(tw_alive(&r, &a) && tw_alive(&r, &b), "%s: still running, continuous, over 3 days", what);
+        if (h) {   /* the host comes back (its clock ran on): unwrapped around the estimate, no rebase, so its repeated
+                    * commands stay repeats (0.6.1 unwrapped around the last header: a gap over 35.8 min rebased) */
+            uint64_t T = 0x100000000ull + 1300020u;
+            uint32_t f0 = U.frame_ms;
+            ultra_on_header(&U, (uint32_t)T, 0xFFF00000u + (uint32_t)((T - 1000u) * 50u));
+            CHECK(U.last_seq[0][ULTRA_SET] != 0x100u && U.last_seq[3][ULTRA_EFFECT] != 0x100u &&
+                  (uint32_t)(U.frame_ms - f0) > 86400000u, "host gone: back after 3 days without a rebase (%u)",
+                  U.last_seq[0][ULTRA_SET]);
+        }
+        tw_case(h, 0, &r, &a, &b);                       /* negative control: 0.6.1's clock */
+        CHECK(!tw_alive(&r, &a) && (a.dh_min < 0 || a.dh_max > 1050) && (h || a.chg[0] + a.chg[1] < r.chg[0] / 4u),
+              "%s, negative control without the tend: %u / %u / %u changes, host time per ms %d..%d us", what,
+              a.chg[0], a.chg[1], a.chg[2], a.dh_min, a.dh_max);
+        printf("  %s, negative control (no tend): %u / %u / %u changes, host time per ms %d..%d us\n", what, a.chg[0],
+               a.chg[1], a.chg[2], a.dh_min, a.dh_max);
+    }
+}
+
 /* ------------------------------------------------------------------------------------------------ end to end */
 /* Builder -> WS waveform -> 36 MHz samples -> the board's two decodes: its slot from the start of the frame
  * (ws_decode_frame, copy from 60 us before the first edge) and the header trailer from a 448-word window ending just
@@ -1118,5 +1270,6 @@ static void test_ultra(void)
     test_ultra_power();
     test_ultra_clock();
     test_ultra_uptime();
+    test_ultra_tend();
     test_ultra_e2e();
 }

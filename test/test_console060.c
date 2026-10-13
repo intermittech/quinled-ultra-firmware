@@ -32,7 +32,7 @@ static void test_cli060(void)
     /* watch: the period (default 1 s, 100 ms .. 60 s), the line, any key stops it (and is used up) */
     run_cli(&c, "watch 500\r");
     CHECK(c.watch_ms == 500 && cli_out[0] == 0, "watch 500");
-    st.uptime_ms = 3723000u;                              /* 1:02:03 */
+    st.uptime_s = 3723u;                                 /* 1:02:03 */
     st.vs_supply_mv = 24012;
     st.i_ma = 3450;
     st.i_now_ch_ma[0] = st.i_now_ch_ma[1] = st.i_now_ch_ma[2] = 500;
@@ -41,7 +41,7 @@ static void test_cli060(void)
     st.out[3] = st.out[4] = 32768;
     st.mcu_temp_c10 = 452;
     st.mcu_peak_c10 = 517;
-    st.mcu_peak_ms = 3000u;
+    st.mcu_peak_s = 3u;
     st.i_k_permille = 1000;
     vdip_init(&d);
     d.count = 2;
@@ -68,7 +68,7 @@ static void test_cli060(void)
     x20 = 2u * 1086u;                                     /* ~20 V on the supply divider */
     d.ref_q12 = (2u * 1302u) << 12;                       /* ~24 V */
     d.count = 3;
-    d.deep.t_ms = 1000u;
+    d.deep.t_s = 1u;
     d.deep.min_x = (uint16_t)(2u * 900u);
     d.deep.ref_x = (uint16_t)(2u * 1302u);
     d.deep.dur_ms = 12;
@@ -76,7 +76,7 @@ static void test_cli060(void)
     d.n_log = 1;
     d.head = 0;
     d.log[0] = d.deep;
-    d.log[0].t_ms = 3600000u;
+    d.log[0].t_s = 3600u;
     d.log[0].min_x = (uint16_t)x20;
     d.log[0].dur_ms = 40;
     d.log[0].i_ma = 1500;

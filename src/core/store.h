@@ -4,6 +4,10 @@
  * 8 slots of 32 bytes are appended one per save; only a full page is erased (fast page erase, 16 ms).
  * Flash endurance is 10k erase cycles minimum (datasheet), so >= 80k saves. Saves are also debounced
  * (2 s after the last change), so a burst of config commands costs one record.
+ * Write budget (0.6.2, main.c): STORE_BUDGET_CAP saves at once, then one per STORE_REFILL_MS (scene.h's budget). An
+ * automation that changes a stored value all the time (Ultra CONFIG 22 / 23, config frames) costs at most 8 records
+ * a day, one erase: >= 27 years at 10k cycles. A change waiting for its token is stored with the newest values when
+ * the token comes (none lost, only stored later). The console's `save` writes at once.
  * The newest valid record (highest sequence number, CRC ok) wins at boot. */
 #ifndef STORE_H
 #define STORE_H
@@ -14,6 +18,8 @@
 #define STORE_SLOTS       8u
 #define STORE_SLOT_BYTES  32u
 #define STORE_MAGIC       0x55AA2917u   /* a record of this layout (the CRC last) */
+#define STORE_BUDGET_CAP  16u           /* write budget: a console session's worth of changes at once ... */
+#define STORE_REFILL_MS   10800000u     /* ... then one token per 3 h (8 a day sustained) */
 
 /* the record's extension: the board current limit (core/isense.h) and options; 0xFF = not set. The current
  * calibration has its own page (core/calstore.h). */

@@ -14,7 +14,7 @@ static void oc_run(ocled_t *o, uint32_t t0, uint32_t t1, uint8_t lim, uint8_t tr
     k->on = k->rises = 0;
     for (t = t0; t != t1; t++) {
         uint8_t l;
-        ocled_update(o, t, lim, trip);
+        ocled_update(o, t, t / 1000u, lim, trip);
         l = ocled_led(o, t, 0, 0);
         k->on += l;
         k->rises += (uint32_t)(l && !k->prev);
@@ -36,7 +36,7 @@ static void test_ocled(void)
     CHECK(k.on == 0 && o.show == OCLED_OFF, "nothing: D9 stays off (%u ms on)", k.on);
 
     /* limiting for 2 s: 5 Hz from the first ms, then the 3 s hold (the last on-ms is 6999) */
-    ocled_update(&o, 5000, 1, 0);
+    ocled_update(&o, 5000, 5u, 1, 0);
     CHECK(o.show == OCLED_LIMIT && ocled_led(&o, 5000, 0, 0) == 1, "the limit blink starts with a flash");
     k.prev = 1;
     oc_run(&o, 5001, 7000, 1, 0, &k);
@@ -45,7 +45,7 @@ static void test_ocled(void)
     oc_run(&o, 7000, 9999, 0, 0, &k);
     CHECK(o.show == OCLED_LIMIT && k.rises == 15 && k.on == 1500, "limit hold: 3 s more (%u flashes)", k.rises);
     CHECK(ocled_hold_left(&o, 8000) == 2000 - 1, "hold left (%u)", ocled_hold_left(&o, 8000));
-    ocled_update(&o, 9999, 0, 0);
+    ocled_update(&o, 9999, 9u, 0, 0);
     CHECK(o.show == OCLED_OFF && ocled_led(&o, 9999, 0, 0) == 0 && ocled_hold_left(&o, 9999) == 0,
           "off once the hold has run out (3 s after the last limiting ms)");
     printf("  limit: 100/100 ms, 2 s limiting + 3 s hold = %u flashes\n", 10u + 15u);
@@ -67,7 +67,7 @@ static void test_ocled(void)
     CHECK(ocled_hold_left(&o, 35000) == 10000u - (35000u - 31999u), "trip hold left (%u)", ocled_hold_left(&o, 35000));
     oc_run(&o, 35000, 41999, 0, 0, &k);
     CHECK(o.show == OCLED_TRIP, "trip hold: 10 s after the outputs came back");
-    ocled_update(&o, 41999, 0, 0);
+    ocled_update(&o, 41999, 41u, 0, 0);
     CHECK(o.show == OCLED_OFF, "off after the trip hold (the limit's hold ran out under it)");
 
     /* limiting outlasts the trip hold: the limit blink takes over, starting with a flash */
@@ -75,10 +75,10 @@ static void test_ocled(void)
     CHECK(o.last_cause == 2, "second trip, overload");
     oc_run(&o, 50500, 60499, 1, 0, &k);
     CHECK(o.show == OCLED_TRIP, "trip hold still on at 60498");
-    ocled_update(&o, 60499, 1, 0);
-    CHECK(o.show == OCLED_LIMIT && ocled_led(&o, 60499, 0, 0) == 1 && o.since_ms == 60499,
+    ocled_update(&o, 60499, 60u, 1, 0);
+    CHECK(o.show == OCLED_LIMIT && ocled_led(&o, 60499, 0, 0) == 1 && o.since_s == 60u,
           "the limit blink takes over from the trip pattern with a flash");
-    ocled_update(&o, 60599, 1, 0);
+    ocled_update(&o, 60599, 60u, 1, 0);
     CHECK(ocled_led(&o, 60599, 0, 0) == 0 && ocled_led(&o, 60699, 0, 0) == 1, "and keeps its 5 Hz phase");
 
     /* priorities: trip > acknowledge / identify / version > limit > off */
@@ -88,7 +88,7 @@ static void test_ocled(void)
     CHECK(o.show == OCLED_TRIP, "tripped");
     bad = 0;
     for (t = 70001; t < 72000; t++) {
-        ocled_update(&o, t, 0, 1);
+        ocled_update(&o, t, t / 1000u, 0, 1);
         bad += ocled_led(&o, t, 1, 1) != ocled_level(&o, t);
         bad += ocled_led(&o, t, 1, 0) != ocled_level(&o, t);
     }
@@ -102,10 +102,10 @@ static void test_ocled(void)
     oc_run(&o, 0xFFFFFF00u, 0xFFFFFF01u, 1, 0, &k);
     oc_run(&o, 0xFFFFFF01u, 0xFFFFFF00u + 2999u, 0, 0, &k);
     CHECK(o.show == OCLED_LIMIT && k.rises == 14, "hold across the wrap (%u flashes)", k.rises + 1);
-    ocled_update(&o, 0xFFFFFF00u + 3000u, 0, 0);
+    ocled_update(&o, 0xFFFFFF00u + 3000u, (0xFFFFFF00u + 3000u) / 1000u, 0, 0);
     CHECK(o.show == OCLED_OFF, "off after the wrap");
-    ocled_update(&o, 0xFFFFFF00u + 0x80000000u, 0, 0);
-    ocled_update(&o, 0xFFFFFF00u + 0xFFFFFFF0u, 0, 0);
+    ocled_update(&o, 0xFFFFFF00u + 0x80000000u, (0xFFFFFF00u + 0x80000000u) / 1000u, 0, 0);
+    ocled_update(&o, 0xFFFFFF00u + 0xFFFFFFF0u, (0xFFFFFF00u + 0xFFFFFFF0u) / 1000u, 0, 0);
     CHECK(o.show == OCLED_OFF && ocled_hold_left(&o, 0xFFFFFF00u + 0xFFFFFFF0u) == 0, "no false hold 49 days later");
     printf("  trip: 2 x 100 ms per 800 ms + 10 s hold; trip > acknowledge > limit > off; ms wrap ok\n");
 
@@ -128,25 +128,25 @@ static void test_ocled(void)
         c.st = &st;
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "overcurrent_led=off\r\npower_state=ok\r\n") != NULL, "status: off");
-        st.uptime_ms = 3500;
+        st.uptime_s = 3;
         st.oc_show = OCLED_TRIP;
         st.oc_cause = 1;
         st.oc_tripped = 1;
-        st.oc_since_ms = 1000;
+        st.oc_since_s = 1;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "overcurrent_led=trip (short), since 0:00:01 (2.5 s ago), outputs off\r\n"
+        CHECK(strstr(cli_out, "overcurrent_led=trip (short), since 0:00:01 (2 s ago), outputs off\r\n"
                               "power_state=") != NULL, "status: tripped");
         st.oc_tripped = 0;
         st.oc_cause = 2;
         st.oc_hold_ms = 7500;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "overcurrent_led=trip (overload), since 0:00:01 (2.5 s ago), hold 7.5 s\r\n") != NULL,
+        CHECK(strstr(cli_out, "overcurrent_led=trip (overload), since 0:00:01 (2 s ago), hold 7.5 s\r\n") != NULL,
               "status: trip hold");
         st.oc_show = OCLED_LIMIT;
         st.oc_limiting = 1;
         st.oc_hold_ms = 0;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "overcurrent_led=limit, since 0:00:01 (2.5 s ago), board limit active\r\n") != NULL,
+        CHECK(strstr(cli_out, "overcurrent_led=limit, since 0:00:01 (2 s ago), board limit active\r\n") != NULL,
               "status: limiting");
     }
 }

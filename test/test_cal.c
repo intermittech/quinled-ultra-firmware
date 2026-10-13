@@ -282,6 +282,15 @@ static void test_dark(void)
     v[0] = 50000;
     dark_apply(&d, 23000 + DARK_FADE_MS, v);
     CHECK(v[0] == 50000u, "after the release: outputs untouched");
+    /* 0.6.2: the finished fade settles (dark_tick runs every ms). 0.6.1 kept level != target, so when the ms counter
+     * came round again (49.7 days later) the 300 ms fade up from dark replayed on the outputs. */
+    (void)dark_tick(&d, 23000u + DARK_FADE_MS + 1u);
+    for (t = 0, jumps = 0; t < 20000u; t++) {
+        uint32_t now = 23000u + 0xFFFFFFFFu - 9999u + t;    /* 10 s either side of 2^32 ms after the release */
+        jumps += dark_tick(&d, now) != 0u;
+        jumps += dark_factor(&d, now) != 65535u;
+    }
+    CHECK(jumps == 0u, "no fade replay when the ms counter comes round again (%u ms off)", jumps);
     /* the commands on the wire (the board engine takes them as IDENTIFY events) */
     ultra_init(&U, 21);
     ultra_slot_hold_dark(s, 30, 45);

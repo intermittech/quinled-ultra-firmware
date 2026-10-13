@@ -43,7 +43,10 @@ uint32_t dark_tick(dark_t *d, uint32_t now)
     if (d->active && (int32_t)(now - d->until) >= 0) {
         dark_release(d, now);                          /* the hub never released it: back on its own */
     }
-    return (uint32_t)(now - d->t0 <= DARK_FADE_MS && d->level != d->target);
+    if (now - d->t0 > DARK_FADE_MS) {
+        d->level = d->target;                          /* faded: settled, so the fade can't replay when ms wraps */
+    }
+    return (uint32_t)(d->level != d->target);
 }
 
 void dark_apply(const dark_t *d, uint32_t now, uint16_t v[5])

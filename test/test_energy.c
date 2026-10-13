@@ -4,7 +4,8 @@
  * no overflow at 75 V x 20 A); when the lifetime value is written (hourly while lit, 30 s after the light goes dark,
  * at a supply dip; never without 1 Wh new, never while it only idles); the write budget over a month of the worst
  * pattern; the log in a page image (the newest valid value, an entry cut short, the 0xE339 erased pattern, the next
- * free entry); the ENERGY page. */
+ * free entry); the ENERGY page; 0.6.2: lit again after a month dark (0.6.1 compared the last-lit and last-write
+ * times as int32 and wrote nothing for up to 24.8 days), and the ms counter's wrap. */
 #include "../src/core/energy.h"
 
 /* t0..t1 ms at mv x ma, lit: the writes it asks for (simulated: each one stored at once) */
@@ -12,11 +13,11 @@ static uint32_t en_run(energy_t *e, uint32_t t0, uint32_t t1, uint32_t mv, int32
                        uint32_t *dip_writes)
 {
     uint32_t t, n = 0, w;
-    for (t = t0; t < t1; t++) {
+    for (t = t0; t != t1; t++) {                         /* (across the wrap too) */
         energy_ms(e, t, mv, ma, lit);
         w = energy_due(e, t, dips);
         if (w != ENERGY_DUE_NONE) {
-            energy_saved(e, t);
+            energy_saved(e, t, t / 1000u);
             n++;
             if (w == ENERGY_DUE_DIP && dip_writes) {
                 (*dip_writes)++;
@@ -111,11 +112,31 @@ static void test_energy(void)
     /* the ENERGY page */
     energy_init(&e, 1000u, 0);
     (void)en_run(&e, 0, 3600001u, 24000u, 2000, 1, 0, 0);
-    energy_page(&e, 3700000u, 48000u, pg);
+    energy_page(&e, 3700u, 48000u, pg);
     CHECK(ultra_get32(pg + ULTRA_EN_BOOT_MWH) == 48000u && ultra_get32(pg + ULTRA_EN_TOTAL_WH) == 1048u &&
           ultra_get32(pg + ULTRA_EN_POWER_MW) == 48000u && ultra_get24(pg + ULTRA_EN_SAVED_AGE) == 100u,
           "ENERGY page fields");
     energy_init(&e, 0, 0);
-    energy_page(&e, 5000u, 0, pg);
+    energy_page(&e, 5u, 0, pg);
     CHECK(ultra_get24(pg + ULTRA_EN_SAVED_AGE) == 0xFFFFFFu, "ENERGY page: not stored since boot");
+
+    /* a month dark (the board powered, idling), then lit again: the last write is over an hour old, so the first new
+     * Wh is written at once (75 s at 48 W), then hourly */
+    {
+        uint32_t t0 = 0xFFFF0000u, s;                    /* (the ms counter wraps 65 s in) */
+        energy_init(&e, 0, t0);
+        n = en_run(&e, t0, t0 + 600000u, 24000u, 2000, 1, 0, 0);
+        n += en_run(&e, t0 + 600000u, t0 + 640000u, 24000u, 30, 0, 0, 0);
+        CHECK(n == 1 && e.saved_wh == 8u, "lit 10 min, then dark: written (%u)", n);
+        for (s = 0; s < 30u * 86400u; s++) {             /* 30 days dark, sampled every second */
+            t = t0 + 640000u + s * 1000u;
+            energy_ms(&e, t, 24000u, 30, 0);
+            n += energy_due(&e, t, 0) != ENERGY_DUE_NONE;
+        }
+        t = t0 + 640000u + 30u * 86400000u;
+        CHECK(n == 1, "30 days dark: nothing written (%u)", n);
+        n = en_run(&e, t, t + 3600000u + 1000u, 24000u, 2000, 1, 0, 0);
+        CHECK(n == 1 && e.saved_wh == 9u, "lit again after 30 days: written at the first new Wh (%u, %u Wh)", n,
+              e.saved_wh);
+    }
 }

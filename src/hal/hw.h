@@ -18,7 +18,9 @@
 /* A compiler barrier, as __disable_irq / __enable_irq: no memory access moves across it, and values held in
  * registers are read again after it. For the hand-overs between the main loop and the ISRs that need no critical
  * section (the build uses LTO, so a call into another file is no barrier). */
+#ifndef BARRIER                                  /* (the host soak test, test/test_soak.c, has its own) */
 #define BARRIER() __asm volatile("" ::: "memory")
+#endif
 
 /* PWM dither tables, written by the main loop, read by DMA once per PWM period (into the CCRs). pwm_table()
  * tells where a channel's values go: entry i of channel ch is base[i * stride]. */
@@ -32,6 +34,10 @@ extern uint16_t din_ring[DIN_RING_WORDS];
 extern uint16_t din_copy[DIN_COPY_WORDS];
 
 void hw_init(void);
+/* the stack's high-water mark: stack_paint() first thing in main fills the free stack with a pattern, stack_used()
+ * gives the bytes below its top ever written since (2048 = all of it: an overflow) */
+void stack_paint(void);
+uint32_t stack_used(void);
 uint32_t hw_uid_hash(void);                      /* a hash of the chip's 96-bit unique id (ESIG, 0x1FFFF7E8) */
 uint32_t hw_reset_flags(void);                   /* RCC reset flags captured at boot */
 void watchdog_kick(void);

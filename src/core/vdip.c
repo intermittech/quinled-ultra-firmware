@@ -13,16 +13,19 @@ void vdip_init(vdip_t *d)
     }
 }
 
-MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t sum2, uint32_t n, int32_t i_ma)
+MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, uint32_t n, int32_t i_ma)
 {
     vdip_ev_t *c = &d->cur;
     uint32_t x, ref;
-    if (n == 0u || now < VDIP_HOLDOFF_MS) {
+    if (n == 0u) {
         return;
     }
     x = sum2 / n;
     if (d->ref_q12 == 0u) {
-        d->ref_q12 = x << 12;                            /* the first reading after the hold-off */
+        if (++d->run > VDIP_HOLDOFF_MS) {
+            d->run = 0;
+            d->ref_q12 = x << 12;                        /* the first reading after the hold-off */
+        }
         return;
     }
     ref = d->ref_q12 >> 12;
@@ -32,7 +35,8 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t sum2, uint32_t n, int32_
             d->run = 0;                                  /* still down */
         } else {
             if (d->run == 0u) {                          /* a first low reading: a candidate */
-                c->t_ms = now;
+                d->start_ms = now;
+                c->t_s = now_s;
                 c->ref_x = (uint16_t)ref;
                 c->min_x = 0xFFFFu;
             }
@@ -58,7 +62,7 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t sum2, uint32_t n, int32_
     /* back up for VDIP_MIN_MS: it ended at the first of those readings */
     d->in_dip = 0;
     d->run = 0;
-    x = now + 1u - VDIP_MIN_MS - c->t_ms;
+    x = now + 1u - VDIP_MIN_MS - d->start_ms;
     c->dur_ms = (uint16_t)(x > 65535u ? 65535u : x);
     d->head = (uint8_t)((d->head + 1u) % VDIP_LOG);
     d->log[d->head] = *c;
@@ -80,13 +84,13 @@ uint32_t vdip_pct(const vdip_ev_t *e)
     return e->ref_x ? ((uint32_t)e->min_x * 100u + e->ref_x / 2u) / e->ref_x : 0u;
 }
 
-static uint32_t age_s(uint32_t now, uint32_t t)
+static uint32_t age_s(uint32_t now_s, uint32_t t_s)
 {
-    uint32_t s = (now - t) / 1000u;
+    uint32_t s = now_s - t_s;
     return s > 0xFFFFFEu ? 0xFFFFFEu : s;
 }
 
-void vdip_page(const vdip_t *d, const vsense_t *vs, uint32_t now, uint32_t now_mv, uint8_t arg, uint8_t out[24])
+void vdip_page(const vdip_t *d, const vsense_t *vs, uint32_t now_s, uint32_t now_mv, uint8_t arg, uint8_t out[24])
 {
     const vdip_ev_t *e = vdip_event(d, arg);
     uint32_t i;
@@ -100,9 +104,9 @@ void vdip_page(const vdip_t *d, const vsense_t *vs, uint32_t now, uint32_t now_m
         ultra_put16(out + ULTRA_SU_DEEP_MV, vsense_mv(vs, d->deep.min_x, 1u));
         out[ULTRA_SU_DEEP_PCT] = (uint8_t)vdip_pct(&d->deep);
     }
-    ultra_put24(out + ULTRA_SU_DEEP_AGE, d->deep.ref_x ? age_s(now, d->deep.t_ms) : 0xFFFFFFu);
+    ultra_put24(out + ULTRA_SU_DEEP_AGE, d->deep.ref_x ? age_s(now_s, d->deep.t_s) : 0xFFFFFFu);
     out[ULTRA_SU_LOGGED] = d->n_log;
-    ultra_put24(out + ULTRA_SU_EV_AGE, e ? age_s(now, e->t_ms) : 0xFFFFFFu);
+    ultra_put24(out + ULTRA_SU_EV_AGE, e ? age_s(now_s, e->t_s) : 0xFFFFFFu);
     if (e) {
         ultra_put16(out + ULTRA_SU_EV_MV, vsense_mv(vs, e->min_x, 1u));
         out[ULTRA_SU_EV_PCT] = (uint8_t)vdip_pct(e);
