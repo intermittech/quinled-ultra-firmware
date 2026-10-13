@@ -15,6 +15,11 @@
 #include "../core/ultra.h"
 #include "board.h"
 
+/* A compiler barrier, as __disable_irq / __enable_irq: no memory access moves across it, and values held in
+ * registers are read again after it. For the hand-overs between the main loop and the ISRs that need no critical
+ * section (the build uses LTO, so a call into another file is no barrier). */
+#define BARRIER() __asm volatile("" ::: "memory")
+
 /* PWM dither tables, written by the main loop, read by DMA once per PWM period (into the CCRs). pwm_table()
  * tells where a channel's values go: entry i of channel ch is base[i * stride]. */
 extern uint16_t pwm_tab1[PATTERN_MAX_LEN * 4];   /* TIM1: G, R; spread: + period */

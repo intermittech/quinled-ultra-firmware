@@ -2,9 +2,10 @@
  * Copyright (C) 2026 QuinLED */
 /* Input energy: see energy.h. */
 #include "energy.h"
+#include "lto.h"
 #include "ultra_protocol.h"
 
-void energy_init(energy_t *e, uint32_t stored_wh, uint32_t now)
+MEASURED void energy_init(energy_t *e, uint32_t stored_wh, uint32_t now)
 {
     uint8_t *b = (uint8_t *)e;
     uint32_t i;
@@ -16,7 +17,7 @@ void energy_init(energy_t *e, uint32_t stored_wh, uint32_t now)
     budget_init(&e->budget, now, ENERGY_BUDGET_CAP, ENERGY_REFILL_MS);
 }
 
-void energy_ms(energy_t *e, uint32_t now, uint32_t mv, int32_t ma, uint8_t lit)
+MEASURED void energy_ms(energy_t *e, uint32_t now, uint32_t mv, int32_t ma, uint8_t lit)
 {
     if (ma > 0) {
         e->uj += mv * (uint32_t)ma / 1000u;              /* mW x 1 ms = uJ (75 V x 20 A: 1.5e9, fits) */
@@ -35,7 +36,7 @@ uint32_t energy_total_wh(const energy_t *e)
     return e->base_wh + e->boot_mwh / 1000u;
 }
 
-uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips)
+MEASURED uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips)
 {
     uint32_t why = ENERGY_DUE_NONE;
     if (dips != e->dips) {

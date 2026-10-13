@@ -98,7 +98,7 @@ typedef struct {
 
 #define ULTRA_HEAD_BYTES ((uint32_t)offsetof(ultra_light_t, defined))   /* the persisted head (98 on the target) */
 /* the power-on effect store (hal/hw.c writes it, two flash pages): magic (4) | light mask (1) | CRC-8 per light (5) |
- * 2 spare, then light i's head at ULTRA_FX_HDR + i x ULTRA_HEAD_BYTES. The header is written last. */
+ * 2 spare (0), then light i's head at ULTRA_FX_HDR + i x ULTRA_HEAD_BYTES. The header is written last. */
 #define ULTRA_FX_MAGIC   0x31584653u      /* "SFX1" */
 #define ULTRA_FX_HDR     12u
 

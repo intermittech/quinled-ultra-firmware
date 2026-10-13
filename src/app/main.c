@@ -47,7 +47,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.0"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.1"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -57,7 +57,10 @@
 #define LOSS_FADE_MS     1000u     /* fade-off duration */
 #define SAVE_DEBOUNCE_MS 2000u     /* settings saved 2 s after the last change */
 
-/* ------------------------------------------------------------------------------- shared with the poll ISR */
+/* ------------------------------------------------------------------------------- shared with the poll ISR
+ * The ISR writes volatile variables, ft (the main loop only with interrupts off) and the copies din_copy / tail_copy
+ * (read after cap_ready / fe_ready, behind a BARRIER). frx and plan_buf are the main loop's; the ISR only reads them,
+ * published by the BARRIER before plan_idx. */
 static frx_t frx;                          /* protocol state and per-frame decisions (core/frame_rx.h) */
 static volatile gate_plan_t plan;          /* plan of the frame in progress */
 static gate_plan_t plan_buf[2];            /* next plan, written by the main loop (double buffer) */
@@ -1046,6 +1049,7 @@ static void process_capture(void)
     slot_t slot;
     int n;
 
+    BARRIER();                             /* din_copy: read after cap_ready (the ISR's copy is complete) */
     cap_ready = 0;
     if (cap_own == PROTO_UPD_BITS && skip == 0u) {
         upd_capture();                     /* a whole update frame (the transparent plan): not a slot */
@@ -1070,6 +1074,7 @@ static void process_frame_end(void)
     uint8_t tail[8], i;
     const uint8_t *t8 = 0;
     frx_end_t e;
+    BARRIER();                             /* tail_copy: read after fe_ready */
     fe_ready = 0;
     if (tail_words != 0u && ws_decode_last(tail_copy, (uint32_t)tail_words * 16u, &tm, tail) >= (int)ULTRA_HDR_BITS) {
         t8 = tail;                         /* the frame's last 64 bits: an Ultra header? */
@@ -1107,6 +1112,7 @@ static void process_frame_end(void)
     }
     i = (uint8_t)(plan_idx ^ 1u);          /* the ISR reads plan_buf[plan_idx] at the next frame end */
     plan_buf[i] = upd_app_transparent(&upd) ? proto_gate_plan_transparent() : e.plan;
+    BARRIER();                             /* the plan and frx.ps are written before the ISR can take them */
     plan_idx = i;
 }
 
@@ -1383,6 +1389,7 @@ int main(void)
         gate_plan_t g = proto_gate_plan(proto_active(&frx.ps));
         plan_buf[0] = plan_buf[1] = g;
         plan = g;
+        BARRIER();                         /* (as at the frame end) */
         rx_ready = 1;                      /* gate closed until the tracker arms (idle line) or a frame ends */
     }
     cli_banner(&cli);

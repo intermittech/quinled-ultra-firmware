@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "stagger.h"
+#include "lto.h"
 #include "scratch.h"
 
 #define N        STAGGER_GRID
@@ -70,7 +71,7 @@ typedef struct {
     uint8_t n;
 } edges_t;
 
-static void add_edge(edges_t *e, uint16_t v, uint32_t on, uint32_t w)
+static ALWAYS_INLINE void add_edge(edges_t *e, uint16_t v, uint32_t on, uint32_t w)   /* (the search: lto.h) */
 {
     if (v == 0u || v == 65535u) {
         return;                           /* always off / always on: no edges */
@@ -186,7 +187,7 @@ void stagger_choose(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap,
     stagger_choose_max(duty, peak_ma, gap, cur_o2, cur_o3, 0, r);
 }
 
-void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap, uint16_t cur_o2,
+MEASURED void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap, uint16_t cur_o2,
                         uint16_t cur_o3, uint16_t o_max, stagger_result_t *r)
 {
     uint32_t omax = o_max ? o_max : 0xFFFFu;
@@ -286,7 +287,7 @@ void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t 
 }
 
 /* ---------------------------------------------------------------------------------------------- spread */
-void stagger_spread_arr(uint32_t steps, uint32_t len, uint16_t *arr)
+MEASURED void stagger_spread_arr(uint32_t steps, uint32_t len, uint16_t *arr)
 {
     uint32_t i, x = 0x6D2B79F5u;
     int32_t span = (int32_t)((steps * STAGGER_SPREAD_Q16 + 32768u) >> 16), shift = 0;
@@ -330,7 +331,7 @@ int32_t stagger_slew_straight(uint32_t cur, uint32_t tgt, int32_t pending, uint3
 }
 
 /* ---------------------------------------------------------------------------------------------- slew */
-int32_t stagger_slew(uint32_t cur, uint32_t tgt, int32_t pending, uint32_t steps, uint32_t max_step,
+MEASURED int32_t stagger_slew(uint32_t cur, uint32_t tgt, int32_t pending, uint32_t steps, uint32_t max_step,
                      int allow_longer)
 {
     int32_t s = (int32_t)steps, e, rem;

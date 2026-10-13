@@ -42,8 +42,7 @@ typedef struct {
 
 typedef struct {
     uint16_t seq;
-    uint16_t v[5];
-    uint8_t  mask, fade;
+    scene_t  s;                       /* outputs, mask, fade */
     uint8_t  crc;                     /* CRC-8/SMBus over the 14 bytes before it */
     uint8_t  mark;                    /* SCENE_MARK; erased flash reads 0xFF or 0x39 / 0xE3 (store_erased) */
 } scene_rec_t;

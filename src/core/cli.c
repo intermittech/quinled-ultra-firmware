@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
+#include <stdarg.h>
 #include "cli.h"
 #include "climit.h"
 #include "ultra_protocol.h"
@@ -40,150 +41,163 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
-/* v as decimal digits, at least `width` of them (zero-padded), then tail */
-static void wdig(cli_t *c, uint32_t v, uint32_t width, const char *tail)
+/* ---------------------------------------------------------------------------------------------------- output */
+/* The console's one formatter: fmt with one argument per %-code. Readable units on the console (V, A, W, %, s);
+ * telemetry and the data structures stay raw (mV, mA, 16-bit outputs).
+ *   %s string            %u decimal (uint32)       %t ms as [Nd ]h:mm:ss          %% a '%'
+ *   n / d rounded with 1 or 2 decimals:
+ *   %v uint32 / 10, 2 decimals (mV in V, 10 mWh in Wh)    %a int32 mA in A, 2 decimals (negative: 0)
+ *   %V int32 / 10, 2 decimals, signed                      %p 16-bit level in %, 1 decimal
+ *   %k uint32 / 10, 1 decimal (permille in %, 100 ms in s)  %K int32 / 10, 1 decimal, signed (0.1 C)
+ *   %h uint32 / 100, 1 decimal (ms in s, 10 mW in W)       %H uint32 / 100, 2 decimals
+ *   %q Q16 of the period in %, 1 decimal
+ *   five values, "/" between: %P uint16[5] levels (%p), %A int32[5] mA (%a), %e int8[5] signed % (ULTRA_HE_NA: -) */
+#define CF_BUF 48u
+
+typedef struct {
+    cli_t *c;
+    uint32_t n;
+    char b[CF_BUF];
+} cf_out_t;
+
+static void cf_flush(cf_out_t *o)
 {
-    char b[12];
-    char *p = b + sizeof b - 1;
-    *p = 0;
+    o->b[o->n] = 0;
+    if (o->n) {
+        o->c->write(o->b);
+    }
+    o->n = 0;
+}
+
+static void cf_ch(cf_out_t *o, char ch)
+{
+    if (o->n + 1u >= CF_BUF) {
+        cf_flush(o);
+    }
+    o->b[o->n++] = ch;
+}
+
+/* v in decimal, at least `width` digits (zero-padded) */
+static void cf_dec(cf_out_t *o, uint32_t v, uint32_t width)
+{
+    char t[10];
+    uint32_t k = 0;
     do {
-        *--p = (char)('0' + v % 10u);
+        t[k++] = (char)('0' + v % 10u);
         v /= 10u;
-    } while (v || (uint32_t)(b + sizeof b - 1 - p) < width);
-    c->write(p);
-    c->write(tail);
-}
-
-#define wnum(c, v) wdig((c), (v), 1u, "")
-
-/* the console's one number format: n / d rounded, as a number with dec (0..2) decimals, then the unit (12234 mV with
- * d 10, dec 2 -> "12.23 V"). The console shows readable units (V, A, W, %, s); telemetry and the data structures stay
- * raw (mV, mA, 16-bit outputs). */
-static void wdec(cli_t *c, uint32_t n, uint32_t d, uint32_t dec, const char *unit)
-{
-    uint32_t p = dec == 2u ? 100u : dec == 1u ? 10u : 1u;
-    uint32_t v = (n + d / 2u) / d;
-    if (dec) {
-        wdig(c, v / p, 1, ".");
-        v %= p;
-    }
-    wdig(c, v, dec, unit);
-}
-
-/* mA in A with two decimals (negative: 0), mV in V with two decimals, a 16-bit level in % with one decimal */
-static void wamp(cli_t *c, int32_t ma, const char *unit)
-{
-    wdec(c, ma > 0 ? (uint32_t)ma : 0u, 10u, 2, unit);
-}
-
-#define wvolt(c, mv) wdec((c), (mv), 10u, 2u, " V")
-
-static void wpct16(cli_t *c, uint32_t v, const char *unit)
-{
-    wdec(c, v * 1000u, 65535u, 1, unit);
-}
-
-/* five currents (mA, as A) / five 16-bit levels (as %), "/" between, then the tail */
-static void w5amp(cli_t *c, const int32_t *ma, const char *tail)
-{
-    uint32_t i;
-    for (i = 0; i < 5u; i++) {
-        wamp(c, ma[i], i < 4u ? "/" : tail);
+    } while (v || k < width);
+    while (k) {
+        cf_ch(o, t[--k]);
     }
 }
 
-static void w5pct(cli_t *c, const uint16_t *v, const char *tail)
+/* n / d rounded, with dec (1 or 2) decimals */
+static void cf_fix(cf_out_t *o, uint32_t n, uint32_t d, uint32_t dec)
 {
-    uint32_t i;
-    for (i = 0; i < 5u; i++) {
-        wpct16(c, v[i], i < 4u ? "/" : tail);
-    }
-}
-
-/* ms as h:mm:ss, with days when longer */
-static void wtime(cli_t *c, uint32_t ms, const char *tail);
-
-static void wtime(cli_t *c, uint32_t ms, const char *tail)
-{
-    uint32_t sec = ms / 1000u, m = sec / 60u, h = m / 60u;
-    if (h >= 24u) {
-        wdig(c, h / 24u, 1, "d ");
-    }
-    wdig(c, h % 24u, 1, ":");
-    wdig(c, m % 60u, 2, ":");
-    wdig(c, sec % 60u, 2, tail);
-}
-
-/* key=value line: the value as wdec */
-static void kvd(cli_t *c, const char *k, uint32_t n, uint32_t d, uint32_t dec, const char *unit)
-{
-    c->write(k);
-    c->write("=");
-    wdec(c, n, d, dec, unit);
-    c->write("\r\n");
-}
-
-static void kv(cli_t *c, const char *k, uint32_t v)
-{
-    kvd(c, k, v, 1u, 0u, "");
-}
-
-static void kva(cli_t *c, const char *k, int32_t ma)
-{
-    kvd(c, k, ma > 0 ? (uint32_t)ma : 0u, 10u, 2, " A");
+    uint32_t p = dec == 2u ? 100u : 10u, v = (n + d / 2u) / d;
+    cf_dec(o, v / p, 1u);
+    cf_ch(o, '.');
+    cf_dec(o, v % p, dec);
 }
 
 /* the sign of v ("-" when negative), returns |v| */
-static uint32_t wneg(cli_t *c, int32_t v)
+static uint32_t cf_neg(cf_out_t *o, int32_t v)
 {
     if (v < 0) {
-        c->write("-");
+        cf_ch(o, '-');
         return (uint32_t)-v;
     }
     return (uint32_t)v;
 }
 
-/* a temperature in 0.1 C, signed, then the tail */
-static void wc10(cli_t *c, int32_t t, const char *tail)
+static uint32_t clamp0(int32_t v)
 {
-    wdec(c, wneg(c, t), 1u, 1, tail);
+    return v > 0 ? (uint32_t)v : 0u;
 }
 
-/* five signed % (ULTRA_HE_NA: "-"), "/" between, then the tail */
-static void w5dev(cli_t *c, const int8_t *d, const char *tail)
+static void cf(cli_t *c, const char *f, ...)
 {
+    cf_out_t o;
+    va_list ap;
     uint32_t i;
-    for (i = 0; i < 5u; i++) {
-        if (d[i] == ULTRA_HE_NA) {
-            c->write("-");
-        } else {
-            wdig(c, wneg(c, d[i]), 1, "");
+    o.c = c;
+    o.n = 0;
+    va_start(ap, f);
+    for (; *f; f++) {
+        if (*f != '%') {
+            cf_ch(&o, *f);
+            continue;
         }
-        c->write(i < 4u ? "/" : tail);
+        switch (*++f) {
+        case 's':
+            cf_flush(&o);
+            c->write(va_arg(ap, const char *));
+            break;
+        case 'u': cf_dec(&o, va_arg(ap, uint32_t), 1u); break;
+        case 'v': cf_fix(&o, va_arg(ap, uint32_t), 10u, 2u); break;
+        case 'a': cf_fix(&o, clamp0(va_arg(ap, int32_t)), 10u, 2u); break;
+        case 'V': cf_fix(&o, cf_neg(&o, va_arg(ap, int32_t)), 10u, 2u); break;
+        case 'p': cf_fix(&o, va_arg(ap, uint32_t) * 1000u, 65535u, 1u); break;
+        case 'k': cf_fix(&o, va_arg(ap, uint32_t), 1u, 1u); break;
+        case 'K': cf_fix(&o, cf_neg(&o, va_arg(ap, int32_t)), 1u, 1u); break;
+        case 'h': cf_fix(&o, va_arg(ap, uint32_t), 100u, 1u); break;
+        case 'H': cf_fix(&o, va_arg(ap, uint32_t), 100u, 2u); break;
+        case 'q': cf_fix(&o, va_arg(ap, uint32_t) * 1000u, 65536u, 1u); break;
+        case 't': {
+            uint32_t ms = va_arg(ap, uint32_t), sec = ms / 1000u, m = sec / 60u, h = m / 60u;
+            if (h >= 24u) {
+                cf_dec(&o, h / 24u, 1u);
+                cf_ch(&o, 'd');
+                cf_ch(&o, ' ');
+            }
+            cf_dec(&o, h % 24u, 1u);
+            cf_ch(&o, ':');
+            cf_dec(&o, m % 60u, 2u);
+            cf_ch(&o, ':');
+            cf_dec(&o, sec % 60u, 2u);
+            break;
+        }
+        case 'P': case 'A': case 'e': {
+            const void *p = va_arg(ap, const void *);
+            for (i = 0; i < 5u; i++) {
+                if (i) {
+                    cf_ch(&o, '/');
+                }
+                if (*f == 'P') {
+                    cf_fix(&o, ((const uint16_t *)p)[i] * 1000u, 65535u, 1u);
+                } else if (*f == 'A') {
+                    cf_fix(&o, clamp0(((const int32_t *)p)[i]), 10u, 2u);
+                } else if (((const int8_t *)p)[i] == ULTRA_HE_NA) {
+                    cf_ch(&o, '-');
+                } else {
+                    cf_dec(&o, cf_neg(&o, ((const int8_t *)p)[i]), 1u);
+                }
+            }
+            break;
+        }
+        default:
+            cf_ch(&o, '%');                /* "%%" */
+            break;
+        }
     }
+    va_end(ap);
+    cf_flush(&o);
 }
 
+/* ---------------------------------------------------------------------------------------------------- reports */
 void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
 {
     static const char *const name[5] = { "R ", "G ", "B ", "W1 ", "W2 " };
     uint32_t i, k;
-    c->write("test @");
-    wdig(c, pct, 1, "%: ");
+    cf(c, "test @%u%%: ", pct);
     for (k = 0; k < 2u; k++) {             /* as measured at pct %, then scaled to 100 % */
         for (i = 0; i < 5u; i++) {
-            uint32_t v = ma[i] > 0 ? (uint32_t)ma[i] : 0u;
-            c->write(name[i]);
-            wdec(c, k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u), 100u, 2,
-                 i < 4u ? (k == 0u ? " A, " : ", ") : (k == 0u ? " A; est. @100%: " : " A; supply "));
+            uint32_t v = clamp0(ma[i]);
+            cf(c, "%s%H%s", name[i], k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u),
+               i < 4u ? (k == 0u ? " A, " : ", ") : (k == 0u ? " A; est. @100%: " : " A; supply "));
         }
     }
-    if (supply_mv != 0u) {
-        wvolt(c, supply_mv);
-    } else {
-        c->write("n/a");
-    }
-    c->write(" (cycle ");
-    wdig(c, cycle, 1, ")\r\n");
+    cf(c, supply_mv != 0u ? "%v V (cycle %u)\r\n" : "n/a (cycle %u)\r\n", supply_mv != 0u ? supply_mv : cycle, cycle);
 }
 
 void cli_banner(cli_t *c)
@@ -191,21 +205,13 @@ void cli_banner(cli_t *c)
     static const char *const app[] = { "standalone build (no bootloader)",
                                        "trial (not confirmed yet)", "confirmed" };
     const cli_status_t *s = c->st;
-    c->write("QuinLED dig2analog-ultra firmware v");
-    c->write(s->version);
-    c->write(", Copyright (C) 2026 QuinLED, GPL-3.0, source: github.com/intermittech/quinled-ultra-firmware\r\n");
+    cf(c, "QuinLED dig2analog-ultra firmware v%s, Copyright (C) 2026 QuinLED, GPL-3.0, source: "
+          "github.com/intermittech/quinled-ultra-firmware\r\n", s->version);
     if (s->bl_version != 0u) {
-        c->write("bootloader rev ");
-        wdig(c, s->bl_version, 1, " (build ");
-        c->write(s->bl_build);
-        c->write("), hardware ");
-        wdig(c, s->hw_id, 1, " revision ");
-        wdig(c, s->hw_rev, 1, ", app ");
-    } else {
-        c->write("app ");
+        cf(c, "bootloader rev %u (build %s), hardware %u revision %u, ", s->bl_version, s->bl_build, s->hw_id,
+           s->hw_rev);
     }
-    c->write(app[s->app_state < 3u ? s->app_state : 0]);
-    c->write("\r\n");
+    cf(c, "app %s\r\n", app[s->app_state < 3u ? s->app_state : 0]);
 }
 
 static uint8_t get_key(const cli_t *c, uint8_t cmd)
@@ -262,159 +268,95 @@ static void status(cli_t *c)
     static const char *const cause[] = { "-", "short", "overload" };
     uint32_t i;
     cli_banner(c);
-    c->write("uptime=");
-    wtime(c, s->uptime_ms, "\r\nreset=");
-    c->write((s->reset_flags & 0x20000000u) ? "watchdog " : "");
-    c->write((s->reset_flags & 0x08000000u) ? "power-on " : "");
-    c->write((s->reset_flags & 0x04000000u) ? "pin " : "");
-    c->write((s->reset_flags & 0x10000000u) ? "software " : "");
-    c->write("\r\nprotocol=");
-    c->write(mode[s->proto_mode < 4u ? s->proto_mode : 0]);
-    c->write(", active ");
-    c->write(proto[s->proto_locked < 5u ? s->proto_locked : 0]);
-    c->write(s->proto_provisional ? " (stored, not confirmed yet)" : "");
-    c->write(", stored ");
-    c->write(proto[c->set->last_proto < 5u ? c->set->last_proto : 0]);
-    c->write("\r\n");
-    kv(c, "frames", s->frames);
-    kv(c, "fps", s->fps);
-    kv(c, "decoded", s->decoded);
+    cf(c, "uptime=%t\r\nreset=%s%s%s%s\r\nprotocol=%s, active %s%s, stored %s\r\nframes=%u\r\nfps=%u\r\ndecoded=%u\r\n",
+       s->uptime_ms, (s->reset_flags & 0x20000000u) ? "watchdog " : "", (s->reset_flags & 0x08000000u) ? "power-on " : "",
+       (s->reset_flags & 0x04000000u) ? "pin " : "", (s->reset_flags & 0x10000000u) ? "software " : "",
+       mode[s->proto_mode < 4u ? s->proto_mode : 0], proto[s->proto_locked < 5u ? s->proto_locked : 0],
+       s->proto_provisional ? " (stored, not confirmed yet)" : "", proto[c->set->last_proto < 5u ? c->set->last_proto : 0],
+       s->frames, s->fps, s->decoded);
     for (i = 1; i < 6u; i++) {
         if (s->dec_err[i]) {
-            c->write("decode_error ");
-            kv(c, err[i], s->dec_err[i]);
+            cf(c, "decode_error %s=%u\r\n", err[i], s->dec_err[i]);
         }
     }
     if (s->ultra_headers || s->ultra_tail_err) {
-        kv(c, "ultra_headers", s->ultra_headers);
-        kv(c, "ultra_tail_errors", s->ultra_tail_err);
+        cf(c, "ultra_headers=%u\r\nultra_tail_errors=%u\r\n", s->ultra_headers, s->ultra_tail_err);
     }
-    kv(c, "config_accepted", s->config_frames);
-    kv(c, "pwm_hz", F_TIM_HZ / s->steps);
-    kv(c, "pwm_steps", s->steps);
-    kv(c, "flash_saves", s->saves);
-    if (s->stagger_moves || s->ripple_ma) {
-        kvd(c, "stagger_tim2", (uint32_t)s->stagger_o2 * 1000u, 65536u, 1, " %");     /* % of the period */
-        kvd(c, "stagger_tim3", (uint32_t)s->stagger_o3 * 1000u, 65536u, 1, " %");
-        kv(c, "stagger_moves", s->stagger_moves);
-        kva(c, "ripple_rms", (int32_t)s->ripple_ma);
+    cf(c, "config_accepted=%u\r\npwm_hz=%u\r\npwm_steps=%u\r\nflash_saves=%u\r\n", s->config_frames,
+       (uint32_t)(F_TIM_HZ / s->steps), s->steps, s->saves);
+    if (s->stagger_moves || s->ripple_ma) {    /* the offsets in % of the period */
+        cf(c, "stagger_tim2=%q %%\r\nstagger_tim3=%q %%\r\nstagger_moves=%u\r\nripple_rms=%a A\r\n",
+           (uint32_t)s->stagger_o2, (uint32_t)s->stagger_o3, s->stagger_moves, (int32_t)s->ripple_ma);
     }
-    c->write("out R/G/B/W1/W2=");
-    w5pct(c, s->out, " %\r\n");
     {
         static const char *const model[] = { "none", "learned", "calibrated" };
-        kva(c, "current", s->i_ma);
-        kva(c, "current_peak", s->i_peak_ma);
-        kva(c, "current_zero", s->i_zero_ma);
-        kva(c, "current_limit", (int32_t)s->i_limit_ma);
-        kvd(c, "current_scale", s->i_k_permille, 1u, 1, " %");
-        kv(c, "current_trips", s->i_trips);
-        c->write("current_state=");
-        c->write(s->i_cal ? "calibrating" : (s->i_tripped ? "tripped, outputs off" : "ok"));
-        c->write(", last trip ");
-        c->write(cause[s->i_trip_cause < 3u ? s->i_trip_cause : 0]);
-        c->write("\r\nchannel R/G/B/W1/W2=");
-        w5amp(c, s->i_ch_ma, " A (");
-        c->write(model[s->i_model < 3u ? s->i_model : 0]);
-        c->write(")\r\n");
+        cf(c, "out R/G/B/W1/W2=%P %%\r\ncurrent=%a A\r\ncurrent_peak=%a A\r\ncurrent_zero=%a A\r\ncurrent_limit=%a A\r\n"
+              "current_scale=%k %%\r\ncurrent_trips=%u\r\ncurrent_state=%s, last trip %s\r\n"
+              "channel R/G/B/W1/W2=%A A (%s)\r\n",
+           s->out, s->i_ma, s->i_peak_ma, s->i_zero_ma, (int32_t)s->i_limit_ma, s->i_k_permille, s->i_trips,
+           s->i_cal ? "calibrating" : (s->i_tripped ? "tripped, outputs off" : "ok"),
+           cause[s->i_trip_cause < 3u ? s->i_trip_cause : 0], s->i_ch_ma, model[s->i_model < 3u ? s->i_model : 0]);
         if (s->cal.levels) {
             static const char ch[5][3] = { "R", "G", "B", "W1", "W2" };
             uint32_t l;
             c->write("calibration=");
             for (l = 0; l < s->cal.levels && l < 4u; l++) {
-                wdig(c, s->cal.pct[l], 1, l + 1u < s->cal.levels ? "/" : " %, ");
+                cf(c, "%u%s", s->cal.pct[l], l + 1u < s->cal.levels ? "/" : " %, ");
             }
-            wdig(c, s->cal_count, 1, " tests stored\r\n");
+            cf(c, "%u tests stored\r\n", s->cal_count);
             for (i = 0; i < 5u; i++) {
-                c->write("calibration ");
-                c->write(ch[i]);
-                c->write("=");
+                cf(c, "calibration %s=", ch[i]);
                 for (l = 0; l < s->cal.levels && l < 4u; l++) {
-                    wamp(c, s->cal.ma[i][l], l + 1u < s->cal.levels ? "/" : " A\r\n");
+                    cf(c, "%a%s", (int32_t)s->cal.ma[i][l], l + 1u < s->cal.levels ? "/" : " A\r\n");
                 }
             }
         }
     }
-    c->write("mcu_temp=");
     if (s->mcu_temp_c10 == -32768) {
-        c->write("n/a\r\n");
+        c->write("mcu_temp=n/a\r\n");
     } else {
-        wc10(c, s->mcu_temp_c10, " C (die), vdda=");
-        wvolt(c, s->vdda_mv);
-        c->write(", peak ");
-        wc10(c, s->mcu_peak_c10, " C ");
-        wtime(c, s->uptime_ms - s->mcu_peak_ms, " ago\r\n");
+        cf(c, "mcu_temp=%K C (die), vdda=%v V, peak %K C %t ago\r\n", (int32_t)s->mcu_temp_c10, (uint32_t)s->vdda_mv,
+           (int32_t)s->mcu_peak_c10, s->uptime_ms - s->mcu_peak_ms);
     }
-    c->write("supply=");
-    wvolt(c, s->vs_supply_mv);
-    c->write(" (min ");
-    wvolt(c, s->vs_supply_min_mv);
-    c->write(", max ");
-    wvolt(c, s->vs_supply_max_mv);
-    c->write(")\r\n");
+    cf(c, "supply=%v V (min %v V, max %v V)\r\n", s->vs_supply_mv, s->vs_supply_min_mv, s->vs_supply_max_mv);
     if (s->dip) {                          /* supply dips (core/vdip.h): the deepest, then the log, newest first */
         const vdip_t *d = s->dip;
         const vdip_ev_t *e = d->deep.ref_x ? &d->deep : 0;
         uint32_t k;
-        c->write("supply_dips=");
-        wdig(c, d->count, 1, d->in_dip ? " (one now), reference " : ", reference ");
-        wvolt(c, s->dip_ref_mv);
+        cf(c, "supply_dips=%u%s%v V", (uint32_t)d->count, d->in_dip ? " (one now), reference " : ", reference ",
+           s->dip_ref_mv);
         for (k = 0; e != 0; e = vdip_event(d, k++)) {
-            c->write(k ? "\r\nsupply_dip " : "\r\nsupply_dip_deepest");
-            if (k) {
-                wnum(c, k);
-            }
-            c->write("=");
-            wtime(c, s->uptime_ms - e->t_ms, " ago, ");
-            wvolt(c, vsense_mv(s->dip_vs, e->min_x, 1u));
-            c->write(" (");
-            wdig(c, vdip_pct(e), 1, " %), ");
-            wdig(c, e->dur_ms, 1, " ms, ");
-            wamp(c, e->i_ma, " A");
+            cf(c, k ? "\r\nsupply_dip %u=" : "\r\nsupply_dip_deepest=", k);
+            cf(c, "%t ago, %v V (%u %%), %u ms, %a A", s->uptime_ms - e->t_ms, vsense_mv(s->dip_vs, e->min_x, 1u),
+               vdip_pct(e), (uint32_t)e->dur_ms, (int32_t)e->i_ma);
         }
         c->write("\r\n");
     }
-    {
-        /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A): mW, shown in W */
-        uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
-        kvd(c, "input", s->vs_supply_mv / 10u * ma / 100u, 100u, 1, " W");
-    }
-    c->write("energy=");
-    wdec(c, s->en_boot_mwh, 10u, 2, " Wh since boot, ");
-    wdig(c, s->en_total_wh, 1, " Wh lifetime\r\n");
-    c->write("tp8=");
-    wvolt(c, s->vs_aux_mv);
-    c->write(s->test_mode ? "\r\ntest_mode=on\r\n" : "\r\ntest_mode=off\r\n");
-    c->write("board_limit=");
+    /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A): mW, shown in W */
+    cf(c, "input=%h W\r\nenergy=%v Wh since boot, %u Wh lifetime\r\ntp8=%v V\r\ntest_mode=%s\r\nboard_limit=",
+       s->vs_supply_mv / 10u * clamp0(s->i_ma) / 100u, s->en_boot_mwh, s->en_total_wh, s->vs_aux_mv,
+       s->test_mode ? "on" : "off");
     if (s->lim_ma == 0xFFFFu) {
         c->write("none");
     } else {
-        wamp(c, s->lim_ma, " A (");
-        c->write(climit_src_name(s->lim_src));
-        c->write(")");
+        cf(c, "%a A (%s)", (int32_t)s->lim_ma, climit_src_name(s->lim_src));
     }
-    c->write(", connected ");
     if (s->lim_conn_ma) {
-        wamp(c, (int32_t)s->lim_conn_ma, " A: ");
-        c->write(s->lim_need == CLIMIT_NEED_NO ? "no limit needed\r\n" : "the limit may engage\r\n");
+        cf(c, ", connected %a A: %s", (int32_t)s->lim_conn_ma,
+           s->lim_need == CLIMIT_NEED_NO ? "no limit needed\r\n" : "the limit may engage\r\n");
     } else {
-        c->write("not known\r\n");
+        c->write(", connected not known\r\n");
     }
     /* the overcurrent signal on D9 (core/ocled.h) */
-    c->write("overcurrent_led=");
     if (s->oc_show == 0u) {
-        c->write("off");
+        c->write("overcurrent_led=off");
     } else {
-        c->write(s->oc_show == 2u ? "trip (" : "limit");
-        c->write(s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "");
-        c->write(s->oc_show == 2u ? "), since " : ", since ");
-        wtime(c, s->oc_since_ms, " (");
-        wdec(c, s->uptime_ms - s->oc_since_ms, 100u, 1, " s ago), ");
+        cf(c, s->oc_show == 2u ? "overcurrent_led=trip (%s), since %t (%h s ago), " : "overcurrent_led=limit%s, since %t (%h s ago), ",
+           s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "", s->oc_since_ms, s->uptime_ms - s->oc_since_ms);
         if (s->oc_show == 2u ? s->oc_tripped : s->oc_limiting) {
             c->write(s->oc_show == 2u ? "outputs off" : "board limit active");
         } else {
-            c->write("hold ");
-            wdec(c, s->oc_hold_ms, 100u, 1, " s");
+            cf(c, "hold %h s", s->oc_hold_ms);
         }
     }
     c->write("\r\n");
@@ -422,47 +364,33 @@ static void status(cli_t *c)
     if (s->pw) {
         const pwrev_t *g = s->pw;
         uint8_t st = pwrev_state(g), lat = pwrev_latched(g);
-        uint32_t age;
-        c->write("power_state=");
-        c->write((st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED | ULTRA_ST_CH_LIMITING)) ? "" : "ok");
-        c->write((st & ULTRA_ST_LIMITING) ? "limiting" : "");
-        c->write((st & ULTRA_ST_TRIPPED) ? ((st & ULTRA_ST_LIMITING) ? ", tripped" : "tripped") : "");
-        c->write((st & ULTRA_ST_CH_LIMITING) ? ((st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED)) ? ", channel-limiting"
-                                                                                           : "channel-limiting") : "");
+        cf(c, "power_state=%s%s%s%s",
+           (st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED | ULTRA_ST_CH_LIMITING)) ? "" : "ok",
+           (st & ULTRA_ST_LIMITING) ? "limiting" : "",
+           (st & ULTRA_ST_TRIPPED) ? ((st & ULTRA_ST_LIMITING) ? ", tripped" : "tripped") : "",
+           (st & ULTRA_ST_CH_LIMITING) ? ((st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED)) ? ", channel-limiting"
+                                                                                     : "channel-limiting") : "");
         if (st & ULTRA_ST_TRIPPED) {
-            c->write(" (retry in ");
-            wdig(c, (g->in.retry_ms + 999u) / 1000u, 1, " s)");   /* as the POWER page: whole seconds, up */
+            cf(c, " (retry in %u s)", (g->in.retry_ms + 999u) / 1000u);   /* as the POWER page: whole seconds, up */
         } else if (st & ULTRA_ST_LIMITING) {
-            c->write(" (factor ");
-            wdec(c, g->in.factor * 1000u / 65535u, 1u, 1, " %)");
+            cf(c, " (factor %k %%)", (uint32_t)g->in.factor * 1000u / 65535u);
         }
-        c->write("\r\npower_events=limit ");
-        wdig(c, g->limit_events, 1, ", overload trips ");
-        wdig(c, g->ovl_trips, 1, ", short trips ");
-        wdig(c, g->short_trips, 1, lat ? ", latched:" : ", nothing latched");
-        c->write((lat & ULTRA_PW_EV_LIMITED) ? " limit" : "");
-        c->write((lat & ULTRA_PW_EV_OVERLOAD) ? " overload" : "");
-        c->write((lat & ULTRA_PW_EV_SHORT) ? " short" : "");
-        c->write((lat & ULTRA_PW_EV_SUPPLY_DIP) ? " dip" : "");
-        c->write("\r\npower_last_limit=");
-        age = g->limit_age_s;
-        if (age == PWREV_AGE_NONE) {
+        cf(c, "\r\npower_events=limit %u, overload trips %u, short trips %u%s%s%s%s%s\r\npower_last_limit=",
+           (uint32_t)g->limit_events, (uint32_t)g->ovl_trips, (uint32_t)g->short_trips,
+           lat ? ", latched:" : ", nothing latched", (lat & ULTRA_PW_EV_LIMITED) ? " limit" : "",
+           (lat & ULTRA_PW_EV_OVERLOAD) ? " overload" : "", (lat & ULTRA_PW_EV_SHORT) ? " short" : "",
+           (lat & ULTRA_PW_EV_SUPPLY_DIP) ? " dip" : "");
+        if (g->limit_age_s == PWREV_AGE_NONE) {
             c->write("none");
         } else {
-            wdig(c, age, 1, " s ago, ");
-            wamp(c, g->event_ma, " A");
+            cf(c, "%u s ago, %a A", g->limit_age_s, (int32_t)g->event_ma);
         }
-        c->write("\r\npower_last_trip=");
-        age = g->trip_age_s;
-        if (age == PWREV_AGE_NONE) {
-            c->write("none");
+        if (g->trip_age_s == PWREV_AGE_NONE) {
+            c->write("\r\npower_last_trip=none\r\n");
         } else {
-            wdig(c, age, 1, " s ago, ");
-            c->write(cause[g->last_cause < 3u ? g->last_cause : 0]);
-            c->write(", ");
-            wamp(c, g->trip_ma, " A");
+            cf(c, "\r\npower_last_trip=%u s ago, %s, %a A\r\n", g->trip_age_s,
+               cause[g->last_cause < 3u ? g->last_cause : 0], (int32_t)g->trip_ma);
         }
-        c->write("\r\n");
     }
     if (s->hl) {                           /* channel health (core/health.h) */
         static const char *const cls[4] = { "-", "none", "ok", "FAULT" };
@@ -478,45 +406,34 @@ static void status(cli_t *c)
                 }
                 c->write(i < 4u ? "/" : ", change ");
             }
-            w5dev(c, h->test_dev, " %\r\n");
+            cf(c, "%e %%\r\n", h->test_dev);
         }
-        c->write("health_model R/G/B/W1/W2=");
-        w5dev(c, h->model_dev, " %, dark ");
-        wdec(c, wneg(c, h->dark_ma), 10u, 2, (h->flags & ULTRA_HE_F_DARK) ? " A (!)\r\n" : " A\r\n");
+        cf(c, "health_model R/G/B/W1/W2=%e %%, dark %V A%s\r\n", h->model_dev, (int32_t)h->dark_ma,
+           (h->flags & ULTRA_HE_F_DARK) ? " (!)" : "");
     }
     if (c->scene && c->scene->mask) {
         c->write("power-on scene R/G/B/W1/W2=");
         for (i = 0; i < 5u; i++) {
             if (c->scene->mask & (1u << i)) {
-                wpct16(c, c->scene->v[i], "");
+                cf(c, "%p", (uint32_t)c->scene->v[i]);
             } else {
                 c->write("-");
             }
             c->write(i < 4u ? "/" : " %, fade ");
         }
-        wdec(c, c->scene->fade, 1u, 1, " s\r\n");
+        cf(c, "%k s\r\n", (uint32_t)c->scene->fade);
     }
 }
 
 void cli_watch(cli_t *c)
 {
     const cli_status_t *s = c->st;
-    uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
-    wtime(c, s->uptime_ms, " ");
-    wvolt(c, s->vs_supply_mv);
-    c->write(" ");
-    wamp(c, s->i_ma, " A ");
-    wdec(c, s->vs_supply_mv / 10u * ma / 100u, 100u, 1, " W  ch ");    /* as `input` in status */
-    w5amp(c, s->i_now_ch_ma, " A  out ");
-    w5pct(c, s->out, " %  ");
+    cf(c, "%t %v V %a A %h W  ch %A A  out %P %%  ", s->uptime_ms, s->vs_supply_mv, s->i_ma,
+       s->vs_supply_mv / 10u * clamp0(s->i_ma) / 100u, s->i_now_ch_ma, s->out);   /* the power as `input` in status */
     if (s->mcu_temp_c10 != -32768) {
-        wc10(c, s->mcu_temp_c10, " C  ");
+        cf(c, "%K C  ", (int32_t)s->mcu_temp_c10);
     }
-    c->write("k ");
-    wdec(c, s->i_k_permille, 1u, 1, s->dip ? " %  dips " : " %\r\n");
-    if (s->dip) {
-        wdig(c, s->dip->count, 1, "\r\n");
-    }
+    cf(c, s->dip ? "k %k %%  dips %u\r\n" : "k %k %%\r\n", s->i_k_permille, s->dip ? (uint32_t)s->dip->count : 0u);
 }
 
 void cli_exec(cli_t *c, const char *line)
@@ -539,19 +456,15 @@ void cli_exec(cli_t *c, const char *line)
         c->write("status | get | set <key> <value> | period <steps> | save | defaults | identify | version | "
                  "watch [ms]\r\n");
         for (i = 0; i < NKEYS; i++) {
-            c->write("  ");
-            c->write(keys[i].key);
-            c->write(": ");
-            c->write(keys[i].help);
-            c->write("\r\n");
+            cf(c, "  %s: %s\r\n", keys[i].key, keys[i].help);
         }
     } else if (streq(word, "status")) {
         status(c);
     } else if (streq(word, "get")) {
         for (i = 0; i < NKEYS; i++) {
-            kv(c, keys[i].key, get_key(c, keys[i].cmd));
+            cf(c, "%s=%u\r\n", keys[i].key, (uint32_t)get_key(c, keys[i].cmd));
         }
-        kv(c, "period", settings_steps(c->set));
+        cf(c, "period=%u\r\n", settings_steps(c->set));
     } else if (streq(word, "set")) {
         char key[12];
         int32_t v;

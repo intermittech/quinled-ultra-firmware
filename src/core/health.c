@@ -2,8 +2,9 @@
  * Copyright (C) 2026 QuinLED */
 /* Channel health: see health.h. */
 #include "health.h"
+#include "lto.h"
 
-void health_init(health_t *h)
+MEASURED void health_init(health_t *h)
 {
     uint8_t *b = (uint8_t *)h;
     uint32_t i;
@@ -38,7 +39,7 @@ static uint8_t dark(health_t *h, int32_t zero, int32_t ref, uint8_t have_ref)
     return (uint8_t)(d >= (have_ref ? HEALTH_DARK_MA : HEALTH_DARK_ABS_MA) ? ULTRA_HE_F_DARK : 0u);
 }
 
-void health_test_start(health_t *h, const isense_cal_t *stored)
+MEASURED void health_test_start(health_t *h, const isense_cal_t *stored)
 {
     uint32_t i;
     h->prev_have = (uint8_t)(stored->levels != 0u);
@@ -48,7 +49,7 @@ void health_test_start(health_t *h, const isense_cal_t *stored)
     }
 }
 
-uint8_t health_test_done(health_t *h, const isense_cal_t *now)
+MEASURED uint8_t health_test_done(health_t *h, const isense_cal_t *now)
 {
     uint32_t ch, l;
     uint8_t code = 0;
@@ -91,7 +92,7 @@ uint8_t health_test_done(health_t *h, const isense_cal_t *now)
     return code ? code : (h->flags & ULTRA_HE_F_DARK) ? 6u : 0u;
 }
 
-void health_run(health_t *h, const isense_t *is, const isense_cal_t *stored)
+MEASURED void health_run(health_t *h, const isense_t *is, const isense_cal_t *stored)
 {
     uint32_t ch;
     uint8_t f = (uint8_t)(h->flags & (ULTRA_HE_F_TESTED | ULTRA_HE_F_ABNORMAL));

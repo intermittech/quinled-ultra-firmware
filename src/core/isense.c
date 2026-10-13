@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Board current sense: limiter, trips, calibration, regression (see isense.h). Integer only (RV32IMC, no FPU). */
 #include "isense.h"
+#include "lto.h"
 
 #define Q16              65536u
 #define K_MIN            1024u        /* the limiter never scales below 1/64 (a fault trips instead) */
@@ -54,7 +55,7 @@ static void set_fast_level(isense_t *s)
     s->fast_raw = (uint16_t)(s->enabled ? raw : 0xFFFFu);
 }
 
-void isense_init(isense_t *s, uint8_t enabled, uint16_t fuse_ma, uint16_t board_ma)
+MEASURED void isense_init(isense_t *s, uint8_t enabled, uint16_t fuse_ma, uint16_t board_ma)
 {
     uint8_t *p = (uint8_t *)s;
     uint32_t i;
@@ -99,7 +100,7 @@ void isense_set_model(isense_t *s, const int32_t ch_ma[ISENSE_CH], int32_t zero_
     s->g = Q16;
 }
 
-void isense_cal_start(isense_t *s, uint16_t duty)
+MEASURED void isense_cal_start(isense_t *s, uint16_t duty)
 {
     if (!s->enabled || s->tripped != ISENSE_TRIP_NONE) {
         return;
@@ -173,7 +174,7 @@ int isense_cal_get(const isense_t *s, isense_cal_t *c)
     return 1;
 }
 
-void isense_cal_set(isense_t *s, const isense_cal_t *c)
+MEASURED void isense_cal_set(isense_t *s, const isense_cal_t *c)
 {
     uint32_t i, l;
     if (c->levels != 1u && c->levels != ISENSE_LEVELS) {
@@ -373,7 +374,7 @@ static uint32_t cal_ms(isense_t *s)
     return ISENSE_EV_CAL_DONE | ISENSE_EV_REAPPLY;
 }
 
-uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak_raw)
+MEASURED uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak_raw)
 {
     uint32_t ev = 0, i, dark = 1;
     int32_t i_led;
@@ -514,7 +515,7 @@ uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak_raw)
     return ev;
 }
 
-void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t out[ISENSE_CH])
+MEASURED void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t out[ISENSE_CH])
 {
     uint32_t i, k = Q16;
     for (i = 0; i < ISENSE_CH; i++) {

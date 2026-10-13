@@ -18,18 +18,15 @@
 #define CAL_PAGE_BYTES    256u
 #define CAL_REC_BYTES     64u
 #define CAL_RECS          (CAL_PAGE_BYTES / CAL_REC_BYTES)
-#define CAL_MAGIC         0x314C4143u   /* "CAL1" */
+#define CAL_MAGIC         0x324C4143u   /* "CAL2": the test as isense_cal_t (0.6.1) */
 
 typedef struct {
     uint32_t magic;
     uint32_t seq;
     uint16_t count;                   /* calibrations stored on this board (wraps at 65535) */
-    uint8_t  levels;                  /* isense_cal_t.levels; 0 = cleared */
-    uint8_t  flags;                   /* reserved, 0xFF */
-    uint8_t  pct[ISENSE_LEVELS];
-    int16_t  zero_ma;
-    uint16_t ma[ISENSE_CH][ISENSE_LEVELS];
-    uint8_t  rsv[4];                  /* 0xFF */
+    uint16_t rsv;                     /* 0xFFFF */
+    isense_cal_t c;                   /* the test (48 bytes; levels 0 = cleared) */
+    uint8_t  rsv2[2];                 /* 0xFF */
     uint16_t crc;                     /* CRC-16/CCITT-FALSE over the 62 bytes before it */
 } cal_rec_t;
 

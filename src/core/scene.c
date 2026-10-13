@@ -90,7 +90,7 @@ static uint8_t rec_crc(const scene_rec_t *r)
 
 static int rec_valid(const scene_rec_t *r)
 {
-    return r->mark == SCENE_MARK && r->crc == rec_crc(r) && (r->mask & ~0x1Fu) == 0u;
+    return r->mark == SCENE_MARK && r->crc == rec_crc(r) && (r->s.mask & ~0x1Fu) == 0u;
 }
 
 static int rec_blank(const uint8_t *b)
@@ -100,13 +100,8 @@ static int rec_blank(const uint8_t *b)
 
 void scene_log_pack(const scene_t *s, uint16_t seq, scene_rec_t *rec)
 {
-    uint32_t i;
     rec->seq = seq;
-    for (i = 0; i < 5u; i++) {
-        rec->v[i] = s->v[i];
-    }
-    rec->mask = s->mask;
-    rec->fade = s->fade;
+    rec->s = *s;
     rec->mark = SCENE_MARK;
     rec->crc = rec_crc(rec);
 }
@@ -116,7 +111,7 @@ int scene_log_find(const uint8_t *base, scene_t *out, uint16_t *seq)
 {
     int best = -1;
     uint16_t best_seq = 0;
-    uint32_t i, k;
+    uint32_t i;
     for (i = 0; i < SCENE_RECS; i++) {
         const scene_rec_t *r = (const scene_rec_t *)(base + i * SCENE_REC_BYTES);
         if (rec_valid(r) && (best < 0 || (int16_t)(uint16_t)(r->seq - best_seq) > 0)) {
@@ -125,12 +120,7 @@ int scene_log_find(const uint8_t *base, scene_t *out, uint16_t *seq)
         }
     }
     if (best >= 0) {
-        const scene_rec_t *r = (const scene_rec_t *)(base + (uint32_t)best * SCENE_REC_BYTES);
-        for (k = 0; k < 5u; k++) {
-            out->v[k] = r->v[k];
-        }
-        out->mask = r->mask;
-        out->fade = r->fade;
+        *out = ((const scene_rec_t *)(base + (uint32_t)best * SCENE_REC_BYTES))->s;
         *seq = best_seq;
     }
     return best;

@@ -5,9 +5,10 @@
  * round(65535 x (in / 255) ^ gamma) for every input, monotonic, 0 -> 0, 255 -> 65535, an input above 0 never 0
  * (test_cal.c, test_gamma_tables.c check all 512). */
 #include "gamma.h"
+#include "lto.h"
 #include "ultra.h"
 
-uint16_t gamma_apply(uint8_t mode, uint8_t v)
+MEASURED uint16_t gamma_apply(uint8_t mode, uint8_t v)
 {
     uint32_t x, y;
     if (mode != GAMMA_22 && mode != GAMMA_28) {

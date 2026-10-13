@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "smooth.h"
+#include "lto.h"
 
 void smooth_init(smooth_t *s)
 {
@@ -51,7 +52,7 @@ void smooth_fade(smooth_t *s, const uint16_t tgt[5], uint32_t now, uint32_t dur)
     start(s, tgt, now, dur);
 }
 
-uint8_t smooth_update(smooth_t *s, uint32_t now)
+MEASURED uint8_t smooth_update(smooth_t *s, uint32_t now)
 {
     uint32_t el;
     uint8_t i, changed = 0;

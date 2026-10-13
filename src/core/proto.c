@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "proto.h"
+#include "lto.h"
 
 void proto_init(proto_state_t *s, proto_mode_t mode, proto_t sticky)
 {
@@ -164,7 +165,7 @@ int proto_parse_data(proto_t p, const uint8_t *bits, slot_t *out)
     return 0;
 }
 
-int proto_parse(proto_t p, const uint8_t *bits, slot_t *out)
+MEASURED int proto_parse(proto_t p, const uint8_t *bits, slot_t *out)
 {
     uint32_t i, pos;
 

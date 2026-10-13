@@ -2,8 +2,14 @@
 # Copyright (C) 2026 QuinLED
 """Run the compiled firmware functions in tools/rv32emu.py and report executed instructions / estimated cycles.
 
-    python tools/measure.py            (after tools/build_target.sh)
+    python tools/measure.py            (after tools/build_target.sh and its measurement build, see below)
     FW_ELF=<path>/fw.elf python tools/measure.py   (another build, e.g. OUT=... EXTRA_CFLAGS=-DISENSE_AMP_GAIN=50)
+
+The build uses LTO: most measured functions are inlined into their only caller (core/lto.h). The ISR rows run
+in FW_ELF itself; the rest in its measurement build FW_ELF_MEASURE (default: <FW_ELF's folder>-measure/fw.elf), the
+same build with MEASURE=1, where those functions stay out of line:
+    MEASURE=1 OUT=build/target-measure bash tools/build_target.sh
+An LTO=0 build has every function: then FW_ELF alone.
 """
 import os
 import random
@@ -17,6 +23,7 @@ from rv32emu import Emu  # noqa: E402
 
 FW = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ELF = os.environ.get("FW_ELF") or os.path.join(FW, "build", "target", "fw.elf")
+MELF = os.environ.get("FW_ELF_MEASURE") or os.path.join(os.path.dirname(ELF) + "-measure", "fw.elf")
 F_CPU = 144e6
 FS = 36e6
 rng = random.Random(1)
@@ -277,8 +284,32 @@ def measure_monitor(emu, scratch):
     return rows
 
 
+def emulators():
+    """(the image itself, the one with every measured function: its measurement build unless it has them all)"""
+    rel = Emu(ELF)
+    need = ("ws_decode_frame", "dither_build", "ultra_render", "ultra_apply_slot", "isense_apply", "stagger_slew")
+    if all(f in rel.syms for f in need):
+        return rel, rel
+    if not os.path.exists(MELF):
+        sys.exit("%s has inlined the measured functions (LTO): build %s with MEASURE=1 (see the top of this file)"
+                 % (ELF, MELF))
+    return rel, Emu(MELF)
+
+
+def isense_init(emu, src):
+    """isense_init(&is, 1, 10000, 8000) in emu; when LTO inlined it there, in src and the struct copied over"""
+    if "isense_init" in emu.syms:
+        emu.call("isense_init", [emu.addr("is"), 1, 10000, 8000])
+        return
+    a, n = src.sym("is")
+    src.call("isense_init", [a, 1, 10000, 8000])
+    assert emu.sym("is")[1] == n
+    emu.poke(emu.addr("is"), src.peek(a, n))
+
+
 def main():
-    emu = Emu(ELF)
+    rel, emu = emulators()
+    meas = emu
     scratch = emu.addr("din_ring")                     # 4 KB, unused by the functions measured here
     copy = emu.addr("din_copy")
     rows = []
@@ -324,7 +355,9 @@ def main():
         c = emu.cycles()
     rows.append(("mcutemp_sample (once a second)", n, c, "%.1f C" % (struct.unpack("<h", emu.peek(mt + 6, 2))[0] / 10)))
 
-    # ---- poll ISR paths
+    # ---- poll ISR paths: in the image itself (the ISRs are never inlined)
+    emu = rel
+    i_img = len(rows)
     EDGE_CNT = 0x40000824                              # TIM4->CNT: DIN edges (TIM3 capture -> ITR2)
     DMA1_CH2_CNTR = 0x40020020
     sym = emu.addr
@@ -339,7 +372,7 @@ def main():
     # every poll tick also sums the current-sense result (isense_tick), so all poll ISR rows below include it
     ADC1_STATR, ADC1_RDATAR = 0x40012400, 0x4001244C
     isense = True
-    emu.call("isense_init", [sym("is"), 1, 10000, 8000])
+    isense_init(emu, meas)
     emu.mmio[ADC1_RDATAR] = 500                        # ~2 A
     FT = sym("ft")                                     # ftrack_t: last_cnt, idle, armed (+3), cap_state (+4), ...
     emu.wr(sym("rx_ready"), 1, 1)
@@ -408,6 +441,9 @@ def main():
     rows.append(("slew ISR TIM2 (per PWM period while moving)", n, emu.cycles(), ""))
     n = emu.call("slew3_isr")
     rows.append(("slew ISR TIM3 incl. W2 CCR3 shift (per period while moving)", n, emu.cycles(), ""))
+    if meas is not rel:
+        rows[i_img:] = [(r[0], r[1], r[2], (r[3] + " [image]").strip()) for r in rows[i_img:]]
+    emu = meas
 
     # ---- frame parse + config check
     emu.poke(scratch, pack([rng.getrandbits(1) for _ in range(112)]))
@@ -445,6 +481,9 @@ def main():
         rows += measure_isense(emu, scratch)
         rows += measure_monitor(emu, scratch)
 
+    print("image: %s" % ELF)
+    if meas is not rel:
+        print("rows not marked [image]: its measurement build %s" % MELF)
     print("%-52s %8s %8s %9s" % ("function / path", "instr", "cycles~", "time"))
     for name, n, c, note in rows:
         print("%-52s %8d %8d %7.1f us %s" % (name, n, c, c / F_CPU * 1e6, note))

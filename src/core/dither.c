@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "dither.h"
+#include "lto.h"
 #include "scratch.h"
 
 /* spread `count` marks evenly over len slots (Bresenham), starting at `phase`; mark -> hi, else lo */
@@ -55,7 +56,7 @@ static void skip_pattern(uint32_t total, uint32_t floor, uint32_t len, uint8_t p
     }
 }
 
-void dither_build(uint16_t v16, uint32_t steps, uint8_t len, const dither_opts_t *o, uint8_t phase,
+MEASURED void dither_build(uint16_t v16, uint32_t steps, uint8_t len, const dither_opts_t *o, uint8_t phase,
                   uint16_t *dst, uint8_t stride)
 {
     uint32_t num = (uint32_t)v16 * steps;     /* exact duty * 65535; <= 65535 * 65535 */
@@ -164,7 +165,7 @@ static void var_store(const uint16_t *arr, uint32_t len, uint16_t *dst, uint8_t 
     }
 }
 
-void dither_build_var(uint16_t v16, uint32_t steps, const uint16_t *arr, uint8_t len, uint8_t min_len,
+MEASURED void dither_build_var(uint16_t v16, uint32_t steps, const uint16_t *arr, uint8_t len, uint8_t min_len,
                       const dither_opts_t *o, uint8_t phase, uint16_t *dst, uint8_t stride, uint8_t right_aligned)
 {
     uint32_t floor = o->floor_policy == FLOOR_OFF ? 0u : o->floor, v = v16, rem = 32767u, i, on = 0, sum_p = 0;

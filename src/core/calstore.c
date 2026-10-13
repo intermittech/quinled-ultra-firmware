@@ -8,7 +8,7 @@ typedef char cal_rec_size_check[(sizeof(cal_rec_t) == CAL_REC_BYTES) ? 1 : -1];
 
 void cal_pack(const isense_cal_t *c, uint32_t seq, uint16_t count, cal_rec_t *rec)
 {
-    uint32_t i, l;
+    uint32_t i;
     uint8_t *b = (uint8_t *)rec;
     for (i = 0; i < CAL_REC_BYTES; i++) {
         b[i] = 0xFF;
@@ -16,23 +16,14 @@ void cal_pack(const isense_cal_t *c, uint32_t seq, uint16_t count, cal_rec_t *re
     rec->magic = CAL_MAGIC;
     rec->seq = seq;
     rec->count = count;
-    rec->levels = c->levels;
-    for (l = 0; l < ISENSE_LEVELS; l++) {
-        rec->pct[l] = c->pct[l];
-    }
-    rec->zero_ma = c->zero_ma;
-    for (i = 0; i < ISENSE_CH; i++) {
-        for (l = 0; l < ISENSE_LEVELS; l++) {
-            rec->ma[i][l] = c->ma[i][l];
-        }
-    }
+    rec->c = *c;
     rec->crc = ultra_crc16(b, CAL_REC_BYTES - 2u);
 }
 
 int cal_find(const uint8_t *page, isense_cal_t *out, uint32_t *seq, uint16_t *count)
 {
     int best = -1;
-    uint32_t i, l, best_seq = 0;
+    uint32_t i, best_seq = 0;
     for (i = 0; i < CAL_RECS; i++) {
         const cal_rec_t *r = (const cal_rec_t *)(page + i * CAL_REC_BYTES);
         if (r->magic == CAL_MAGIC && r->crc == ultra_crc16((const uint8_t *)r, CAL_REC_BYTES - 2u) &&
@@ -43,16 +34,7 @@ int cal_find(const uint8_t *page, isense_cal_t *out, uint32_t *seq, uint16_t *co
     }
     if (best >= 0) {
         const cal_rec_t *r = (const cal_rec_t *)(page + (uint32_t)best * CAL_REC_BYTES);
-        out->levels = r->levels;
-        for (l = 0; l < ISENSE_LEVELS; l++) {
-            out->pct[l] = r->pct[l];
-        }
-        out->zero_ma = r->zero_ma;
-        for (i = 0; i < ISENSE_CH; i++) {
-            for (l = 0; l < ISENSE_LEVELS; l++) {
-                out->ma[i][l] = r->ma[i][l];
-            }
-        }
+        *out = r->c;
         *seq = best_seq;
         *count = r->count;
     }

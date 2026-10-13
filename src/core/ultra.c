@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "ultra.h"
+#include "lto.h"
 
 #define RATE_NOMINAL (ULTRA_TICK_US << 16)
 #define LIGHT_IDX(l) ((l) < ULTRA_LIGHTS ? (l) : ULTRA_LIGHTS)
@@ -163,7 +164,7 @@ static void rebase(ultra_t *u, uint32_t delta_ms)
     }
 }
 
-void ultra_on_header(ultra_t *u, uint32_t tick, uint32_t host_us)
+MEASURED void ultra_on_header(ultra_t *u, uint32_t tick, uint32_t host_us)
 {
     ultra_clock_t *c = &u->clk;
     uint64_t h, est;
@@ -214,7 +215,7 @@ void ultra_clock_gap(ultra_t *u)
 }
 
 /* ================================================================================================ state */
-void ultra_init(ultra_t *u, uint32_t seed)
+MEASURED void ultra_init(ultra_t *u, uint32_t seed)
 {
     uint32_t i, j;
     uint8_t *b = (uint8_t *)u;
@@ -351,7 +352,7 @@ uint32_t ultra_on_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
     return ultra_slot_check(s) != 0 ? 0u : ultra_apply_slot(u, s, tick);
 }
 
-uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
+MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
 {
     uint8_t type = s[0], light = (uint8_t)(s[1] >> 4), flags = (uint8_t)(s[1] & 0x0Fu), seq = s[2];
     const uint8_t *p = s + ULTRA_PAYLOAD;
@@ -1024,7 +1025,7 @@ static uint8_t power_limit(const ultra_t *u, uint32_t *res)
     return f;
 }
 
-uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
+MEASURED uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
 {
     uint32_t now = host_ms(u, tick), res[5] = { 0, 0, 0, 0, 0 }, l, ch;
     uint8_t changed = 0;

@@ -2,8 +2,9 @@
  * Copyright (C) 2026 QuinLED */
 /* Soft start: see sstart.h. */
 #include "sstart.h"
+#include "lto.h"
 
-void ss_init(sstart_t *s, uint32_t uid)
+MEASURED void ss_init(sstart_t *s, uint32_t uid)
 {
     s->state = SS_ARMED;
     s->offset_ms = (uint8_t)(uid % (SS_OFFSET_MAX_MS + 1u));
@@ -16,7 +17,7 @@ void ss_retry(sstart_t *s, uint32_t now)
     s->t0 = now;
 }
 
-uint32_t ss_factor(sstart_t *s, uint32_t now, uint8_t lit, uint8_t on)
+MEASURED uint32_t ss_factor(sstart_t *s, uint32_t now, uint8_t lit, uint8_t on)
 {
     uint32_t el;
     if (s->state == SS_ARMED) {

@@ -8,6 +8,7 @@
 #include "../core/store.h"
 #include "../core/stagger.h"
 #include "../core/scratch.h"
+#include "../core/lto.h"
 
 uint32_t SystemCoreClock = 144000000u;
 
@@ -109,6 +110,7 @@ void pwm_set_phase(uint16_t o2, uint16_t o3)
     }
     slew_tgt2 = (uint16_t)(((uint32_t)o2 * cur_steps) >> 16);
     slew_tgt3 = (uint16_t)(((uint32_t)o3 * cur_steps) >> 16);
+    BARRIER();                                           /* cur_* (pwm_start) are written before the ISRs run */
     TIM2->INTFR = (uint16_t)~TIM_UIF;
     TIM3->INTFR = (uint16_t)~TIM_UIF;
     TIM2->DMAINTENR |= TIM_UIE;
@@ -234,6 +236,12 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
 {
     uint32_t mg, mw2;
 
+    /* phase slew off first (back at the fixed offsets below): a slew ISR still due runs now, on the old cur_* and
+     * running timers (with TIM2 stopped, its wait for count 24 would never end) */
+    TIM2->DMAINTENR = 0;
+    TIM3->DMAINTENR = 0;
+    (void)TIM3->DMAINTENR;                               /* the writes are done: no new request */
+    BARRIER();
     cur_steps = steps;
     cur_stagger = stagger;
     cur_len = len;
@@ -243,8 +251,6 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
 
     TIM1->CTLR1 = 0;
     TIM2->CTLR1 = 0;
-    TIM2->DMAINTENR = 0;
-    TIM3->DMAINTENR = 0;                                 /* phase slew off; back at the fixed offsets below */
     slew_pend2 = slew_pend3 = 0;
     DMA1_Channel1->CFGR = 0;
     /* TIM3 is not stopped: its CH1 captures DIN for the edge counter (TIM4) */
@@ -499,7 +505,7 @@ void gate_force_closed(void)
     GPIOA->BSHR = 1u << (FWD_PIN + 16u);
 }
 
-void gate_rearm(const gate_plan_t *g)
+NOINLINE void gate_rearm(const gate_plan_t *g)                 /* (poll ISR, frame end: lto.h) */
 {
     TIM4->DMAINTENR = 0;
     TIM4->CNT = 0;
@@ -722,15 +728,15 @@ void hw_init(void)
 #define FLASH_KEY2   0xCDEF89ABu
 
 static uint32_t store_seq;
-static int store_free = -1;                              /* next slot to write, tracked in RAM (see below) */
+static uint8_t store_free;                               /* next slot to write, tracked in RAM (see below) */
 
 /* The chip copies the 64 KB zero-wait flash into SRAM at reset; whether a read after programming returns the new
  * data before the next reset is not documented in the reference manual. So the page is only read here,
  * right after reset, and the write position is tracked in RAM from then on. */
-int settings_load(settings_t *s, store_ext_t *ext)
+MEASURED int settings_load(settings_t *s, store_ext_t *ext)
 {
     uint32_t seq;
-    store_free = store_next_free((const uint8_t *)SETTINGS_ADDR);
+    store_free = (uint8_t)store_next_free((const uint8_t *)SETTINGS_ADDR);
     if (store_find_ext((const uint8_t *)SETTINGS_ADDR, s, ext, &seq) < 0) {
         store_ext_clear(ext);
         return -1;
@@ -745,7 +751,9 @@ int settings_load(settings_t *s, store_ext_t *ext)
  * last values. Sequences as in WCH's ch32v20x_flash.c; BENCH: verify. Returns the stall estimate in us. */
 #define STORE_PROGRAM_US 2000u                           /* BENCH: measure (datasheet: fast page erase 16 ms) */
 #define STORE_ERASE_US   16000u
-/* the record being programmed: in the main loop's scratch (core/scratch.h) */
+/* the record being programmed: in the main loop's scratch (core/scratch.h), written as its own type and read here as
+ * half-words. flash_program's __disable_irq comes first: a compiler barrier, so the record is complete before it is
+ * read, inlined or not (LTO) */
 typedef char rec_fits_scratch[(sizeof(cal_rec_t) <= CORE_SCRATCH_WORDS * 4u &&
                                sizeof(store_slot_t) <= CORE_SCRATCH_WORDS * 4u &&
                                sizeof(scene_rec_t) <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
@@ -753,6 +761,7 @@ typedef char rec_fits_scratch[(sizeof(cal_rec_t) <= CORE_SCRATCH_WORDS * 4u &&
 static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
     uint32_t i, stall_us = STORE_PROGRAM_US;
+    __disable_irq();                                     /* (the poll tick must not re-arm the gate meanwhile) */
     gate_force_closed();
     /* a phase slew pauses: no period may stay stretched while interrupts are off; it resumes afterwards */
     uint16_t slewing = (uint16_t)((TIM2->DMAINTENR | TIM3->DMAINTENR) & TIM_UIE);
@@ -763,7 +772,6 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
         TIM3->ATRLR = (uint16_t)(cur_steps - 1u);
     }
     slew_pend2 = slew_pend3 = 0;
-    __disable_irq();
     RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV2;
     FLASH->KEYR = FLASH_KEY1;
     FLASH->KEYR = FLASH_KEY2;
@@ -799,22 +807,29 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
     return stall_us;
 }
 
+/* The single-page logs (settings, current calibration, energy): the record (in core_scratch) goes into slot *next,
+ * the write position its load found at boot and tracked in RAM since; a full page is erased first and the record
+ * goes into slot 0 (without may_erase: nothing is written, returns 0). Returns the stall estimate in us. */
+static uint32_t page_append(uint32_t page, uint8_t *next, uint32_t bytes, uint32_t n, uint32_t may_erase)
+{
+    uint32_t idx = *next, erase = 0;
+    if (idx >= n) {
+        if (!may_erase) {
+            return 0;
+        }
+        erase = page;
+        idx = 0;
+    }
+    *next = (uint8_t)(idx + 1u);                         /* n: the next record erases the page */
+    return flash_program(page + idx * bytes, (const uint16_t *)core_scratch, bytes / 2u, erase);
+}
+
 /* Appends one 32-byte record (16 half-words, v2 with the extension); erases the page first when all 8 slots are
  * used. */
-uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
+MEASURED uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
 {
-    store_slot_t *slot = (store_slot_t *)core_scratch;
-    int free_slot = store_free < 0 ? store_next_free((const uint8_t *)SETTINGS_ADDR) : store_free;
-    uint32_t erase = 0;
-
-    store_pack_ext(s, ext, ++store_seq, slot);
-    if (free_slot >= (int)STORE_SLOTS) {
-        erase = SETTINGS_ADDR;
-        free_slot = 0;
-    }
-    store_free = free_slot + 1;                          /* STORE_SLOTS: the next save erases the page */
-    return flash_program(SETTINGS_ADDR + (uint32_t)free_slot * STORE_SLOT_BYTES, (const uint16_t *)slot,
-                         STORE_SLOT_BYTES / 2u, erase);
+    store_pack_ext(s, ext, ++store_seq, (store_slot_t *)core_scratch);
+    return page_append(SETTINGS_ADDR, &store_free, STORE_SLOT_BYTES, STORE_SLOTS, 1u);
 }
 
 /* Power-on scene log: SCENE_LOG_PAGES pages below the settings page, 16-byte records (core/scene.c). As with the
@@ -823,14 +838,14 @@ static uint32_t scene_next;                              /* record index to writ
 static uint8_t scene_erase;                              /* erase its page first */
 static uint16_t scene_seq;
 
-int scene_load(scene_t *sc)
+MEASURED int scene_load(scene_t *sc)
 {
     int newest = scene_log_find((const uint8_t *)SCENE_LOG_ADDR, sc, &scene_seq);
     scene_next = (uint32_t)scene_log_next((const uint8_t *)SCENE_LOG_ADDR, newest, &scene_erase);
     return newest < 0 ? -1 : 0;
 }
 
-uint32_t scene_store(const scene_t *sc)
+MEASURED uint32_t scene_store(const scene_t *sc)
 {
     scene_rec_t *rec = (scene_rec_t *)core_scratch;
     uint32_t idx = scene_next, erase = 0;
@@ -847,11 +862,11 @@ uint32_t scene_store(const scene_t *sc)
  * right after reset; the write position is tracked in RAM. */
 static uint32_t cal_seq;
 static uint16_t cal_cnt;
-static int cal_free = -1;
+static uint8_t cal_free;
 
-int cal_load(isense_cal_t *c, uint16_t *count)
+MEASURED int cal_load(isense_cal_t *c, uint16_t *count)
 {
-    cal_free = cal_next_free((const uint8_t *)CAL_PAGE_ADDR);
+    cal_free = (uint8_t)cal_next_free((const uint8_t *)CAL_PAGE_ADDR);
     if (cal_find((const uint8_t *)CAL_PAGE_ADDR, c, &cal_seq, &cal_cnt) < 0) {
         cal_cnt = 0;
         *count = 0;
@@ -861,53 +876,34 @@ int cal_load(isense_cal_t *c, uint16_t *count)
     return c->levels != 0u ? 0 : -1;
 }
 
-uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
+MEASURED uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
 {
-    cal_rec_t *rec = (cal_rec_t *)core_scratch;
-    int slot = cal_free < 0 ? cal_next_free((const uint8_t *)CAL_PAGE_ADDR) : cal_free;
-    uint32_t erase = 0;
     if (c->levels != 0u) {
         cal_cnt++;
     }
-    cal_pack(c, ++cal_seq, cal_cnt, rec);
-    if (slot >= (int)CAL_RECS) {
-        erase = CAL_PAGE_ADDR;
-        slot = 0;
-    }
-    cal_free = slot + 1;
+    cal_pack(c, ++cal_seq, cal_cnt, (cal_rec_t *)core_scratch);
     *count = cal_cnt;
-    return flash_program(CAL_PAGE_ADDR + (uint32_t)slot * CAL_REC_BYTES, (const uint16_t *)rec, CAL_REC_BYTES / 2u,
-                         erase);
+    return page_append(CAL_PAGE_ADDR, &cal_free, CAL_REC_BYTES, CAL_RECS, 1u);
 }
 
 /* Energy log (core/energy.h): one page of 8-byte entries; read only right after reset, the write position is tracked
  * in RAM. */
-static uint32_t energy_next;
+static uint8_t energy_next;
 
-uint32_t energy_load(void)
+MEASURED uint32_t energy_load(void)
 {
-    energy_next = energy_log_next((const uint8_t *)ENERGY_ADDR);
+    energy_next = (uint8_t)energy_log_next((const uint8_t *)ENERGY_ADDR);
     return energy_log_find((const uint8_t *)ENERGY_ADDR);
 }
 
-uint32_t energy_store(uint32_t wh, uint8_t may_erase)
+MEASURED uint32_t energy_store(uint32_t wh, uint8_t may_erase)
 {
-    uint32_t idx = energy_next, erase = 0;
-    if (idx >= ENERGY_RECS) {
-        if (!may_erase) {
-            return 0;
-        }
-        erase = ENERGY_ADDR;
-        idx = 0;
-    }
-    energy_next = idx + 1u;
     core_scratch[0] = wh;
     core_scratch[1] = ~wh;
-    return flash_program(ENERGY_ADDR + idx * ENERGY_REC_BYTES, (const uint16_t *)core_scratch, ENERGY_REC_BYTES / 2u,
-                         erase);
+    return page_append(ENERGY_ADDR, &energy_next, ENERGY_REC_BYTES, ENERGY_RECS, may_erase);
 }
 
-uint32_t energy_clear(void)
+MEASURED uint32_t energy_clear(void)
 {
     energy_next = 0;
     return flash_program(ENERGY_ADDR, 0, 0u, ENERGY_ADDR);
@@ -917,7 +913,7 @@ uint32_t energy_clear(void)
  * mask and CRCs of what it stored). */
 typedef char fx_store_fits[(ULTRA_FX_HDR + ULTRA_LIGHTS * ULTRA_HEAD_BYTES <= 512u && ULTRA_HEAD_BYTES == 98u) ? 1 : -1];
 
-uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
+MEASURED uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
 {
     uint8_t *h = (uint8_t *)core_scratch;
     uint32_t i, us = flash_program(SCENE_FX_ADDR, 0, 0u, SCENE_FX_ADDR);   /* erases page 0: the header goes */
@@ -925,6 +921,7 @@ uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_
         return us;
     }
     us += flash_program(SCENE_FX_ADDR + 256u, 0, 0u, SCENE_FX_ADDR + 256u);
+    core_scratch[2] = 0u;                                /* the 2 spare bytes (10, 11): 0, not leftover scratch */
     for (i = 0; i < ULTRA_LIGHTS; i++) {
         if (mask & (1u << i)) {
             us += flash_program(SCENE_FX_ADDR + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES, (const uint16_t *)&u->light[i],

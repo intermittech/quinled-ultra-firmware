@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "mcutemp.h"
+#include "lto.h"
 
-void mcutemp_init(mcutemp_t *t)
+MEASURED void mcutemp_init(mcutemp_t *t)
 {
     t->acc = 0;
     t->offset_c10 = 0;
@@ -36,7 +37,7 @@ int mcutemp_convert(uint32_t ts2, uint32_t vref2, int16_t *c10, uint16_t *vdda_m
     return 1;
 }
 
-void mcutemp_sample(mcutemp_t *t, uint32_t ts2, uint32_t vref2)
+MEASURED void mcutemp_sample(mcutemp_t *t, uint32_t ts2, uint32_t vref2)
 {
     int16_t c;
     uint16_t v;

@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Supply dips: see vdip.h. */
 #include "vdip.h"
+#include "lto.h"
 
 void vdip_init(vdip_t *d)
 {
@@ -12,7 +13,7 @@ void vdip_init(vdip_t *d)
     }
 }
 
-void vdip_ms(vdip_t *d, uint32_t now, uint32_t sum2, uint32_t n, int32_t i_ma)
+MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t sum2, uint32_t n, int32_t i_ma)
 {
     vdip_ev_t *c = &d->cur;
     uint32_t x, ref;

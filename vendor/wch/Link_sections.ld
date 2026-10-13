@@ -112,8 +112,11 @@ SECTIONS
     	*(.data .data.*)
     	*(.gnu.linkonce.d.*)
 		. = ALIGN(8);
-    	PROVIDE( __global_pointer$ = . + 0x800 );
-    	*(.sdata .sdata.*)
+    	PROVIDE( __global_pointer$ = . + 0x600 );	/* QuinLED: not + 0x800. gp's +-2 KB window then starts 0x200
+							   below the small data: all of .sdata / .sbss (~3.1 KB) is in it,
+							   clear of the reserve the linker keeps at the window's edges */
+    	*(SORT_BY_ALIGNMENT(.sdata) SORT_BY_ALIGNMENT(.sdata.*))	/* QuinLED: by alignment, here and in .sbss: LTO
+											   emits the variables in its own order (less padding) */
 		*(.sdata2.*)
     	*(.gnu.linkonce.s.*)
     	. = ALIGN(4);
@@ -124,7 +127,7 @@ SECTIONS
 	{
 		. = ALIGN(4);
 		PROVIDE( _sbss = .);
-  	    *(.sbss*)
+  	    *(SORT_BY_ALIGNMENT(.sbss*))
         *(.gnu.linkonce.sb.*)
 		*(.bss*)
      	*(.gnu.linkonce.b.*)		

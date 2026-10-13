@@ -80,8 +80,16 @@ class Emu:
             return
         m[o:o + n] = (v & ((1 << (8 * n)) - 1)).to_bytes(n, "little")
 
-    def addr(self, sym):
-        return self.syms[sym][0]
+    def sym(self, name):
+        """(address, size); LTO may rename a static to name.lto_priv.N (two files used the same name)"""
+        if name not in self.syms:
+            k = [n for n in self.syms if n.startswith(name + ".lto_priv.")]
+            if len(k) == 1:
+                return self.syms[k[0]]
+        return self.syms[name]
+
+    def addr(self, name):
+        return self.sym(name)[0]
 
     def poke(self, a, b):
         m, o = self._mem(a, len(b))

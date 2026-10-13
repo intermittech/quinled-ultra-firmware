@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "ws_decode.h"
+#include "lto.h"
 
 /* leading zeros of a byte (8 for 0) */
 static const uint8_t clz8[256] = {
@@ -16,7 +17,7 @@ static const uint8_t clz8[256] = {
 
 /* Walks the level transitions word by word: t has a bit set wherever a sample differs from the previous
  * one, so each word costs a few instructions plus ~10 per edge (two edges per WS bit). */
-int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, const ws_timing_t *t, uint8_t *out)
+MEASURED int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, const ws_timing_t *t, uint8_t *out)
 {
     uint32_t nwords = nsamples >> 4, k, b = 0, prev = 0, rise = 0, fall = 0, seen_rise = 0;
     const uint32_t thr = t->thr_one, hmax = t->high_max, gmin = t->gap_min;
@@ -59,7 +60,7 @@ int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, cons
     return seen_rise ? WS_ERR_TRUNCATED : WS_ERR_NO_EDGE;
 }
 
-int ws_decode_last(const uint16_t *buf, uint32_t nsamples, const ws_timing_t *t, uint8_t *out)
+MEASURED int ws_decode_last(const uint16_t *buf, uint32_t nsamples, const ws_timing_t *t, uint8_t *out)
 {
     uint32_t nwords = nsamples >> 4, k, n = 0, prev, rise = 0, fall = 0, seen_rise = 0, hi = 0, lo = 0;
     const uint32_t thr = t->thr_one, hmax = t->high_max, gmin = t->gap_min;

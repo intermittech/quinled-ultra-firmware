@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "frame_rx.h"
+#include "lto.h"
 
 void frx_init(frx_t *r, proto_mode_t mode, proto_t sticky)
 {
@@ -11,7 +12,7 @@ void frx_init(frx_t *r, proto_mode_t mode, proto_t sticky)
     r->ws_proto = PROTO_NONE;
 }
 
-int frx_tail_wanted(const frx_t *r, uint32_t total)
+NOINLINE int frx_tail_wanted(const frx_t *r, uint32_t total)   /* (poll ISR, frame end: lto.h) */
 {
     return proto_tail_wanted(total) ||
            (r->ps.mode == PMODE_AUTO && (r->ps.locked == PROTO_NONE || r->ps.provisional) && total >= ULTRA_HDR_BITS);
