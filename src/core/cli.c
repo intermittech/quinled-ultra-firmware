@@ -55,6 +55,17 @@ static void wnum(cli_t *c, uint32_t v)
     c->write(utoa10(v, b + sizeof b));
 }
 
+/* mV in volts with two decimals, rounded to the nearest 10 mV: 12234 -> "12.23 V", 12235 -> "12.24 V" (the console;
+ * telemetry stays in mV) */
+static void wvolt(cli_t *c, uint32_t mv)
+{
+    uint32_t cv = (mv + 5u) / 10u;
+    wnum(c, cv / 100u);
+    c->write(cv % 100u < 10u ? ".0" : ".");
+    wnum(c, cv % 100u);
+    c->write(" V");
+}
+
 static void kv(cli_t *c, const char *k, uint32_t v)
 {
     c->write(k);
@@ -84,8 +95,7 @@ void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle
     }
     c->write(" mA; supply ");
     if (supply_mv != 0u) {
-        wnum(c, supply_mv);
-        c->write(" mV");
+        wvolt(c, supply_mv);
     } else {
         c->write("n/a");
     }
@@ -270,26 +280,26 @@ static void status(cli_t *c)
         wnum(c, (uint32_t)t / 10u);
         c->write(".");
         wnum(c, (uint32_t)t % 10u);
-        c->write(" C (die), vdda_mv=");
-        wnum(c, s->vdda_mv);
+        c->write(" C (die), vdda=");
+        wvolt(c, s->vdda_mv);
         c->write("\r\n");
     }
-    c->write("supply_mv=");
-    wnum(c, s->vs_supply_mv);
+    c->write("supply=");
+    wvolt(c, s->vs_supply_mv);
     c->write(" (min ");
-    wnum(c, s->vs_supply_min_mv);
+    wvolt(c, s->vs_supply_min_mv);
     c->write(", max ");
-    wnum(c, s->vs_supply_max_mv);
+    wvolt(c, s->vs_supply_max_mv);
     c->write(" since the last status)");
     if (s->isense) {
         /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A) */
         uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
         c->write("\r\ninput_mw=");
         wnum(c, s->vs_supply_mv / 10u * ma / 100u);
-        c->write(" (supply_mv x current_ma)");
+        c->write(" (supply x current)");
     }
-    c->write("\r\ntp8_mv=");
-    wnum(c, s->vs_aux_mv);
+    c->write("\r\ntp8=");
+    wvolt(c, s->vs_aux_mv);
     c->write(" (PA0, spare input)\r\n");
     c->write(s->test_mode ? "test_mode=on (test pad grounded)\r\n" : "test_mode=off\r\n");
     c->write("board_limit=");

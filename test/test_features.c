@@ -377,9 +377,28 @@ static void test_cli(void)
     st.vs_supply_min_mv = 23980;
     st.vs_supply_max_mv = 24050;
     run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "supply_mv=24012 (min 23980, max 24050 since the last status)\r\n"
-                          "input_mw=130422 (supply_mv x current_ma)\r\ntp8_mv=1650 (PA0, spare input)\r\n") != NULL,
+    CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V since the last status)\r\n"
+                          "input_mw=130422 (supply x current)\r\ntp8=1.65 V (PA0, spare input)\r\n") != NULL,
           "status voltages, input power (24.012 V x 5432 mA)");
+    /* volts with two decimals, rounded to 10 mV, no float */
+    {
+        static const struct { uint32_t mv; const char *txt; } VR[] = {
+            { 12234u, "supply=12.23 V (" }, { 12235u, "supply=12.24 V (" }, { 0u, "supply=0.00 V (" },
+            { 4u, "supply=0.00 V (" }, { 5u, "supply=0.01 V (" }, { 1095u, "supply=1.10 V (" },
+            { 9995u, "supply=10.00 V (" }, { 75440u, "supply=75.44 V (" },
+        };
+        uint32_t k;
+        for (k = 0; k < sizeof VR / sizeof VR[0]; k++) {
+            st.vs_supply_mv = VR[k].mv;
+            run_cli(&c, "status\r");
+            CHECK(strstr(cli_out, VR[k].txt) != NULL, "%u mV shows as %s", VR[k].mv, VR[k].txt);
+        }
+        st.mcu_temp_c10 = 350;
+        st.vdda_mv = 3281;
+        run_cli(&c, "status\r");
+        CHECK(strstr(cli_out, "mcu_temp=35.0 C (die), vdda=3.28 V\r\n") != NULL, "status: the 3.3 V rail in volts");
+        st.vs_supply_mv = 24012;
+    }
     st.isense = 0;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "input_mw") == NULL, "no input power without the current sense");

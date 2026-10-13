@@ -202,7 +202,7 @@ static void test_testjig(void)
         cli_out[0] = 0;
         cli_test_report(&cc, ma, 33, 7, 24012);
         CHECK(strcmp(cli_out, "test @33%: R 136 mA, G 131 mA, B 398 mA, W1 795 mA, W2 0 mA; "
-                              "est. @100%: R 412, G 397, B 1206, W1 2409, W2 0 mA; supply 24012 mV (cycle 7)\r\n") == 0,
+                              "est. @100%: R 412, G 397, B 1206, W1 2409, W2 0 mA; supply 24.01 V (cycle 7)\r\n") == 0,
               "report line: %s", cli_out);
         cli_out[0] = 0;
         cli_test_report(&cc, ma, 33, 1, 0);
