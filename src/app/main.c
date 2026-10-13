@@ -38,12 +38,13 @@
 #include "../core/scene.h"
 #include "../core/smooth.h"
 #include "../core/stagger.h"
+#include "../core/testjig.h"
 #include "../core/ultra.h"
 #include "../core/upd_app.h"
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.5.0"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.5.1"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -245,6 +246,7 @@ static uint32_t temp_ms;
 static uint8_t temp_started;
 /* voltage channels (core/vsense.h): PA5 supply (BOARD_VSENSE), PA0 the spare input on TP8 */
 static vsense_t vs_sup, vs_aux;
+static testjig_t tj;                       /* test jig mode (core/testjig.h): TP9 grounded */
 
 /* every ms: the injected group's voltage pairs of that ms */
 static void vsense_service(void)
@@ -339,8 +341,8 @@ static void limit_update(void)
  * 25 / 50 / 75 / 100 %), 5..100 = each channel alone at that duty only */
 static uint8_t isense_calibrate(uint8_t duty_pct)
 {
-    if (!is.enabled || is.tripped != ISENSE_TRIP_NONE) {
-        return 0;
+    if (!is.enabled || is.tripped != ISENSE_TRIP_NONE || tj.active) {
+        return 0;                          /* (the test jig's pattern keeps the outputs) */
     }
     isense_cal_start(&is, duty_pct == 0u ? 0u : (uint16_t)((uint32_t)duty_pct * 65535u / 100u));
     ack_stop(&ack);                        /* the calibration pattern is the feedback */
@@ -435,7 +437,9 @@ static void outputs_update(uint8_t ack_on)
 {
     uint16_t v[5];
     uint8_t i;
-    if (ack.active) {
+    if (tj.active) {
+        tj_outputs(&tj, ms_now, v);        /* test jig: the fade over the five channels; data doesn't change it */
+    } else if (ack.active) {
         uint16_t lvl = ack_on ? 16384u : 0u;          /* 25 % */
         for (i = 0; i < 5u; i++) {
             v[i] = (eff.feedback_ch == 1u || (eff.feedback_ch == 0u && i == CH_R)) ? lvl : 0u;
@@ -1035,9 +1039,28 @@ static void power_service(uint8_t ack_on)
     pwrev_update(&pw, ms_now, &in);
     ocled_update(&ocl, ms_now, in.limiting, in.trip_cause);
     lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
+    if (tj.active && ocl.show == OCLED_OFF && !ack.active) {
+        lv = tj_led(&tj, ms_now);          /* test jig: on, off at each cycle start (overcurrent / acknowledge win) */
+    }
     if (lv != led_now) {
         led_now = lv;
         led_set(lv);
+    }
+}
+
+/* every ms: the test jig's pad (debounced), and in test mode the pattern (every ms) and its current report */
+static void testjig_service(void)
+{
+    if (tj_pad(&tj, ms_now, TESTJIG_PAD_LOW())) {
+        uart_write(tj.active ? "test mode: on (TP9 grounded)\r\n" : "test mode: off\r\n");
+        outputs_dirty = 1;
+    }
+    if (!tj.active) {
+        return;
+    }
+    outputs_dirty = 1;
+    if (tj_measure(&tj, ms_now, is.i_ms, is.zero_ma)) {
+        cli_test_report(&cli, tj.ma, TJ_PEAK_PCT, tj.cycles, BOARD_VSENSE && vs_sup.valid ? vs_sup.mv : 0u);
     }
 }
 
@@ -1088,6 +1111,7 @@ static void status_snapshot(void)
     stat.lim_conn_ma = clim.connected_ma;
     stat.mcu_temp_c10 = mt.c10;
     stat.vdda_mv = mt.vdda_mv;
+    stat.test_mode = tj.active;
     stat.vs_supply_fitted = BOARD_VSENSE;
     stat.vs_supply_mv = vs_sup.valid ? vs_sup.mv : 0u;
     vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
@@ -1118,6 +1142,7 @@ int main(void)
     scene_boot(&srun, &scene_stored);
     dark_init(&dk);
     ocled_init(&ocl);
+    tj_init(&tj, TJ_CYCLE_MS);
     pwrev_init(&pw, ms_now);
     scene_budget_init(&sbudget, 0);
     config_rx_init(&rx);
@@ -1209,6 +1234,7 @@ int main(void)
             }
             was_active = ack.active;
             isense_service();              /* measurement of the last ms: limit, trips, calibration */
+            testjig_service();
             power_service(ack_on);         /* power events, D9: overcurrent signal / acknowledge patterns */
             signal_loss_check();
             upd_service();

@@ -72,6 +72,7 @@ typedef struct {
     uint8_t  vs_supply_fitted;
     uint32_t vs_supply_mv, vs_supply_min_mv, vs_supply_max_mv;   /* min / max: since the last status */
     uint32_t vs_aux_mv;
+    uint8_t  test_mode;            /* test jig mode (core/testjig.h): the test pad is grounded */
     /* the overcurrent signal on D9 (core/ocled.h), every board */
     uint8_t  oc_show;              /* OCLED_*: 0 off, 1 limit, 2 trip */
     uint8_t  oc_cause;             /* the last trip's cause: 1 short, 2 overload */
@@ -98,6 +99,9 @@ void cli_feed(cli_t *c, char ch);
 /* "QuinLED dig2analog-ultra firmware v<version>, Copyright (C) 2026 QuinLED, GPL-3.0, source: ..." and the
  * bootloader / hardware / app line: at boot, first in `status`, and `version` */
 void cli_banner(cli_t *c);
+/* test jig mode, after each cycle: each channel's current at the peak of pct % (mA), its estimate at 100 %, and the
+ * supply (mV, 0 = not read) */
+void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv);
 /* exposed for tests */
 void cli_exec(cli_t *c, const char *line);
 

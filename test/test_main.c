@@ -176,6 +176,7 @@ static void test_decoder(void)
 #include "test_ocled.c"
 #include "test_pwrev.c"
 #include "test_vsense.c"
+#include "test_testjig.c"
 
 /* ------------------------------------------------------------------------------------------------ proto */
 static void test_proto(void)
@@ -417,6 +418,7 @@ int main(void)
     test_pwrev();
     test_vsense();
     test_rxpower();
+    test_testjig();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;
 }

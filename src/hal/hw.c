@@ -643,11 +643,16 @@ void hw_init(void)
     pin_cfg(GPIOA, 7, CFG_ANALOG);                       /* the current sense */
     pin_cfg(GPIOA, 8, CFG_AF_PP);
     pin_cfg(GPIOA, 9, CFG_AF_PP);
-    GPIOA->BCR = 1u << 10;                               /* ODR 0: pull-down. PA10, PB10 (TP9), PB14: unused here */
+    GPIOA->BCR = 1u << 10;                               /* ODR 0: pull-down. PA10, PB14: unused here */
     pin_cfg(GPIOA, 10, CFG_IN_PULL);
-    GPIOB->BCR = (1u << 10) | (1u << 14);
-    pin_cfg(GPIOB, 10, CFG_IN_PULL);
+    GPIOB->BCR = 1u << 14;
     pin_cfg(GPIOB, 14, CFG_IN_PULL);
+#if BOARD_TESTJIG
+    GPIOB->BSHR = 1u << 10;                              /* ODR 1: pull-up. PB10 (TP9): the test jig's pad */
+#else
+    GPIOB->BCR = 1u << 10;
+#endif
+    pin_cfg(GPIOB, 10, CFG_IN_PULL);                     /* input (TIM2 CC3E stays 0: no output) */
     led_set(0);
     pin_cfg(GPIOB, 15, CFG_OUT_PP);                      /* status LED D9 */
     pin_cfg(GPIOB, 11, CFG_AF_PP);

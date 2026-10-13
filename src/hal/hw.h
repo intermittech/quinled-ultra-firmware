@@ -58,6 +58,12 @@ uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2);
  * Call pwm_force_off(0) with interrupts off (it must not undo a trip the poll tick raised meanwhile). */
 void pwm_force_off(uint8_t off);
 void led_set(uint8_t on);
+/* the test jig's pad (TP9 = PB10, pull-up) reads low: grounded */
+#if BOARD_TESTJIG
+#define TESTJIG_PAD_LOW() ((uint8_t)((GPIOB->INDR & (1u << 10)) == 0u))
+#else
+#define TESTJIG_PAD_LOW() ((uint8_t)0u)
+#endif
 /* settings + their extension (store_ext_t: current sense limit / calibration; all 0xFF from a v1 record) */
 int  settings_load(settings_t *s, store_ext_t *ext);
 /* 1-2 ms (append), +16 ms when the page needs erasing; interrupts are off meanwhile. Returns that time in us

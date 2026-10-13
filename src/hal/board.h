@@ -17,7 +17,7 @@
  *  11       PB11       PWM B: TIM2_CH4 (partial remap 2)                                              PWM_B
  *   9 / 8   PB1 / PB0  PWM W1 / W2: TIM3_CH4 / TIM3_CH3 (W2 right-aligned)                            PWM_W1 / PWM_W2
  *  13       PB15       status LED D9 (R30 1 k), active high                                           STATUS
- *  10       PB10       input with pull-down (receiver: return-channel USART3_TX)                     TP9
+ *  10       PB10       test jig input: pull-up, grounded by the jig (receiver: return-channel TX)    TP9
  *  12 / 18  PB14 / PA10 inputs with pull-down (receiver: input / output transceiver DE)               -
  *  16 / 17  PA13 / PA14 SWD                                                                           TP3 / TP4
  * Timers: TIM1 / TIM2 / TIM3 = PWM at 0, 1/3 and 2/3 of the period; TIM4 (no pins) counts DIN edges from TIM3's
@@ -44,6 +44,15 @@
  * in the console only), the receiver reads its bus there. 0 keeps PA5 as SPI1_SCK, for a bench check of the sampler. */
 #ifndef BOARD_VSENSE
 #define BOARD_VSENSE     1
+#endif
+
+/* test jig mode (core/testjig.h): TP9 = PB10 with the internal pull-up, grounded by the jig. PB10 because the
+ * dig2analog-ultra never needs it otherwise (its data line is one-way: no return channel) and it is 5 V tolerant;
+ * PA0 / TP8 stays the spare analog input. The receiver uses PB10 for its return channel's TX: no test pad there yet. */
+#if BOARD == BOARD_D2A_ULTRA
+#define BOARD_TESTJIG    1
+#else
+#define BOARD_TESTJIG    0
 #endif
 
 /* board current sense (core/isense.h): soldered fuse + 2 mohm shunt + TPA158A3 (gain 100) -> 1 k / 47 nF -> PA7 */

@@ -63,6 +63,37 @@ static void kv(cli_t *c, const char *k, uint32_t v)
     c->write("\r\n");
 }
 
+void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
+{
+    static const char *const name[5] = { "R ", "G ", "B ", "W1 ", "W2 " };
+    uint8_t i, k;
+    for (k = 0; k < 2u; k++) {             /* as measured at pct %, then scaled to 100 % */
+        c->write(k == 0u ? "test @" : " mA; est. @100%: ");
+        if (k == 0u) {
+            wnum(c, pct);
+            c->write("%: ");
+        }
+        for (i = 0; i < 5u; i++) {
+            uint32_t v = ma[i] > 0 ? (uint32_t)ma[i] : 0u;
+            if (i != 0u) {
+                c->write(k == 0u ? " mA, " : ", ");
+            }
+            c->write(name[i]);
+            wnum(c, k == 0u ? v : (v * 100u + pct / 2u) / (pct ? pct : 1u));
+        }
+    }
+    c->write(" mA; supply ");
+    if (supply_mv != 0u) {
+        wnum(c, supply_mv);
+        c->write(" mV");
+    } else {
+        c->write("n/a");
+    }
+    c->write(" (cycle ");
+    wnum(c, cycle);
+    c->write(")\r\n");
+}
+
 void cli_banner(cli_t *c)
 {
     static const char *const app[] = { "standalone build (no bootloader, no updates over the data line)",
@@ -264,6 +295,7 @@ static void status(cli_t *c)
     c->write("\r\ntp8_mv=");
     wnum(c, s->vs_aux_mv);
     c->write(" (PA0, spare input)\r\n");
+    c->write(s->test_mode ? "test_mode=on (test pad grounded)\r\n" : "test_mode=off\r\n");
     c->write("board_limit=");
     if (s->lim_ma == 0xFFFFu) {
         c->write("none");

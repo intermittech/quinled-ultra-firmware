@@ -59,6 +59,7 @@ See the **[wiki](https://github.com/intermittech/quinled-ultra-firmware/wiki)**:
 | [Ultra protocol](https://github.com/intermittech/quinled-ultra-firmware/wiki/Ultra-Protocol) | Summary; the full specification is in [quinled-ultra-protocol](https://github.com/intermittech/quinled-ultra-protocol) |
 | [Current sense](https://github.com/intermittech/quinled-ultra-firmware/wiki/Current-Sense) | Board current limit, short protection, calibration, the D9 overcurrent signal; local on the board, not reported back |
 | [Pin map](https://github.com/intermittech/quinled-ultra-firmware/wiki/Pin-Map) | The rev 0.4 pins, the voltage channels, hardware ids and revisions |
+| [Test jig](https://github.com/intermittech/quinled-ultra-firmware/wiki/Test-Jig) | Ground TP9: every channel fades in turn, the currents on the console (production check) |
 | [Building](https://github.com/intermittech/quinled-ultra-firmware/wiki/Building) · [Flashing over SWD](https://github.com/intermittech/quinled-ultra-firmware/wiki/Flashing-Over-SWD) | For developers |
 | [Development and tests](https://github.com/intermittech/quinled-ultra-firmware/wiki/Development-And-Tests) · [Bench plan](https://github.com/intermittech/quinled-ultra-firmware/wiki/Bench-Plan) | Layout, host tests, measurements, what still needs hardware |
 | [Releases and signing](https://github.com/intermittech/quinled-ultra-firmware/wiki/Releases-And-Signing) | For maintainers |
