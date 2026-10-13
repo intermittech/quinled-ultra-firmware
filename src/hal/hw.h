@@ -11,6 +11,8 @@
 #include "../core/scene.h"
 #include "../core/store.h"
 #include "../core/calstore.h"
+#include "../core/energy.h"
+#include "../core/ultra.h"
 #include "board.h"
 
 /* PWM dither tables, written by the main loop, read by DMA once per PWM period (into the CCRs). pwm_table()
@@ -25,6 +27,7 @@ extern uint16_t din_ring[DIN_RING_WORDS];
 extern uint16_t din_copy[DIN_COPY_WORDS];
 
 void hw_init(void);
+uint32_t hw_uid_hash(void);                      /* a hash of the chip's 96-bit unique id (ESIG, 0x1FFFF7E8) */
 uint32_t hw_reset_flags(void);                   /* RCC reset flags captured at boot */
 void watchdog_kick(void);
 /* (re)start the PWM timers: period `steps` counts (1440..65535), table length `len`. stagger: TIM1 / TIM2 / TIM3 a
@@ -73,6 +76,14 @@ uint32_t settings_store(const settings_t *s, const store_ext_t *ext);
 int  scene_load(scene_t *sc);
 uint32_t scene_store(const scene_t *sc);
 uint32_t hw_flash_half(uint32_t addr, uint16_t v);    /* firmware update: one status record (stall in us) */
+/* the energy log (core/energy.h): the newest stored value (Wh, 0 = none); store one (0 = not written: the page is
+ * full and may_erase is 0); erase it (factory reset) */
+uint32_t energy_load(void);
+uint32_t energy_store(uint32_t wh, uint8_t may_erase);
+uint32_t energy_clear(void);
+/* the power-on effect store (two pages at SCENE_FX_ADDR, core/ultra.h ULTRA_FX_*; loaded with ultra_fx_load): the
+ * lights in mask with their CRC-8s (none: the store is erased), the header last */
+uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS]);
 /* current calibration page (core/calstore.h): the newest record (-1: none, or cleared); store one (levels 0 =
  * clear), ~1 ms + 16 ms every 4th write. *count: calibrations stored on this board */
 int  cal_load(isense_cal_t *c, uint16_t *count);

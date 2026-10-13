@@ -103,6 +103,8 @@ typedef struct {
     uint16_t req[ISENSE_CH];          /* last requested outputs */
     uint16_t applied[ISENSE_CH];      /* last applied outputs (0 while tripped) */
     uint8_t  limiting;                /* k < 1 */
+    uint32_t k_ss;                    /* soft start (core/sstart.h, set by main.c): a factor on the outputs only, Q16
+                                         (65536 = none); the limiter, `limiting` and k don't see it */
 
     /* ---- model of the channels: I_k(d) = ch_ma x curve(d) ---- */
     int32_t  ch_ma[ISENSE_CH];        /* LED current of each channel at 100 %, mA */

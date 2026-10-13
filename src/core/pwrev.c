@@ -72,7 +72,8 @@ uint8_t pwrev_latched(const pwrev_t *p)
 {
     return (uint8_t)((p->limit_events != p->ack_limit ? ULTRA_PW_EV_LIMITED : 0u) |
                      (p->ovl_trips != p->ack_ovl ? ULTRA_PW_EV_OVERLOAD : 0u) |
-                     (p->short_trips != p->ack_short ? ULTRA_PW_EV_SHORT : 0u));
+                     (p->short_trips != p->ack_short ? ULTRA_PW_EV_SHORT : 0u) |
+                     (p->in.dips != p->ack_dips ? ULTRA_PW_EV_SUPPLY_DIP : 0u));
 }
 
 uint8_t pwrev_state(const pwrev_t *p)
@@ -106,7 +107,7 @@ void pwrev_page(const pwrev_t *p, uint8_t out[PWREV_PAGE_BYTES])
     out[ULTRA_PW_RETRY_S] = (uint8_t)r;
 }
 
-void pwrev_ack(pwrev_t *p, const uint8_t arg[7])
+void pwrev_ack(pwrev_t *p, const uint8_t arg[9])
 {
     if (!(arg[0] & ULTRA_PW_ARG_ACK)) {
         return;
@@ -114,6 +115,7 @@ void pwrev_ack(pwrev_t *p, const uint8_t arg[7])
     p->ack_limit = (uint16_t)ultra_get16(arg + 1);
     p->ack_ovl = (uint16_t)ultra_get16(arg + 3);
     p->ack_short = (uint16_t)ultra_get16(arg + 5);
+    p->ack_dips = (uint16_t)ultra_get16(arg + 7);
 }
 
 uint8_t pwrev_src(uint8_t climit_src)

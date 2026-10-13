@@ -10,12 +10,13 @@
  *    computes the outputs with the light's gamma, min / max power and the power limit.
  *  - WS modes: config frame / console `scene 1` stores the current outputs, `scene 0` clears it.
  *
- * Storage: a log of 16-byte records in SCENE_LOG_PAGES flash pages below the settings page (wear levelling:
- * SCENE_RECS = 128 records per erase cycle of a page, so 10k cycles (datasheet minimum) = 1.28 M writes).
+ * Storage: a log of 16-byte records in SCENE_LOG_PAGES flash pages (hal/board.h SCENE_LOG_ADDR; wear levelling:
+ * SCENE_RECS = 80 records per erase cycle of a page, so 10k cycles (datasheet minimum) = 800 k writes).
  * Writes: SCENE_SAVE_MS after the last change, and only with a token from a write budget (SCENE_BUDGET_CAP
  * tokens, one more every SCENE_REFILL_MS): bursts of changes are written at once, the long-term average is capped
- * at 96 writes / day (>= 36 years at 10k cycles). A small change (no channel joins / leaves or turns on / off,
- * none moves more than SCENE_MAJOR_STEP) needs a half-full budget, so it never uses up the reserve of the big ones. */
+ * at 96 writes / day (>= 22 years at 10k cycles). A small change (no channel joins / leaves or turns on / off,
+ * none moves more than SCENE_MAJOR_STEP) needs a half-full budget, so it never uses up the reserve of the big ones.
+ * The same kind of budget limits the writes of the energy log (core/energy.h) and the power-on effect. */
 #ifndef SCENE_H
 #define SCENE_H
 
@@ -23,7 +24,7 @@
 
 #define SCENE_REC_BYTES   16u
 #define SCENE_PAGE_BYTES  256u
-#define SCENE_LOG_PAGES   8u
+#define SCENE_LOG_PAGES   5u          /* 0.6.0: 8 -> 5 (the power-on effect and the energy log have the rest) */
 #define SCENE_RECS_PAGE   (SCENE_PAGE_BYTES / SCENE_REC_BYTES)
 #define SCENE_RECS        (SCENE_LOG_PAGES * SCENE_RECS_PAGE)
 #define SCENE_MARK        0xA5u
@@ -47,9 +48,10 @@ typedef struct {
     uint8_t  mark;                    /* SCENE_MARK; erased flash reads 0xFF or 0x39 / 0xE3 (store_erased) */
 } scene_rec_t;
 
-typedef struct {
-    uint8_t  tokens;
+typedef struct {                      /* a flash write budget: cap tokens, one more every period_ms */
+    uint8_t  tokens, cap;
     uint32_t refill_ms;               /* time of the last refill (moves along while the budget is full) */
+    uint32_t period_ms;
 } scene_budget_t;
 
 /* running scene: which channels still show it */
@@ -64,7 +66,10 @@ void    scene_clear(scene_t *s);
 int     scene_equal(const scene_t *a, const scene_t *b);
 /* a change worth writing soon: a channel joins / leaves, turns on / off, or moves by more than SCENE_MAJOR_STEP */
 int     scene_major(const scene_t *a, const scene_t *b);
-void    scene_budget_init(scene_budget_t *b, uint32_t now);
+void    scene_budget_init(scene_budget_t *b, uint32_t now);  /* the scene's: SCENE_BUDGET_CAP, SCENE_REFILL_MS */
+void    budget_init(scene_budget_t *b, uint32_t now, uint8_t cap, uint32_t period_ms);
+/* refill, then take a token if at least `need` are there; 1 = taken */
+int     budget_take(scene_budget_t *b, uint32_t now, uint32_t need);
 /* write now? changed_ms: last change of the pending scene. Takes the token when it returns 1. */
 int     scene_save_due(scene_budget_t *b, uint32_t now, uint32_t changed_ms, int major);
 

@@ -43,7 +43,7 @@ for s in $SRC; do
   case "$s" in */ws_decode.c) f="-O2" ;; esac          # the per-frame bit decoder: -15 % cycles for 64 bytes
   case "$s" in */upd_app.c) f="$NOCRC" ;; esac
   case "$s" in */cli.c|*/config.c|*/store.c|*/scene.c|*/calstore.c|*/upd_app.c|*/ack.c|*/climit.c|*/mcutemp.c) f="$f $COLD" ;; esac
-  case "$s" in */pwrev.c|*/fwver.c) f="$f $COLD" ;; esac   # also cold: every ms at most / boot
+  case "$s" in */pwrev.c|*/fwver.c|*/health.c|*/energy.c|*/vdip.c) f="$f $COLD" ;; esac   # also cold: every ms at most / boot
   "$GCC" $CFLAGS $f -c "$s" -o "$o"
   OBJS="$OBJS $o"
 done

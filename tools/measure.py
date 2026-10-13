@@ -233,6 +233,50 @@ def measure_isense(emu, scratch):
     return rows
 
 
+# ---------------------------------------------------------------------------------------------- 0.6.0 monitoring
+def measure_monitor(emu, scratch):
+    """0.6.0 in the main loop: supply dips and the energy every ms, the soft start per output update, the channel
+    health once a second (worst of a run)."""
+    rows = []
+    vd, en, ss, hl, IS = (emu.addr(n) for n in ("vdip", "en", "ss", "hl", "is"))
+
+    def worst(calls):
+        wn = wc = 0
+        for fn, args in calls:
+            n = emu.call(fn, args)
+            if emu.cycles() >= wc:
+                wn, wc = n, emu.cycles()
+        return wn, wc
+
+    emu.poke(vd, bytes(84))                                          # (static, zero: vdip_init isn't linked)
+    emu.call("vdip_ms", [vd, 300, 2604, 1, 2000])                     # the reference: 24 V
+    n, c = worst([("vdip_ms", [vd, t, 2604 + (t & 3), 1, 2000]) for t in range(301, 400)])
+    rows.append(("vdip_ms, steady supply (every 1 ms)", n, c, ""))
+    dip = [("vdip_ms", [vd, t, 2080, 1, 6000]) for t in range(400, 410)]
+    dip += [("vdip_ms", [vd, t, 2604, 1, 2000]) for t in range(410, 414)]
+    n, c = worst(dip)
+    rows.append(("vdip_ms, a dip: start / its end into the log (worst)", n, c, ""))
+    emu.call("energy_init", [en, 1000, 0])
+    n, c = worst([(f, a) for t in range(1, 50) for f, a in (("energy_ms", [en, t, 24000, 2000, 1]),
+                                                            ("energy_due", [en, t, 0]))])
+    rows.append(("energy_ms / energy_due (every 1 ms, worst of the two)", n, c, ""))
+    emu.call("ss_init", [ss, 50])
+    n, c = worst([("ss_factor", [ss, t, 1, 1]) for t in range(1000, 1400)])
+    rows.append(("ss_factor, soft start running (per output update)", n, c, ""))
+    full = (2500, 2600, 2400, 3000, 2800)
+    ma = [m * k // 4 for m in full for k in (1, 2, 3, 4)]
+    emu.poke(scratch + 3100, struct.pack("<B4Bxh20H", 4, 25, 50, 75, 100, 40, *ma))
+    emu.call("isense_init", [IS, 1, 10000, 8000])
+    emu.call("isense_cal_set", [IS, scratch + 3100])
+    emu.call("health_init", [hl])
+    n = emu.call("health_run", [hl, IS, scratch + 3100])
+    rows.append(("health_run (once a second)", n, emu.cycles(), ""))
+    emu.call("health_test_start", [hl, scratch + 3100])
+    n = emu.call("health_test_done", [hl, scratch + 3100])
+    rows.append(("health_test_done (after a calibration test)", n, emu.cycles(), ""))
+    return rows
+
+
 def main():
     emu = Emu(ELF)
     scratch = emu.addr("din_ring")                     # 4 KB, unused by the functions measured here
@@ -399,6 +443,7 @@ def main():
 
     if isense:
         rows += measure_isense(emu, scratch)
+        rows += measure_monitor(emu, scratch)
 
     print("%-52s %8s %8s %9s" % ("function / path", "instr", "cycles~", "time"))
     for name, n, c, note in rows:

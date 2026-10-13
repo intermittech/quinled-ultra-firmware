@@ -178,7 +178,8 @@ Measured in the host test, two boards with HSI +2.0 % and −1.7 % stay within 8
 | 7 | POLL | *reserved* for the return channel, see [Reserved](#reserved-return-channel); boards ignore it |
 | 8 | SCENE | mode (1: 0 not in the scene, 1 these values; 2-255 reserved), fade × 100 ms (1), M (2), A ×5 (2 each), B ×5 (2 each) |
 | 9 | LIGHT_OPT | flags (1: 0x01 dim to warm, 0x02 set points), CW LED mireds × 10 (2), WW LED mireds × 10 (2), warm end mireds × 10 (2), red assist (2, 0..65535 = 0..100 %), set points: 4 × (M (2), mireds × 10 (2)), unused = 0 |
-| 0x0A-0x7F | — | *reserved* for later per-board commands; boards ignore them |
+| 0x0A | SCENE_EFFECT | protocol 0.2.3: effect (1), parameters (≤ 22, as EFFECT): the light's [power-on effect](#scene_effect-power-on-effect) |
+| 0x0B-0x7F | — | *reserved* for later per-board commands; boards ignore them |
 | 0x80-0xFF | — | *reserved* for [broadcast / extension slots](#broadcast--extension-slots-reserved) only; never applied as a board's own slot |
 
 A slot of all zero bits (DARK, the preamble) is not a type: its CRC fails and every board ignores it.
@@ -212,12 +213,12 @@ out = gamma(M × A × B)                                        exact power law 
 CW/WW with constant_brightness:
 out = g(M) × max(g(cw), g(ww)) × g(this) / (g(cw) + g(ww))      ESPHome's formula
 out = min + out × (max − min)    (0 stays 0 with zero_means_zero)
-power limit per channel, then per board (CONFIG 11-21)
+power limit per channel (CONFIG 16-20, on the channel currents of 11-15)
 ```
 
-Boards with the input current sense (the dig2analog-ultra-5ch rev 0.4; wiki: Current sense) hold
-CONFIG 21 on the measured input current instead, after rendering; the per-channel limits (16-20) stay estimates
-from 11-15. Adaptive stagger then uses the measured channel currents as weights.
+The board limit (CONFIG 21) is held on the **measured** input current (the board current sense; wiki: Current
+sense): after rendering, all channels are scaled by one factor so the board stays at the limit. Adaptive stagger
+uses the measured channel currents as weights.
 
 The gamma uses fixed-point log2 / exp2 polynomials: error under 0.7 counts of 65535 against
 `pow()` for gamma 0.45 to 3.0, monotonic. An output that should be on is never rounded to 0.
@@ -273,6 +274,32 @@ change, within a write budget that averages at most 96 writes a day.
 ESPHome sends it for lights with `power_on_scene: true`: the state its `restore_mode` / `initial_state` will restore
 at the next boot. Every other light sends mode 0.
 
+### SCENE_EFFECT: power-on effect
+
+Protocol 0.2.3, firmware 0.6.0. A light can run an effect from the board's power-up, without a controller: a candle,
+a slow colour loop, a sunrise when the power comes on.
+
+- **Payload:** effect (1) and its parameters (as EFFECT, `ultra_fx_param_bytes`; ≤ 22 bytes). There is no start time:
+  the effect starts at power-up, on the light's SCENE values (mode 1). Effect 0 (`none`) = no power-on effect.
+- **Stored:** the board keeps the light's LIGHT_DEF, LIGHT_OPT, SCENE and SCENE_EFFECT together in flash, so at
+  power-up its engine runs the effect as it would for a controller: the same gamma, min / max power, dim to warm and
+  power limit. A light without a SCENE (mode 0), or with strobe (its STEP slots aren't stored), shows no power-on
+  effect.
+- **Writes:** only when the stored content changes, at most a few a day (a budget of 4, then one per 6 h; two flash
+  pages per write). **Send a fixed power-on effect** (a configured one, with its SCENE values), not the light's live
+  state.
+- **Kept** until a SCENE_EFFECT changes it or a factory reset. A controller that never sends SCENE_EFFECT (older
+  firmware) leaves it as it is.
+- **The host sends SCENE_EFFECT for every light**, `none` for the ones without, after their SCENE, and with a new SEQ
+  when it changes (own SEQ space, like every type). The board takes the lights a SCENE_EFFECT reached since its
+  start-up as the complete set.
+- **Take-over:** as for a plain scene. The first SET or EFFECT the board receives (or WS data, or 3 s after the first
+  header without one) ends the effect; the outputs then cross-fade from where it was over the SCENE fade.
+- A board before 0.2.3 ignores the slot (an unknown type) and shows the plain SCENE values.
+
+ESPHome YAML (the ESPHome side follows this spec): a `power_on_effect:` per light, naming one of the light's effects,
+with the SCENE values to run it on.
+
 ### Effects
 
 | Id | Effect | Parameters | Like ESPHome's |
@@ -321,10 +348,11 @@ stored settings; the board writes them to flash only when the value differs from
 | 10 | feedback channel | 0 red, 1 all, 2 off |
 | 11-15 | LED current CH1-CH5 at 100 % | mA |
 | 16-20 | limit CH1-CH5 | mA, 0 = none |
-| 21 | limit for the board | mA, 0 = none. Boards with the input current sense: the **measured** board current is held to it (all channels scaled together, 0 = the board rating), and the estimate from 11-15 is skipped |
+| 21 | limit for the board | mA: the **measured** board current is held to it, all channels scaled together (0 = the board rating) |
 | 22 | boot protocol (*persisted*) | 0 auto, 1 WS2915, 2 WS2805, 3 Ultra. Auto and Ultra apply at once; WS2915 / WS2805 from the board's next power-up on (it then ignores Ultra frames) |
+| 23 | soft start (*persisted*, 0.2.3) | 0 off, 1 on (the default). After power-up (the first light) and after a trip's retry the board ramps its outputs from 20 to 100 % over 0.3 s, starting 0-100 ms late (from its chip id), so the boards of a pin don't switch their load on together |
 
-Ids 23-127 are reserved for later settings, 128-255 for hardware-specific ones (e.g. a Diff-Power receiver, a
+Ids 24-127 are reserved for later settings, 128-255 for hardware-specific ones (e.g. a Diff-Power receiver, a
 current-sense revision). An unused pair is (0, 0).
 
 ## Compatibility rules
@@ -336,13 +364,13 @@ from 20,000 random calls with undefined inputs).
 
 | What a board gets | What it does | Host test |
 |---|---|---|
-| Slot TYPE 0x0A-0xFF | ignores the slot | `test_ultra.c` `test_ultra_compat` |
+| Slot TYPE 0x0B-0xFF (0x0A before 0.2.3) | ignores the slot | `test_ultra.c` `test_ultra_compat` |
 | LIGHT 5-14 | ignores the slot, whatever its type | same |
-| CONFIG id 23-255 (or 0) | skips that pair; the slot's other pairs apply | same |
+| CONFIG id 24-255 (23 before 0.2.3), or 0 | skips that pair; the slot's other pairs apply | same |
 | Effect id 10-255 | runs `none`: the light's plain state (a running effect stops at the start time) | same |
 | Role 8-15 | the channel isn't part of the light (as role 0) | same |
 | Unknown flag bits: slot FLAGS (other than SET's 0x01 / 0x02), LIGHT_DEF / LIGHT_OPT flags, the reserved nibble after CH5's role | ignored: the engine's state is byte-identical to the same slot without them | same |
-| Spare payload bytes: LIGHT_DEF 26, LIGHT_OPT 25-26, SCENE 24-26, IDENTIFY after its argument, EFFECT after its parameters | ignored | same |
+| Spare payload bytes: LIGHT_DEF 26, LIGHT_OPT 25-26, SCENE 24-26, IDENTIFY after its argument, EFFECT and SCENE_EFFECT after their parameters | ignored | same |
 | IDENTIFY value 6-255 (5 before 0.2.1), calibration argument 1-4 / 101-255 | ignores the slot | same |
 | SCENE mode 2-255 | ignores the slot (the stored scene stays) | same |
 | Header FLAGS 0x02 HINT | processes the frame as usual | `test_ultra_compat` (frame_rx), `test_wire.c` |
@@ -373,14 +401,14 @@ from 20,000 random calls with undefined inputs).
 
 | Field | Defined | Reserved |
 |---|---|---|
-| Slot TYPE | 0x00-0x09 | 0x0A-0x7F later per-board commands; 0x80-0xFF broadcast / extension slots only |
+| Slot TYPE | 0x00-0x0A (0x0A SCENE_EFFECT: protocol 0.2.3) | 0x0B-0x7F later per-board commands; 0x80-0xFF broadcast / extension slots only |
 | LIGHT | 0-4, 0xF (the board) | 5-14 (e.g. groups, virtual lights) |
 | Role | 0-7 | 8-15 (e.g. amber, UV, lime) |
 | Effect | 0-9 | 10-127 official, 128-255 custom |
-| CONFIG id | 1-22 | 23-127 official, 128-255 hardware-specific (e.g. a Diff-Power receiver, a current-sense revision; 128 = the MCU temperature offset, reserved) |
+| CONFIG id | 1-23 (23 soft start: protocol 0.2.3) | 24-127 official, 128-255 hardware-specific (e.g. a Diff-Power receiver, a current-sense revision; 128 = the MCU temperature offset, reserved) |
 | Header FLAGS | 0x02 HINT, 0x04 EXT (no hint or extension defined yet); 0x01 RW, 0x08 UPD (reserved below) | — |
-| Return-channel page | 0x00-0x08 (0x08 POWER: protocol 0.2.2) | 0x09-0x7F official, 0x80-0xFD hardware-specific; 0xFE BUSY, 0xFF UNSUPPORTED |
-| Feature bit (IDENTITY) | 0-11 (11 POWER_EVENTS: protocol 0.2.2) | 12-23 official, 24-31 hardware-specific |
+| Return-channel page | 0x00-0x0B (0x08 POWER: protocol 0.2.2; 0x09 SUPPLY, 0x0A HEALTH, 0x0B ENERGY: 0.2.3) | 0x0C-0x7F official, 0x80-0xFD hardware-specific; 0xFE BUSY, 0xFF UNSUPPORTED |
+| Feature bit (IDENTITY) | 0-16 (11 POWER_EVENTS: protocol 0.2.2; 12-16: 0.2.3) | 17-23 official, 24-31 hardware-specific |
 
 ### Broadcast / extension slots (reserved)
 
@@ -446,11 +474,16 @@ IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version 
 | 9 | MCU_TEMP | STATUS carries the MCU temperature and the 3.3 V rail (below) |
 | 10 | VERSION_BLINK | IDENTIFY 5 (protocol 0.2.1) |
 | 11 | POWER_EVENTS | STATUS byte 8 and the POWER page: board limit and overcurrent events (protocol 0.2.2) |
-| 12-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
+| 12 | SUPPLY_DIPS | the SUPPLY page and the POWER latch 0x08 (protocol 0.2.3) |
+| 13 | HEALTH | the HEALTH page (protocol 0.2.3) |
+| 14 | ENERGY | the ENERGY page (protocol 0.2.3) |
+| 15 | SOFT_START | CONFIG 23 (protocol 0.2.3) |
+| 16 | SCENE_EFFECT | SCENE_EFFECT, power-on effects (protocol 0.2.3) |
+| 17-23 | — | later official features (e.g. a broadcast slot, an EXT extension) |
 | 24-31 | — | hardware-specific |
 
-- Firmware 0.5.0's features are 0xFBF (bits 0-5 and 7-11: the board current sense is always in on rev 0.4), 0xFFF
-  behind a bootloader (bit 6, release builds); a Diff-Power ultra receiver would report them.
+- Firmware 0.6.0's features are 0x1FFBF (bits 0-5 and 7-16: the board current sense is always in on rev 0.4),
+  0x1FFFF behind a bootloader (bit 6, release builds); a Diff-Power ultra receiver would report them.
 - **Until Diff-Power receivers answer, the host can't read this** (a dig2analog-ultra never answers). It sends what is configured, and a board without a feature
   falls back as above (e.g. firmware without SCENE would show nothing at power-up).
 
@@ -491,8 +524,8 @@ RW and UPD are never set together: the host never sends that, and a board ignore
 - **Response slot:** SYNC `0xA5` \| PAGE \| INDEX << 4 \| RFLAGS \| SEQ \| UID16 (2) \| DATA (24) \| CRC-16 (2).
 - **Pages:** 0x00 STATUS, 0x01 OUTPUTS, 0x02 ACKS, 0x03 ERRORS, 0x04 IDENTITY ([layout](#capability-reporting-reserved)),
   0x05 FW_UPDATE, and for the current calibration (wiki: Current sense)
-  and the power events (0x08 POWER, protocol 0.2.2) below; 0x09-0x7F reserved for later pages, 0x80-0xFD
-  hardware-specific:
+  the power events (0x08 POWER, protocol 0.2.2) and the monitoring pages (0x09 SUPPLY, 0x0A HEALTH, 0x0B ENERGY,
+  protocol 0.2.3) below; 0x0C-0x7F reserved for later pages, 0x80-0xFD hardware-specific:
 
   **0x00 STATUS**, the fields the firmware measures already (console `status`; `ULTRA_ST_*`). A Diff-Power ultra
   receiver reports them; on the dig2analog-ultra they stay local:
@@ -551,7 +584,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   | Off | Size | Field (`ULTRA_PW_*`) |
   |---|---|---|
   | 0 | 1 | NOW: the STATUS bits LIMITING, TRIPPED and CH_LIMITING |
-  | 1 | 1 | LATCHED since the controller's last acknowledge: 0x01 a limit event, 0x02 an overload trip, 0x04 a short-circuit trip |
+  | 1 | 1 | LATCHED since the controller's last acknowledge: 0x01 a limit event, 0x02 an overload trip, 0x04 a short-circuit trip, 0x08 a supply dip (0.2.3, SUPPLY page) |
   | 2 | 2 | limit events since power-up (u16, wraps) |
   | 4 | 2 | overload trips since power-up |
   | 6 | 2 | short-circuit trips since power-up |
@@ -568,10 +601,63 @@ RW and UPD are never set together: the host never sends that, and a board ignore
     (`ULTRA_PW_HOLD_MS`): one long overload is one event. Overload trip: above the limit's trip level for 200 ms.
     Short-circuit trip: ≥ 1.5 × the fuse rating for 50-100 µs.
   - **While a latch is set,** every answer carries RFLAGS EVENT and STATUS byte 8 POWER_EVENT.
-  - **Acknowledge:** a POLL of this page with payload byte 7 = 0x01 (`ULTRA_PW_ARG_ACK`) and bytes 8-13 = the three
-    counts the controller read (u16 each). A latch clears only when its count still equals the acknowledged one, so an
-    event after the read stays latched and a lost or repeated POLL does no harm. The answer shows the state after it.
+  - **Acknowledge:** a POLL of this page with payload byte 7 = 0x01 (`ULTRA_PW_ARG_ACK`) and bytes 8-15 = the four
+    counts the controller read (u16 each: limit events, overload trips, short trips, supply dips (0.2.3; a 0.2.2
+    controller sends 0 there, so its acknowledge leaves a dip latched)). A latch clears only when its count still
+    equals the acknowledged one, so an event after the read stays latched and a lost or repeated POLL does no harm.
+    The answer shows the state after it.
   - Everything is in RAM: a power cycle clears it (STATUS shows the reset cause).
+
+  **0x09 SUPPLY** (protocol 0.2.3, feature bit 12): dips of the supply / bus voltage. A dip: the 1 ms readings fall
+  below 90 % of a slow mean of the supply (~4 s) for at least 3 ms, ending above 93 % for 3 ms; so it works at 12, 24
+  or 48 V alike. Each new dip also latches POWER 0x08. POLL payload byte 7: which logged dip the event fields show
+  (0 = the newest, up to 3). On the dig2analog-ultra: console `status` (`supply_dips`, `supply_dip_deepest`,
+  `supply_dip 1..4`).
+
+  | Off | Size | Field (`ULTRA_SU_*`) |
+  |---|---|---|
+  | 0 | 2 | dips since power-up (u16, wraps) |
+  | 2 | 2 | the reference (the slow mean) now, mV (0 = not known yet) |
+  | 4 | 2 | the supply now (16 ms average), mV |
+  | 6 | 2 | the deepest dip since power-up (lowest reading against its reference): its lowest reading, mV |
+  | 8 | 1 | ... that reading in % of its reference |
+  | 9 | 3 | ... s since it began (u24; 0xFFFFFF = none) |
+  | 12 | 1 | dips in the log (0-4) |
+  | 13 | 3 | the selected dip: s since it began (0xFFFFFF = none) |
+  | 16 | 2 | its lowest reading, mV |
+  | 18 | 1 | that reading in % of its reference |
+  | 19 | 2 | how long it lasted, ms (65535 = longer, or still going) |
+  | 21 | 2 | the board current at its lowest reading, mA |
+  | 23 | 1 | reserved |
+
+  **0x0A HEALTH** (protocol 0.2.3, feature bit 13; boards with the input current sense): channel health from the
+  current calibration test (IDENTIFY 2) and the running channel model, and the MCU temperature peak. Display only.
+
+  | Off | Size | Field (`ULTRA_HE_*`) |
+  |---|---|---|
+  | 0 | 1 | flags: 0x01 a test ran since power-up, 0x02 a channel is abnormal, 0x04 current with every output off (a FET stuck on, leakage), 0x08 the running model is far off the stored test on a channel |
+  | 1 | 5 | CH1-CH5: the last test's class (low nibble: 0 untested, 1 no load, 2 normal, 3 abnormal) \| reasons (0x10 the current didn't rise with the level, 0x20 far above the test before, 0x40 far below it or no load where it had one) |
+  | 6 | 5 | CH1-CH5: the last test at 100 % against the test stored before it, int8 % (-128 = n/a) |
+  | 11 | 5 | CH1-CH5: the running model at 100 % against the stored test, int8 % (-128 = n/a) |
+  | 16 | 2 | the board current with every output off, over the stored test's zero (logic + offset), int16 mA |
+  | 18 | 2 | the highest MCU die temperature since power-up, int16 0.1 °C (0x8000 = none) |
+  | 20 | 3 | s since then |
+  | 23 | 1 | reserved |
+
+  The firmware's thresholds (`core/health.h`): no load under 20 mA at 100 %; far above / below at ±30 % and ±50 mA;
+  not rising when a level isn't higher than the one before or 100 % is under twice 25 %; current while dark at 50 mA
+  over the test before's zero (100 mA without one); model drift from ±25 %.
+
+  **0x0B ENERGY** (protocol 0.2.3, feature bit 14): the input energy, supply / bus voltage × the measured input
+  current, every ms.
+
+  | Off | Size | Field (`ULTRA_EN_*`) |
+  |---|---|---|
+  | 0 | 4 | since power-up, mWh |
+  | 4 | 4 | the board's lifetime, Wh (stored on the board at most hourly, when the outputs go dark, and at a supply dip; a factory reset clears it) |
+  | 8 | 4 | the input power now, mW |
+  | 12 | 3 | s since the lifetime value was last stored (0xFFFFFF = not since power-up) |
+  | 15 | 9 | reserved |
 
 - **Forwarding gate during the window: held CLOSED** (DOUT LOW), not high-Z.
   - On a Diff-Power receiver, DIN sees every answer relayed back.
@@ -664,6 +750,10 @@ Protocol releases are numbered 0.x.y while nothing is released as 1.0; the MINOR
   Format 1 and VERSION 2 reject each other's headers (version nibble), so the controller and the boards must
   match.
 - **Protocol 0.2.1:** IDENTIFY 5, the firmware version as blinks (feature bit 10). Compatible both ways.
+- **Protocol 0.2.2:** the POWER page and STATUS byte 8 on the reserved return channel (feature bit 11).
+- **Protocol 0.2.3:** SCENE_EFFECT (slot type 0x0A, power-on effects), CONFIG 23 (soft start), the SUPPLY, HEALTH and
+  ENERGY pages and the POWER latch 0x08 (supply dip), feature bits 12-16. Compatible both ways: older boards ignore
+  the new slot type and CONFIG id.
 - **From VERSION 2 on, the wire VERSION changes only for an incompatible change** (the release then becomes
   0.3.0; [Compatibility rules](#compatibility-rules)).
   Everything else goes into the reserved ranges, behind HINT / EXT, or into broadcast slots.

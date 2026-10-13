@@ -125,6 +125,13 @@ cfg_result_t config_apply(config_rx_t *r, settings_t *s, uint8_t cmd, uint8_t ar
     case CMD_ISENSE_LIMIT:                            /* main.c stores it (settings extension) */
         res.event = CFG_ACK;                          /* ACK only, no value code */
         return res;
+    case CMD_SOFT_START:                              /* main.c stores it (settings extension) */
+        if (arg > 1u) {
+            return res;
+        }
+        res.event = CFG_ACK;
+        res.value_code = (uint8_t)(arg + 1u);
+        return res;
     case CMD_ISENSE_CAL:                              /* main.c runs it: the calibration pattern is the feedback */
         if (arg != 0u && (arg < 5u || arg > 100u)) {
             return res;

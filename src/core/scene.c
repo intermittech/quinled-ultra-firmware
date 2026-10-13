@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
+#include <string.h>
 #include "scene.h"
 #include "store.h"                   /* store_erased */
 #include "ultra.h"                   /* ultra_smoothstep */
@@ -46,28 +47,39 @@ int scene_major(const scene_t *a, const scene_t *b)
     return 0;
 }
 
-void scene_budget_init(scene_budget_t *b, uint32_t now)
+void budget_init(scene_budget_t *b, uint32_t now, uint8_t cap, uint32_t period_ms)
 {
-    b->tokens = SCENE_BUDGET_CAP;
+    b->tokens = b->cap = cap;
     b->refill_ms = now;
+    b->period_ms = period_ms;
 }
 
-int scene_save_due(scene_budget_t *b, uint32_t now, uint32_t changed_ms, int major)
+void scene_budget_init(scene_budget_t *b, uint32_t now)
 {
-    while (now - b->refill_ms >= SCENE_REFILL_MS) {
-        b->refill_ms += SCENE_REFILL_MS;
-        if (b->tokens < SCENE_BUDGET_CAP) {
+    budget_init(b, now, SCENE_BUDGET_CAP, SCENE_REFILL_MS);
+}
+
+int budget_take(scene_budget_t *b, uint32_t now, uint32_t need)
+{
+    while (now - b->refill_ms >= b->period_ms) {
+        b->refill_ms += b->period_ms;
+        if (b->tokens < b->cap) {
             b->tokens++;
         }
     }
-    if (b->tokens >= SCENE_BUDGET_CAP) {
+    if (b->tokens >= b->cap) {
         b->refill_ms = now;                              /* full: the next token comes a whole period after a write */
     }
-    if (now - changed_ms < SCENE_SAVE_MS || b->tokens < (major ? 1u : SCENE_BUDGET_CAP / 2u)) {
+    if (b->tokens < need) {
         return 0;
     }
     b->tokens--;
     return 1;
+}
+
+int scene_save_due(scene_budget_t *b, uint32_t now, uint32_t changed_ms, int major)
+{
+    return now - changed_ms >= SCENE_SAVE_MS && budget_take(b, now, major ? 1u : SCENE_BUDGET_CAP / 2u);
 }
 
 /* ----------------------------------------------------------------------------------------------- log */
@@ -141,6 +153,25 @@ int scene_log_next(const uint8_t *base, int newest, uint8_t *erase)
     }
     *erase = 1;                                          /* a page boundary: the next page holds the oldest records */
     return (int)i;
+}
+
+/* the power-on effect store's image (core/ultra.h ULTRA_FX_*, written by hal/hw.c): the valid lights' heads */
+uint8_t ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS])
+{
+    uint8_t mask = 0;
+    uint32_t i;
+    if ((img[0] | ((uint32_t)img[1] << 8) | ((uint32_t)img[2] << 16) | ((uint32_t)img[3] << 24)) != ULTRA_FX_MAGIC) {
+        return 0;                                        /* (little endian, as hal/hw.c writes the word) */
+    }
+    for (i = 0; i < ULTRA_LIGHTS; i++) {
+        const uint8_t *h = img + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES;
+        if ((img[4] & (1u << i)) && crc8_smbus(h, ULTRA_HEAD_BYTES) == img[5u + i]) {
+            memcpy(&u->light[i], h, ULTRA_HEAD_BYTES);
+            crc[i] = img[5u + i];
+            mask |= (uint8_t)(1u << i);
+        }
+    }
+    return mask;
 }
 
 /* ----------------------------------------------------------------------------------------------- runtime */

@@ -36,7 +36,11 @@ typedef struct {
 /* newest valid record: its index (and *out, *seq, *count), or -1 */
 int  cal_find(const uint8_t *page, isense_cal_t *out, uint32_t *seq, uint16_t *count);
 /* where the next record goes: the first erased slot, CAL_RECS when the page is full (erase it, then slot 0) */
-int  cal_next_free(const uint8_t *page);
+#include "store.h"
+static inline int cal_next_free(const uint8_t *page)
+{
+    return (int)store_first_erased(page, CAL_REC_BYTES, CAL_RECS);
+}
 void cal_pack(const isense_cal_t *c, uint32_t seq, uint16_t count, cal_rec_t *rec);
 
 #endif

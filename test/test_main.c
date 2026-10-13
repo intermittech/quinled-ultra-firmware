@@ -178,6 +178,12 @@ static void test_decoder(void)
 #include "test_vsense.c"
 #include "test_testjig.c"
 #include "test_gamma_tables.c"
+#include "test_vdip.c"
+#include "test_energy.c"
+#include "test_health.c"
+#include "test_sstart.c"
+#include "test_scenefx.c"
+#include "test_console060.c"
 
 /* ------------------------------------------------------------------------------------------------ proto */
 static void test_proto(void)
@@ -421,6 +427,13 @@ int main(void)
     test_rxpower();
     test_testjig();
     test_gamma_tables();
+    test_vdip();
+    test_energy();
+    test_health();
+    test_sstart();
+    test_tj_reset();
+    test_scenefx();
+    test_cli060();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;
 }

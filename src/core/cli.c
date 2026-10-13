@@ -27,6 +27,7 @@ static const cli_key_t keys[] = {        /* short help: the values (README / wik
     { "scenefade", CMD_SCENE_FADE,   "0..255 x 100 ms" },
     { "ilimit",   CMD_ISENSE_LIMIT,  "x 50 mA, 0 = 8 A" },
     { "ical",     CMD_ISENSE_CAL,    "0 = 25/50/75/100 %, 5..100 = one level" },
+    { "softstart", CMD_SOFT_START,   "0 off 1 on" },
 };
 #define NKEYS (sizeof(keys) / sizeof(keys[0]))
 
@@ -82,7 +83,26 @@ static void wpct16(cli_t *c, uint32_t v, const char *unit)
     wdec(c, v * 1000u, 65535u, 1, unit);
 }
 
+/* five currents (mA, as A) / five 16-bit levels (as %), "/" between, then the tail */
+static void w5amp(cli_t *c, const int32_t *ma, const char *tail)
+{
+    uint32_t i;
+    for (i = 0; i < 5u; i++) {
+        wamp(c, ma[i], i < 4u ? "/" : tail);
+    }
+}
+
+static void w5pct(cli_t *c, const uint16_t *v, const char *tail)
+{
+    uint32_t i;
+    for (i = 0; i < 5u; i++) {
+        wpct16(c, v[i], i < 4u ? "/" : tail);
+    }
+}
+
 /* ms as h:mm:ss, with days when longer */
+static void wtime(cli_t *c, uint32_t ms, const char *tail);
+
 static void wtime(cli_t *c, uint32_t ms, const char *tail)
 {
     uint32_t sec = ms / 1000u, m = sec / 60u, h = m / 60u;
@@ -111,6 +131,36 @@ static void kv(cli_t *c, const char *k, uint32_t v)
 static void kva(cli_t *c, const char *k, int32_t ma)
 {
     kvd(c, k, ma > 0 ? (uint32_t)ma : 0u, 10u, 2, " A");
+}
+
+/* the sign of v ("-" when negative), returns |v| */
+static uint32_t wneg(cli_t *c, int32_t v)
+{
+    if (v < 0) {
+        c->write("-");
+        return (uint32_t)-v;
+    }
+    return (uint32_t)v;
+}
+
+/* a temperature in 0.1 C, signed, then the tail */
+static void wc10(cli_t *c, int32_t t, const char *tail)
+{
+    wdec(c, wneg(c, t), 1u, 1, tail);
+}
+
+/* five signed % (ULTRA_HE_NA: "-"), "/" between, then the tail */
+static void w5dev(cli_t *c, const int8_t *d, const char *tail)
+{
+    uint32_t i;
+    for (i = 0; i < 5u; i++) {
+        if (d[i] == ULTRA_HE_NA) {
+            c->write("-");
+        } else {
+            wdig(c, wneg(c, d[i]), 1, "");
+        }
+        c->write(i < 4u ? "/" : tail);
+    }
 }
 
 void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
@@ -166,6 +216,7 @@ static uint8_t get_key(const cli_t *c, uint8_t cmd)
     case CMD_SCENE_FADE:    return c->scene ? c->scene->fade : 0u;
     case CMD_ISENSE_LIMIT:  return c->st ? c->st->ilimit50 : 0u;
     case CMD_ISENSE_CAL:    return 0u;
+    case CMD_SOFT_START:    return c->st ? c->st->softstart : 1u;
     case CMD_PROTOCOL:      return s->protocol;
     case CMD_PWM_PRESET:    return s->pwm_preset;
     case CMD_DITHER_MODE:   return s->dither_mode;
@@ -249,9 +300,7 @@ static void status(cli_t *c)
         kva(c, "ripple_rms", (int32_t)s->ripple_ma);
     }
     c->write("out R/G/B/W1/W2=");
-    for (i = 0; i < 5u; i++) {
-        wpct16(c, s->out[i], i < 4u ? "/" : " %\r\n");
-    }
+    w5pct(c, s->out, " %\r\n");
     {
         static const char *const model[] = { "none", "learned", "calibrated" };
         kva(c, "current", s->i_ma);
@@ -265,25 +314,23 @@ static void status(cli_t *c)
         c->write(", last trip ");
         c->write(cause[s->i_trip_cause < 3u ? s->i_trip_cause : 0]);
         c->write("\r\nchannel R/G/B/W1/W2=");
-        for (i = 0; i < 5u; i++) {
-            wamp(c, s->i_ch_ma[i], i < 4u ? "/" : " A (");
-        }
+        w5amp(c, s->i_ch_ma, " A (");
         c->write(model[s->i_model < 3u ? s->i_model : 0]);
         c->write(")\r\n");
-        if (s->cal_levels) {
+        if (s->cal.levels) {
             static const char ch[5][3] = { "R", "G", "B", "W1", "W2" };
             uint32_t l;
             c->write("calibration=");
-            for (l = 0; l < s->cal_levels && l < 4u; l++) {
-                wdig(c, s->cal_pct[l], 1, l + 1u < s->cal_levels ? "/" : " %, ");
+            for (l = 0; l < s->cal.levels && l < 4u; l++) {
+                wdig(c, s->cal.pct[l], 1, l + 1u < s->cal.levels ? "/" : " %, ");
             }
             wdig(c, s->cal_count, 1, " tests stored\r\n");
             for (i = 0; i < 5u; i++) {
                 c->write("calibration ");
                 c->write(ch[i]);
                 c->write("=");
-                for (l = 0; l < s->cal_levels && l < 4u; l++) {
-                    wamp(c, s->cal_ma[i][l], l + 1u < s->cal_levels ? "/" : " A\r\n");
+                for (l = 0; l < s->cal.levels && l < 4u; l++) {
+                    wamp(c, s->cal.ma[i][l], l + 1u < s->cal.levels ? "/" : " A\r\n");
                 }
             }
         }
@@ -292,14 +339,11 @@ static void status(cli_t *c)
     if (s->mcu_temp_c10 == -32768) {
         c->write("n/a\r\n");
     } else {
-        int32_t t = s->mcu_temp_c10;
-        if (t < 0) {
-            c->write("-");
-            t = -t;
-        }
-        wdec(c, (uint32_t)t, 1u, 1, " C (die), vdda=");
+        wc10(c, s->mcu_temp_c10, " C (die), vdda=");
         wvolt(c, s->vdda_mv);
-        c->write("\r\n");
+        c->write(", peak ");
+        wc10(c, s->mcu_peak_c10, " C ");
+        wtime(c, s->uptime_ms - s->mcu_peak_ms, " ago\r\n");
     }
     c->write("supply=");
     wvolt(c, s->vs_supply_mv);
@@ -308,11 +352,36 @@ static void status(cli_t *c)
     c->write(", max ");
     wvolt(c, s->vs_supply_max_mv);
     c->write(")\r\n");
+    if (s->dip) {                          /* supply dips (core/vdip.h): the deepest, then the log, newest first */
+        const vdip_t *d = s->dip;
+        const vdip_ev_t *e = d->deep.ref_x ? &d->deep : 0;
+        uint32_t k;
+        c->write("supply_dips=");
+        wdig(c, d->count, 1, d->in_dip ? " (one now), reference " : ", reference ");
+        wvolt(c, s->dip_ref_mv);
+        for (k = 0; e != 0; e = vdip_event(d, k++)) {
+            c->write(k ? "\r\nsupply_dip " : "\r\nsupply_dip_deepest");
+            if (k) {
+                wnum(c, k);
+            }
+            c->write("=");
+            wtime(c, s->uptime_ms - e->t_ms, " ago, ");
+            wvolt(c, vsense_mv(s->dip_vs, e->min_x, 1u));
+            c->write(" (");
+            wdig(c, vdip_pct(e), 1, " %), ");
+            wdig(c, e->dur_ms, 1, " ms, ");
+            wamp(c, e->i_ma, " A");
+        }
+        c->write("\r\n");
+    }
     {
         /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A): mW, shown in W */
         uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
         kvd(c, "input", s->vs_supply_mv / 10u * ma / 100u, 100u, 1, " W");
     }
+    c->write("energy=");
+    wdec(c, s->en_boot_mwh, 10u, 2, " Wh since boot, ");
+    wdig(c, s->en_total_wh, 1, " Wh lifetime\r\n");
     c->write("tp8=");
     wvolt(c, s->vs_aux_mv);
     c->write(s->test_mode ? "\r\ntest_mode=on\r\n" : "\r\ntest_mode=off\r\n");
@@ -349,10 +418,10 @@ static void status(cli_t *c)
         }
     }
     c->write("\r\n");
-    /* the power events (core/pwrev.h), decoded from the POWER page bytes a Diff-Power ultra receiver would send */
-    {
-        const uint8_t *g = s->pw_page;
-        uint8_t st = s->pw_state, lat = g[ULTRA_PW_LATCHED], cs = (uint8_t)(g[ULTRA_PW_SRC_CAUSE] & 0x0Fu);
+    /* the power events (core/pwrev.h): what a Diff-Power ultra receiver reports on its STATUS / POWER pages */
+    if (s->pw) {
+        const pwrev_t *g = s->pw;
+        uint8_t st = pwrev_state(g), lat = pwrev_latched(g);
         uint32_t age;
         c->write("power_state=");
         c->write((st & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED | ULTRA_ST_CH_LIMITING)) ? "" : "ok");
@@ -362,37 +431,58 @@ static void status(cli_t *c)
                                                                                            : "channel-limiting") : "");
         if (st & ULTRA_ST_TRIPPED) {
             c->write(" (retry in ");
-            wdig(c, g[ULTRA_PW_RETRY_S], 1, " s)");
+            wdig(c, (g->in.retry_ms + 999u) / 1000u, 1, " s)");   /* as the POWER page: whole seconds, up */
         } else if (st & ULTRA_ST_LIMITING) {
             c->write(" (factor ");
-            wdec(c, ultra_get16(g + ULTRA_PW_FACTOR) * 1000u / 65535u, 1u, 1, " %)");
+            wdec(c, g->in.factor * 1000u / 65535u, 1u, 1, " %)");
         }
         c->write("\r\npower_events=limit ");
-        wdig(c, ultra_get16(g + ULTRA_PW_LIMIT_EVENTS), 1, ", overload trips ");
-        wdig(c, ultra_get16(g + ULTRA_PW_OVL_TRIPS), 1, ", short trips ");
-        wdig(c, ultra_get16(g + ULTRA_PW_SHORT_TRIPS), 1, lat ? ", latched:" : ", nothing latched");
+        wdig(c, g->limit_events, 1, ", overload trips ");
+        wdig(c, g->ovl_trips, 1, ", short trips ");
+        wdig(c, g->short_trips, 1, lat ? ", latched:" : ", nothing latched");
         c->write((lat & ULTRA_PW_EV_LIMITED) ? " limit" : "");
         c->write((lat & ULTRA_PW_EV_OVERLOAD) ? " overload" : "");
         c->write((lat & ULTRA_PW_EV_SHORT) ? " short" : "");
+        c->write((lat & ULTRA_PW_EV_SUPPLY_DIP) ? " dip" : "");
         c->write("\r\npower_last_limit=");
-        age = ultra_get24(g + ULTRA_PW_LIMIT_AGE);
+        age = g->limit_age_s;
         if (age == PWREV_AGE_NONE) {
             c->write("none");
         } else {
             wdig(c, age, 1, " s ago, ");
-            wamp(c, ultra_get16(g + ULTRA_PW_EVENT_MA), " A");
+            wamp(c, g->event_ma, " A");
         }
         c->write("\r\npower_last_trip=");
-        age = ultra_get24(g + ULTRA_PW_TRIP_AGE);
+        age = g->trip_age_s;
         if (age == PWREV_AGE_NONE) {
             c->write("none");
         } else {
             wdig(c, age, 1, " s ago, ");
-            c->write(cause[cs < 3u ? cs : 0]);
+            c->write(cause[g->last_cause < 3u ? g->last_cause : 0]);
             c->write(", ");
-            wamp(c, ultra_get16(g + ULTRA_PW_TRIP_MA), " A");
+            wamp(c, g->trip_ma, " A");
         }
         c->write("\r\n");
+    }
+    if (s->hl) {                           /* channel health (core/health.h) */
+        static const char *const cls[4] = { "-", "none", "ok", "FAULT" };
+        static const char *const why[3] = { ":rise", ":high", ":low" };
+        const health_t *h = s->hl;
+        uint32_t k;
+        if (h->flags & ULTRA_HE_F_TESTED) {
+            c->write("health_test R/G/B/W1/W2=");
+            for (i = 0; i < 5u; i++) {
+                c->write(cls[h->cls[i] & 3u]);
+                for (k = 0; k < 3u; k++) {
+                    c->write((h->cls[i] & (ULTRA_HE_R_NOT_RISING << k)) ? why[k] : "");
+                }
+                c->write(i < 4u ? "/" : ", change ");
+            }
+            w5dev(c, h->test_dev, " %\r\n");
+        }
+        c->write("health_model R/G/B/W1/W2=");
+        w5dev(c, h->model_dev, " %, dark ");
+        wdec(c, wneg(c, h->dark_ma), 10u, 2, (h->flags & ULTRA_HE_F_DARK) ? " A (!)\r\n" : " A\r\n");
     }
     if (c->scene && c->scene->mask) {
         c->write("power-on scene R/G/B/W1/W2=");
@@ -405,6 +495,27 @@ static void status(cli_t *c)
             c->write(i < 4u ? "/" : " %, fade ");
         }
         wdec(c, c->scene->fade, 1u, 1, " s\r\n");
+    }
+}
+
+void cli_watch(cli_t *c)
+{
+    const cli_status_t *s = c->st;
+    uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
+    wtime(c, s->uptime_ms, " ");
+    wvolt(c, s->vs_supply_mv);
+    c->write(" ");
+    wamp(c, s->i_ma, " A ");
+    wdec(c, s->vs_supply_mv / 10u * ma / 100u, 100u, 1, " W  ch ");    /* as `input` in status */
+    w5amp(c, s->i_now_ch_ma, " A  out ");
+    w5pct(c, s->out, " %  ");
+    if (s->mcu_temp_c10 != -32768) {
+        wc10(c, s->mcu_temp_c10, " C  ");
+    }
+    c->write("k ");
+    wdec(c, s->i_k_permille, 1u, 1, s->dip ? " %  dips " : " %\r\n");
+    if (s->dip) {
+        wdig(c, s->dip->count, 1, "\r\n");
     }
 }
 
@@ -425,7 +536,8 @@ void cli_exec(cli_t *c, const char *line)
         return;
     }
     if (streq(word, "help") || streq(word, "?")) {
-        c->write("status | get | set <key> <value> | period <steps> | save | defaults | identify | version\r\n");
+        c->write("status | get | set <key> <value> | period <steps> | save | defaults | identify | version | "
+                 "watch [ms]\r\n");
         for (i = 0; i < NKEYS; i++) {
             c->write("  ");
             c->write(keys[i].key);
@@ -478,6 +590,9 @@ void cli_exec(cli_t *c, const char *line)
     } else if (streq(word, "version")) {
         cli_banner(c);
         c->apply(CMD_IDENTIFY, CFG_IDENTIFY_VERSION);   /* and blink it */
+    } else if (streq(word, "watch")) {
+        int32_t v = parse_u(&p);
+        c->watch_ms = (uint16_t)(v < 0 ? 1000 : v < 100 ? 100 : v > 60000 ? 60000 : v);
     } else {
         c->write("error: unknown command\r\n");
     }
@@ -485,6 +600,11 @@ void cli_exec(cli_t *c, const char *line)
 
 void cli_feed(cli_t *c, char ch)
 {
+    if (c->watch_ms) {                     /* any key stops `watch` (and is used up) */
+        c->watch_ms = 0;
+        c->len = 0;
+        return;
+    }
     if (ch == '\r' || ch == '\n') {
         c->line[c->len] = 0;
         if (c->len) {

@@ -86,7 +86,9 @@
 #define POLL_HZ          20000u     /* poll tick: frame-end detection (core/frame_track.h), ring copy, 1 ms time base */
 
 #define SETTINGS_ADDR    0x0800FF00u   /* last 256-byte page of the 64 KB flash */
-#define SCENE_LOG_ADDR   0x0800F700u   /* power-on scene log: SCENE_LOG_PAGES (8) pages below the settings page */
+#define SCENE_LOG_ADDR   0x0800F700u   /* power-on scene log: SCENE_LOG_PAGES (5) pages, to 0x0800FBFF */
+#define SCENE_FX_ADDR    0x0800FC00u   /* the power-on effect (0.6.0): two pages */
+#define ENERGY_ADDR      0x0800FE00u   /* the energy log (core/energy.h, 0.6.0): one page */
 #define CAL_PAGE_ADDR    0x0800F600u   /* current calibration (core/calstore.h): the top page of the app slot. The
                                           linker scripts end the code area here (vendor/wch/Link.ld, Link_app.ld); a
                                           firmware update erases only the new app's length, so the page survives */

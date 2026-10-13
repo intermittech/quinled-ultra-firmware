@@ -254,7 +254,8 @@ static void test_store_ext(void)
     /* with the limit, appended */
     store_ext_clear(&e);
     e.ilimit50 = 120;                                    /* 6 A */
-    for (i = 0; i < 6u; i++) e.reserved[i] = 0xFFu;
+    e.opts = 0xFFu;
+    for (i = 0; i < 5u; i++) e.reserved[i] = 0xFFu;
     s.pwm_preset = 6;
     store_pack_ext(&s, &e, 2, &slot);
     memcpy(page + store_next_free(page) * STORE_SLOT_BYTES, &slot, sizeof slot);
@@ -295,7 +296,7 @@ static void test_isense_config(void)
 }
 
 /* ------------------------------------------------------------------------------------------------ console */
-static char cli_out[4096];
+static char cli_out[8192];
 static settings_t cli_set;
 static config_rx_t cli_rx;
 static void cap_write(const char *s) { strncat(cli_out, s, sizeof cli_out - strlen(cli_out) - 1); }
@@ -381,8 +382,9 @@ static void test_cli(void)
     st.vs_supply_min_mv = 23980;
     st.vs_supply_max_mv = 24050;
     run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V)\r\ninput=130.4 W\r\ntp8=1.65 V\r\n"
-                          "test_mode=off\r\n") != NULL, "status voltages, input power (24.012 V x 5432 mA)");
+    CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V)\r\ninput=130.4 W\r\n"
+                          "energy=0.00 Wh since boot, 0 Wh lifetime\r\ntp8=1.65 V\r\ntest_mode=off\r\n") != NULL,
+          "status voltages, input power (24.012 V x 5432 mA)");
     /* uptime h:mm:ss (days beyond 24 h), outputs in %, the stagger offsets in % of the period, ripple in A */
     st.uptime_ms = 3723000u;
     st.out[0] = 34078; st.out[1] = 0; st.out[2] = 65535; st.out[3] = 655; st.out[4] = 21627;
@@ -413,9 +415,11 @@ static void test_cli(void)
             CHECK(strstr(cli_out, VR[k].txt) != NULL, "%u mV shows as %s", VR[k].mv, VR[k].txt);
         }
         st.mcu_temp_c10 = 350;
+        st.mcu_peak_c10 = 412;
         st.vdda_mv = 3281;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "mcu_temp=35.0 C (die), vdda=3.28 V\r\n") != NULL, "status: the 3.3 V rail in volts");
+        CHECK(strstr(cli_out, "mcu_temp=35.0 C (die), vdda=3.28 V, peak 41.2 C ") != NULL,
+              "status: the 3.3 V rail in volts");
         st.vs_supply_mv = 24012;
     }
 }

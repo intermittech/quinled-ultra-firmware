@@ -29,6 +29,7 @@
 #include "../core/frame_track.h"
 #include "../core/fwver.h"
 #include "../core/gamma.h"
+#include "../core/health.h"
 #include "../core/isense.h"
 #include "../core/mcutemp.h"
 #include "../core/ocled.h"
@@ -37,14 +38,16 @@
 #include "../core/proto.h"
 #include "../core/scene.h"
 #include "../core/smooth.h"
+#include "../core/sstart.h"
 #include "../core/stagger.h"
 #include "../core/testjig.h"
 #include "../core/ultra.h"
 #include "../core/upd_app.h"
+#include "../core/vdip.h"
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.5.5"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.0"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -259,17 +262,47 @@ static pwrev_t pw;
 static mcutemp_t mt;
 static uint32_t temp_ms;
 static uint8_t temp_started;
+static int16_t temp_peak = MCUTEMP_NA;     /* the highest valid MCU temperature since boot, and when */
+static uint32_t temp_peak_ms;
 /* voltage channels (core/vsense.h): PA4 the supply, PA0 the spare input on TP8 */
 static vsense_t vs_sup, vs_aux;
+static vdip_t vdip;                        /* supply dips on PA4 (core/vdip.h) */
+static energy_t en;                        /* input energy (core/energy.h) */
+static health_t hl;                        /* channel health (core/health.h) */
+static sstart_t ss;                        /* soft start (core/sstart.h) */
+/* the power-on effect (SCENE_EFFECT): what is stored (lights, their CRC-8), the channels still running it, the
+ * engine untouched by a host since boot (it holds the power-on effect), a write pending, its budget */
+static uint8_t fx_mask, fx_crc[ULTRA_LIGHTS], fx_ch, ul_used, fx_pend;
+static uint32_t fx_chk;                    /* mask and CRCs of what is stored, in one value (fx_want) */
+static scene_budget_t fx_budget;
+#define FX_BUDGET_CAP 4u
+#define FX_REFILL_MS  21600000u            /* one write per 6 h sustained: >= 6 years at 10k cycles (2 erases each) */
 static testjig_t tj;                       /* test jig mode (core/testjig.h): TP9 grounded */
 
-/* every ms: the injected group's voltage pairs of that ms */
+static void flash_stall_begin(void);
+static void flash_stall_end(uint32_t us);
+
+/* every ms: the injected group's voltage pairs of that ms; the supply dips; the energy and its log */
 static void vsense_service(void)
 {
-    uint32_t sum2[2], n;
+    uint32_t sum2[2], n, i, lit = 0;
     hw_vsense_take(sum2, &n);
     vsense_add(&vs_sup, sum2[0], n);
     vsense_add(&vs_aux, sum2[1], n);
+    vdip_ms(&vdip, ms_now, sum2[0], n, is.i_ms);
+    for (i = 0; i < 5u; i++) {
+        lit |= out_now[i];
+    }
+    energy_ms(&en, ms_now, vs_sup.mv, is.i_ms, (uint8_t)(lit != 0u));
+    n = energy_due(&en, ms_now, vdip.count);
+    if (n != ENERGY_DUE_NONE) {
+        flash_stall_begin();
+        i = energy_store(energy_total_wh(&en), (uint8_t)(n == ENERGY_DUE_ERASE));
+        flash_stall_end(i);
+        if (i != 0u) {
+            energy_saved(&en, ms_now);
+        }
+    }
 }
 
 /* once a second, in the main loop: read the conversion started a second ago, start the next one. Not while a current
@@ -284,8 +317,17 @@ static void temp_service(void)
     if (temp_started && !hw_temp_read(&ts2, &vref2)) {
         ts2 = vref2 = 0;                   /* not done: counts as a bad sample */
     }
+    {
+        isense_cal_t c;
+        (void)isense_cal_get(&is, &c);
+        health_run(&hl, &is, &c);          /* the running model and the dark current against the stored test */
+    }
     if (temp_started) {
         mcutemp_sample(&mt, ts2, vref2);
+        if (mt.valid && mt.c10 > temp_peak) {
+            temp_peak = mt.c10;
+            temp_peak_ms = ms_now;
+        }
     }
     temp_started = (uint8_t)(is.cal_step == 0u);
     if (temp_started) {
@@ -365,17 +407,17 @@ static void isense_setup(void)
 
 static uint8_t isense_calibrate(uint8_t duty_pct)
 {
+    isense_cal_t c;
     if (is.tripped != ISENSE_TRIP_NONE || tj.active) {
         return 0;                          /* (the test jig's pattern keeps the outputs) */
     }
+    (void)isense_cal_get(&is, &c);
+    health_test_start(&hl, &c);            /* the test before this one (levels 0: none) */
     isense_cal_start(&is, duty_pct == 0u ? 0u : (uint16_t)((uint32_t)duty_pct * 65535u / 100u));
     ack_stop(&ack);                        /* the calibration pattern is the feedback */
     outputs_dirty = 1;
     return 1;
 }
-
-static void flash_stall_begin(void);
-static void flash_stall_end(uint32_t us);
 
 /* every ms, before the outputs are rendered: the tick's samples of that ms -> limit, trips, calibration */
 static void isense_service(void)
@@ -394,13 +436,21 @@ static void isense_service(void)
             pwm_force_off(0);              /* retry (not if the tick tripped again meanwhile) */
         }
         __enable_irq();
+        ss_retry(&ss, ms_now);             /* with the soft start (offset, ramp) */
     }
     if (ev & ISENSE_EV_REAPPLY) {
         outputs_dirty = 1;
     }
     if (ev & ISENSE_EV_CAL_DONE) {
+        isense_cal_t c;
+        uint8_t code;
         cal_save_pend = 1;                 /* the test with its curves: its own page, once the content is back */
         limit_update();                    /* the connected load is known now */
+        (void)isense_cal_get(&is, &c);
+        code = health_test_done(&hl, &c);
+        if (code != 0u) {
+            ack_start(&ack, ACK_P_FAULT, code);   /* D9: the first abnormal channel, or 6 = current while dark */
+        }
     }
 }
 
@@ -456,7 +506,7 @@ static void outputs_update(uint8_t ack_on)
     uint8_t i;
     if (tj.active) {
         tj_outputs(&tj, ms_now, v);        /* test jig: the fade over the five channels; data doesn't change it */
-    } else if (ack.active) {
+    } else if (ack.active && !ack.led_only) {
         uint16_t lvl = ack_on ? 16384u : 0u;          /* 25 % */
         for (i = 0; i < 5u; i++) {
             v[i] = (eff.feedback_ch == 1u || (eff.feedback_ch == 0u && i == CH_R)) ? lvl : 0u;
@@ -468,6 +518,9 @@ static void outputs_update(uint8_t ack_on)
         scene_mix(&srun, ms_now, v);       /* the power-on scene until data comes, then the cross-fade */
         dark_apply(&dk, ms_now, v);        /* the pin's calibration: dark (a test still overrides it below) */
     }
+    is.k_ss = tj.active ? 65536u                                    /* soft start (not the test jig's pattern) */
+                        : ss_factor(&ss, ms_now, (uint8_t)((v[0] | v[1] | v[2] | v[3] | v[4]) != 0u),
+                                    (uint8_t)(sext.opts & STORE_OPT_SOFT_START));
     isense_apply(&is, v, v);               /* board limit (all channels scaled together), or the calibration pattern */
     for (i = 0; i < 5u; i++) {
         out_now[i] = v[i];
@@ -522,6 +575,19 @@ static cfg_event_t scene_command(uint8_t cmd, uint8_t arg)
     return CFG_ACK;
 }
 
+/* soft start on / off (console, config frame, Ultra CONFIG 23): stored with the settings; 1 = changed */
+static uint8_t soft_start_set(uint32_t on)
+{
+    uint8_t o = (uint8_t)(on ? sext.opts | STORE_OPT_SOFT_START : sext.opts & ~STORE_OPT_SOFT_START);
+    if (o == sext.opts) {
+        return 0;
+    }
+    sext.opts = o;
+    settings_dirty = 1;
+    changed_ms = ms_now;
+    return 1;
+}
+
 /* follow-up of an applied command: blink feedback, new settings live, save debounced */
 static cfg_result_t handle_result(cfg_result_t r)
 {
@@ -548,6 +614,12 @@ static cfg_result_t handle_result(cfg_result_t r)
         stat.config_frames++;
         return r;
     }
+    if (r.event == CFG_ACK && r.cmd == CMD_SOFT_START) {
+        r.event = soft_start_set(r.arg) ? CFG_ACK : CFG_SAME;
+        ack_start(&ack, r.event == CFG_ACK ? ACK_P_ACK : ACK_P_SAME, r.event == CFG_ACK ? r.value_code : 0u);
+        stat.config_frames += r.event == CFG_ACK;
+        return r;
+    }
     if (r.event == CFG_ACK && (r.cmd == CMD_SCENE || r.cmd == CMD_SCENE_FADE)) {
         r.event = scene_command(r.cmd, r.arg);         /* not a setting: no settings write */
         if (r.event == CFG_ACK) {
@@ -567,6 +639,11 @@ static cfg_result_t handle_result(cfg_result_t r)
         if (r.cmd == CMD_FACTORY_RESET) {
             (void)scene_command(CMD_FACTORY_RESET, 0);
             store_ext_clear(&sext);        /* current limit and calibration too (the model relearns) */
+            flash_stall_begin();           /* and the energy log, the power-on effects */
+            flash_stall_end(energy_clear() + scene_fx_store(&ul, 0, fx_crc));
+            energy_init(&en, 0, ms_now);
+            fx_mask = 0;
+            fx_chk = 0;
             if (cal_present) {
                 isense_cal_t none;
                 uint8_t *z = (uint8_t *)&none;
@@ -646,6 +723,70 @@ static void scene_save_now(void)
     scene_stored = scene_want;
 }
 
+/* the power-on effects to store (of the lights a SCENE_EFFECT reached since the engine's init): their mask, CRC-8s
+ * into crc, and both as one value (bit 31: a host sent SCENE_EFFECT at all; with load: the stored ones) */
+static uint32_t fx_want(uint8_t *crc, uint8_t load)
+{
+    uint32_t chk = 0, i;
+    for (i = 0; i < ULTRA_LIGHTS; i++) {
+        const ultra_light_t *L = &ul.light[i];
+        if (L->scene_fx_have) {
+            chk |= 0x80000000u;
+        }
+        if (load ? (fx_mask & (1u << i)) != 0u : (L->scene_fx_have && ultra_scene_fx_ok(L))) {
+            if (!load) {
+                crc[i] = crc8_smbus((const uint8_t *)L, ULTRA_HEAD_BYTES);
+            }
+            chk += (1u << i) + ((uint32_t)crc[i] << (8u + 4u * i));
+        } else {
+            crc[i] = 0;
+        }
+    }
+    return chk;
+}
+
+/* store the power-on effects (budget permitting): only once a host sent SCENE_EFFECT (a host without it never
+ * changes them), and only when they differ from what is stored. fx_pend 1: compare (after a quiet change), 2: differs,
+ * waiting for a token (only the budget is checked meanwhile) */
+static void fx_service(void)
+{
+    uint8_t crc[ULTRA_LIGHTS];
+    uint32_t chk;
+    if (fx_pend == 0u || (fx_pend == 2u && !budget_take(&fx_budget, ms_now, 1u))) {
+        return;
+    }
+    chk = fx_want(crc, 0);
+    if (!(chk & 0x80000000u) || (chk & 0x7FFFFFFFu) == fx_chk) {
+        fx_pend = 0;                       /* nothing to write */
+        return;
+    }
+    if (fx_pend == 1u) {
+        fx_pend = 2;                       /* differs: written with the next token (a token per 6 h) */
+        return;
+    }
+    fx_pend = 0;
+    fx_chk = chk & 0x7FFFFFFFu;
+    fx_mask = (uint8_t)(chk & 0x1Fu);
+    flash_stall_begin();
+    flash_stall_end(scene_fx_store(&ul, fx_mask, crc));
+}
+
+/* every ms while the power-on effect runs: its channels follow the engine until the take-over (then the scene's
+ * cross-fade starts from where the effect was); when none is left, the engine's power-on effect stops */
+static void fx_follow(void)
+{
+    uint8_t i;
+    fx_ch &= srun.hold;
+    for (i = 0; i < 5u; i++) {
+        if (fx_ch & (1u << i)) {
+            srun.sc.v[i] = uout[i];
+        }
+    }
+    if (fx_ch == 0u) {
+        ultra_scene_fx_stop(&ul);
+    }
+}
+
 /* every ms: Ultra take-over deadline, recompute the scene from the lights' SCENE values once things are quiet,
  * write it when due (SCENE_SAVE_MS after the last change, within the write budget: core/scene.h), not while a
  * pattern blinks (except its final dark pause) */
@@ -658,6 +799,7 @@ static void scene_service(void)
     if (scene_check && ultra_on && ms_now - scene_check_ms >= SCENE_SAVE_MS) {
         scene_t sc;
         scene_check = 0;
+        fx_pend = 1;                       /* and the power-on effects (fx_service) */
         ultra_scene(&ul, &scene_stored, &sc);
         scene_want = sc;
         scene_major_pend = (uint8_t)scene_major(&scene_stored, &sc);
@@ -708,6 +850,7 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
     ultra_on_header(&ul, hdr_tick, host_us);
     last_data_ms = ms_now;
     signal_lost = 0;
+    ul_used = 1;                           /* a host drives the engine now */
     if (!ultra_seen) {
         ultra_seen = 1;                    /* the power-on scene holds at most SCENE_TAKEOVER_MS from here */
         ultra_first_ms = ms_now;
@@ -736,8 +879,11 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
                 }
             }
         }
+        if ((ul.cfg_changed & (1u << ULTRA_CFG_SOFT_START)) && ul.cfg[ULTRA_CFG_SOFT_START] <= 1u) {
+            (void)soft_start_set(ul.cfg[ULTRA_CFG_SOFT_START]);   /* persisted, like 22 */
+        }
         ul.cfg_changed = 0;
-        apply_settings();                  /* host-managed: live at once, no blink, not saved (except id 22) */
+        apply_settings();                  /* host-managed: live at once, no blink, not saved (except 22, 23) */
         stat.config_frames++;
     }
     if (ev & ULTRA_EV_IDENTIFY) {
@@ -761,7 +907,9 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
 static void protocol_changed(proto_t from, proto_t to)
 {
     if (to == PROTO_ULTRA) {
-        ultra_init(&ul, tick_now ^ 0xA5C3u);
+        if (ul_used) {
+            ultra_init(&ul, tick_now ^ 0xA5C3u);   /* (not before a host used it: it may run the power-on effect) */
+        }
         ultra_on = 1;
     } else if (from == PROTO_ULTRA) {
         ultra_on = 0;                      /* the host's CONFIG ends with Ultra: stored settings again */
@@ -1033,10 +1181,10 @@ static uint16_t sat16(int32_t v)
     return (uint16_t)(v < 0 ? 0 : v > 65535 ? 65535 : v);
 }
 
-/* every ms: the power events (core/pwrev.h) and D9. The state comes from the current sense's limiter and trips, or
- * without it from the Ultra power limit (CONFIG 21 on the configured channel currents: computed, no trips). D9 by
- * priority: trip > acknowledge / identify / version > limit > off (core/ocled.h; the feedback channel still shows the
- * acknowledge patterns, outputs_update) */
+/* every ms: the power events (core/pwrev.h) and D9. The state comes from the current sense's limiter and trips, and
+ * the Ultra channel limits (CONFIG 16-20). D9 by priority: trip > acknowledge / identify / version / the health code >
+ * the TP9 reset gesture / test mode > limit > off (core/ocled.h; the feedback channel shows the acknowledge patterns,
+ * outputs_update) */
 static void power_service(uint8_t ack_on)
 {
     pwrev_in_t in;
@@ -1050,11 +1198,13 @@ static void power_service(uint8_t ack_on)
     in.trip_ma = in.trip_cause == ISENSE_TRIP_FAST ? is.peak_ma : in.i_ma;
     in.factor = (uint16_t)(is.k >= 65535u ? 65535u : is.k);
     in.retry_ms = isense_retry_left_ms(&is);
+    in.dips = vdip.count;
     pwrev_update(&pw, ms_now, &in);
     ocled_update(&ocl, ms_now, in.limiting, in.trip_cause);
     lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
-    if (tj.active && ocl.show == OCLED_OFF && !ack.active) {
-        lv = tj_led(&tj, ms_now);          /* test jig: on, off at each cycle start (overcurrent / acknowledge win) */
+    if ((tj.active || tj.rst >= TJ_RST_ARMED) && ocl.show == OCLED_OFF && !ack.active) {
+        lv = tj_led(&tj, ms_now);          /* test jig: on, off at each cycle start; the reset gesture armed: fast
+                                              (overcurrent / acknowledge win) */
     }
     if (lv != led_now) {
         led_now = lv;
@@ -1062,12 +1212,18 @@ static void power_service(uint8_t ack_on)
     }
 }
 
-/* every ms: the test jig's pad (debounced), and in test mode the pattern (every ms) and its current report */
+/* every ms: the test jig's pad (debounced), the TP9 reset gesture, and in test mode the pattern (every ms) and its
+ * current report */
 static void testjig_service(void)
 {
-    if (tj_pad(&tj, ms_now, TESTJIG_PAD_LOW())) {
+    uint8_t ev = tj_pad(&tj, ms_now, TESTJIG_PAD_LOW());
+    if (ev & TJ_EV_MODE) {
         uart_write(tj.active ? "test mode: on (TP9 grounded)\r\n" : "test mode: off\r\n");
         outputs_dirty = 1;
+    }
+    if (ev & TJ_EV_RESET) {
+        uart_write("factory reset (TP9)\r\n");
+        (void)cli_apply(CMD_FACTORY_RESET, 0xA5u);     /* as the console's `defaults` */
     }
     if (!tj.active) {
         return;
@@ -1078,7 +1234,7 @@ static void testjig_service(void)
     }
 }
 
-static void status_snapshot(void)
+static inline __attribute__((always_inline)) void status_snapshot(void)
 {
     uint8_t i;
     stat.uptime_ms = ms_now;
@@ -1091,6 +1247,7 @@ static void status_snapshot(void)
         stat.out[i] = ultra_on ? uout[i] : sm.cur[i];
     }
     stat.ilimit50 = sext.ilimit50 == 0xFFu ? 0u : sext.ilimit50;
+    stat.softstart = (uint8_t)(sext.opts & STORE_OPT_SOFT_START);
     {
         stat.i_ma = is.i_avg;
         stat.i_peak_ma = is.peak_ma;
@@ -1105,18 +1262,8 @@ static void status_snapshot(void)
         for (i = 0; i < 5u; i++) {
             stat.i_ch_ma[i] = is.ch_ma[i];
         }
-        {
-            isense_cal_t c;
-            uint8_t l;
-            stat.cal_levels = isense_cal_get(&is, &c) ? c.levels : 0u;
-            stat.cal_count = cal_cnt;
-            for (l = 0; l < 4u; l++) {
-                stat.cal_pct[l] = c.pct[l];
-                for (i = 0; i < 5u; i++) {
-                    stat.cal_ma[i][l] = c.ma[i][l];
-                }
-            }
-        }
+        (void)isense_cal_get(&is, &stat.cal);   /* (levels 0: none) */
+        stat.cal_count = cal_cnt;
     }
     stat.lim_ma = clim.limit_ma;
     stat.lim_src = clim.src;
@@ -1124,23 +1271,32 @@ static void status_snapshot(void)
     stat.lim_conn_ma = clim.connected_ma;
     stat.mcu_temp_c10 = mt.c10;
     stat.vdda_mv = mt.vdda_mv;
+    stat.mcu_peak_c10 = temp_peak;
+    stat.mcu_peak_ms = temp_peak_ms;
+    for (i = 0; i < 5u; i++) {
+        stat.i_now_ch_ma[i] = (int32_t)isense_ch_ma(&is, i, is.applied[i]);
+    }
     stat.test_mode = tj.active;
     stat.vs_supply_mv = vs_sup.valid ? vs_sup.mv : 0u;
     vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
     stat.vs_aux_mv = vs_aux.valid ? vs_aux.mv : 0u;
+    stat.dip_ref_mv = vsense_mv(&vs_sup, vdip.ref_q12 >> 8, 16u);   /* Q12 as 16 pairs */
+    stat.en_boot_mwh = en.boot_mwh;
+    stat.en_total_wh = energy_total_wh(&en);
+    stat.en_saved_ms = en.saved_ms;
+    stat.en_saved = en.saved;
     stat.oc_show = ocl.show;
     stat.oc_cause = ocl.last_cause;
     stat.oc_limiting = ocl.limiting;
     stat.oc_tripped = (uint8_t)(ocl.trip_cause != 0u);
     stat.oc_since_ms = ocl.since_ms;
     stat.oc_hold_ms = ocled_hold_left(&ocl, ms_now);
-    stat.pw_state = pwrev_state(&pw);
-    pwrev_page(&pw, stat.pw_page);
+
 }
 
 int main(void)
 {
-    uint32_t last_ms = 0, fps_ms = 0, fps_frames = 0;
+    uint32_t last_ms = 0, fps_ms = 0, fps_frames = 0, watch_t = 0;
     uint8_t ack_on = 0, was_active = 0;
     int ch;
 
@@ -1152,6 +1308,18 @@ int main(void)
     }
     scene_want = scene_stored;
     scene_boot(&srun, &scene_stored);
+    ultra_init(&ul, hw_uid_hash());        /* (a seed per board: the power-on effects' randomness) */
+    fx_mask = ultra_fx_load(&ul, (const uint8_t *)SCENE_FX_ADDR, fx_crc);   /* the power-on effects: from here on */
+    fx_chk = fx_want(fx_crc, 1) & 0x7FFFFFFFu;
+    ultra_scene_fx_start(&ul, fx_mask, 0);
+    for (ch = 0; ch < (int)ULTRA_LIGHTS; ch++) {
+        if (fx_mask & (1u << ch)) {
+            fx_ch |= ul.light[ch].mask;
+        }
+    }
+    srun.sc.mask |= fx_ch;
+    srun.hold |= fx_ch;
+    budget_init(&fx_budget, 0, FX_BUDGET_CAP, FX_REFILL_MS);
     dark_init(&dk);
     ocled_init(&ocl);
     tj_init(&tj, TJ_CYCLE_MS);
@@ -1160,9 +1328,11 @@ int main(void)
     config_rx_init(&rx);
     frx_init(&frx, (proto_mode_t)set.protocol, (proto_t)set.last_proto);
     smooth_init(&sm);
-    ultra_init(&ul, 1);
     hw_init();
     mcutemp_init(&mt);
+    energy_init(&en, energy_load(), 0);
+    health_init(&hl);
+    ss_init(&ss, hw_uid_hash());
     vsense_init(&vs_sup, VSENSE_SUPPLY_RT, VSENSE_SUPPLY_RB, VSENSE_VREF_MV);
     vsense_init(&vs_aux, VSENSE_AUX_RT, VSENSE_AUX_RB, VSENSE_VREF_MV);
     hw_adc_init();                         /* PA7 continuously, the injected group from the poll tick */
@@ -1203,6 +1373,10 @@ int main(void)
     cli.set = &set;
     cli.scene = &scene_want;
     cli.st = &stat;
+    stat.dip = &vdip;
+    stat.pw = &pw;
+    stat.hl = &hl;
+    stat.dip_vs = &vs_sup;
     ultra_on = (uint8_t)(proto_active(&frx.ps) == PROTO_ULTRA);
     apply_settings();
     {
@@ -1228,9 +1402,16 @@ int main(void)
         if (ultra_on != (uint8_t)(proto_active(&frx.ps) == PROTO_ULTRA)) {
             protocol_changed(ultra_on ? PROTO_ULTRA : PROTO_NONE, proto_active(&frx.ps));   /* console mode change */
         }
-        while ((ch = uart_getc()) >= 0) {
-            status_snapshot();
-            cli_feed(&cli, (char)ch);
+        ch = uart_getc();
+        if (ch >= 0 || (cli.watch_ms && ms_now - watch_t >= cli.watch_ms)) {
+            status_snapshot();             /* console input, or `watch`: a line of live values (~120 bytes) */
+            if (ch < 0) {
+                watch_t = ms_now;
+                cli_watch(&cli);
+            }
+            for (; ch >= 0; ch = uart_getc()) {
+                cli_feed(&cli, (char)ch);
+            }
         }
         uart_kick();
         if (ms_now != last_ms) {
@@ -1253,13 +1434,18 @@ int main(void)
                 outputs_dirty = 1;         /* the dark hold fades: every ms */
             }
             stagger_adapt();
-            if (ultra_on) {
+            if (ultra_on || fx_ch) {       /* (the power-on effect: also before a protocol is there) */
                 if (ultra_render(&ul, tick_now, uout)) {
                     outputs_dirty = 1;     /* 1 kHz updates: every PWM period after this uses the new value */
                 }
-            } else if (smooth_update(&sm, tick_now)) {
+                if (fx_ch) {
+                    fx_follow();
+                }
+            }
+            if (!ultra_on && smooth_update(&sm, tick_now)) {
                 outputs_dirty = 1;
             }
+            fx_service();
             if (ms_now - fps_ms >= 1000u) {
                 stat.fps = frames - fps_frames;
                 fps_frames = frames;
@@ -1271,8 +1457,8 @@ int main(void)
                 save_now();
             }
             scene_service();
-            if (srun.fading) {
-                outputs_dirty = 1;         /* power-on scene cross-fade: every ms */
+            if (srun.fading || ss.state == SS_RUN) {
+                outputs_dirty = 1;         /* power-on scene cross-fade, soft start (offset, ramp): every ms */
             }
         }
         if (outputs_dirty) {

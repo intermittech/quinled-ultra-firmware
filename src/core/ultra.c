@@ -450,6 +450,13 @@ uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
             L->scene_v.b[i] = (uint16_t)ultra_get16(p + 14 + 2 * i);
         }
         return ULTRA_EV_SCENE;
+    case ULTRA_SCENE_EFFECT:                             /* the power-on effect (main.c stores it) */
+        L->scene_fx_have = 1;
+        L->scene_fx = p[0] < ULTRA_FX_COUNT ? p[0] : ULTRA_FX_NONE;
+        for (i = 0; i < ULTRA_SCENE_FX_PARAMS; i++) {
+            L->scene_fxp[i] = p[1 + i];
+        }
+        return ULTRA_EV_SCENE;
     case ULTRA_LIGHT_DEF:
         L->defined = 1;
         L->mask = 0;
@@ -478,6 +485,7 @@ uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
         return ULTRA_EV_LIGHT | ULTRA_EV_STATE;
     }
     case ULTRA_EFFECT:                                   /* switches at its start time (light_values) */
+        L->scene_run = 0;                                /* the host's effect replaces the power-on one */
         L->pend = 1;
         L->pend_fx = p[0] < ULTRA_FX_COUNT ? p[0] : ULTRA_FX_NONE;
         L->pend_seq = seq;
@@ -1024,7 +1032,7 @@ uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
     for (l = 0; l < ULTRA_LIGHTS; l++) {
         ultra_light_t *L = &u->light[l];
         ultra_vals_t v;
-        if (!L->defined) {
+        if (!L->defined && !L->scene_run) {
             continue;
         }
         light_values(L, now, &v);
@@ -1040,6 +1048,44 @@ uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
         out[ch] = u->out[ch];
     }
     return changed;
+}
+
+int ultra_scene_fx_ok(const ultra_light_t *L)
+{
+    return L->defined && L->scene_mode == 1u && L->scene_fx != ULTRA_FX_NONE && L->scene_fx != ULTRA_FX_STROBE &&
+           L->scene_fx < ULTRA_FX_COUNT;
+}
+
+void ultra_scene_fx_start(ultra_t *u, uint8_t mask, uint32_t tick)
+{
+    uint32_t l, i, now = host_ms(u, tick);
+    for (l = 0; l < ULTRA_LIGHTS; l++) {
+        ultra_light_t *L = &u->light[l];
+        if (!(mask & (1u << l))) {
+            continue;
+        }
+        L->scene_run = 1;
+        start_ramp(L, &L->scene_v, now, 0, 0);           /* the state: the SCENE values */
+        L->pend = 1;                                     /* the effect starts with the first render (its parameter */
+        L->pend_fx = L->scene_fx;                        /* bytes past ULTRA_SCENE_FX_PARAMS: unused, 0 from init) */
+        L->pend_t0 = now;
+        for (i = 0; i < ULTRA_SCENE_FX_PARAMS; i++) {
+            L->pend_p[i] = L->scene_fxp[i];
+        }
+    }
+}
+
+void ultra_scene_fx_stop(ultra_t *u)
+{
+    uint32_t l;
+    for (l = 0; l < ULTRA_LIGHTS; l++) {
+        ultra_light_t *L = &u->light[l];
+        if (L->scene_run) {
+            L->scene_run = 0;
+            L->fx = ULTRA_FX_NONE;
+            L->pend = 0;
+        }
+    }
 }
 
 void ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out)

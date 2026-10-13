@@ -27,11 +27,15 @@ void tj_init(testjig_t *t, uint32_t cycle_ms)
         t->ma[i] = 0;
     }
     t->cycles = 0;
+    t->rst = TJ_RST_IDLE;
+    t->rst_ok = 0;
+    t->rst_ms = 0;
 }
 
 uint8_t tj_pad(testjig_t *t, uint32_t now, uint8_t pad_low)
 {
-    uint8_t i;
+    uint8_t i, ev = 0;
+    uint32_t el = now - t->rst_ms;
     pad_low = (uint8_t)(pad_low != 0u);
     if (pad_low != t->pad_low) {
         t->pad_low = pad_low;
@@ -50,13 +54,29 @@ uint8_t tj_pad(testjig_t *t, uint32_t now, uint8_t pad_low)
             t->ma[i] = 0;
         }
         t->cycles = 0;
-        return 1;
+        /* the reset gesture: its second hold, or a first one on a running board */
+        t->rst = t->rst == TJ_RST_WAIT ? TJ_RST_CONFIRM : t->rst_ok ? TJ_RST_HOLD : TJ_RST_IDLE;
+        t->rst_ms = now;
+        return TJ_EV_MODE;
     }
-    if (t->active && !pad_low && t->run_ms >= TJ_LEAVE_MS) {
-        t->active = 0;
-        return 1;
+    if (!pad_low && t->run_ms >= TJ_LEAVE_MS) {
+        t->rst_ok = 1;                                   /* high once since power-up: gestures count from here */
+        if (t->active) {
+            t->active = 0;
+            t->rst = t->rst == TJ_RST_ARMED ? TJ_RST_WAIT : TJ_RST_IDLE;
+            t->rst_ms = now;
+            return TJ_EV_MODE;
+        }
     }
-    return 0;
+    if (t->rst == TJ_RST_HOLD && el >= TJ_RST_HOLD_MS) {
+        t->rst = TJ_RST_ARMED;
+    } else if (t->rst == TJ_RST_WAIT && el >= TJ_RST_WAIT_MS) {
+        t->rst = TJ_RST_IDLE;
+    } else if (t->rst == TJ_RST_CONFIRM && el >= TJ_RST_CONFIRM_MS) {
+        t->rst = TJ_RST_IDLE;
+        ev = TJ_EV_RESET;
+    }
+    return ev;
 }
 
 /* where now falls: the channel (5 = the cycle's remainder, dark) and the ms into its slot */
@@ -116,5 +136,8 @@ uint8_t tj_measure(testjig_t *t, uint32_t now, int32_t i_ma, int32_t zero_ma)
 
 uint8_t tj_led(const testjig_t *t, uint32_t now)
 {
+    if (t->rst >= TJ_RST_ARMED) {
+        return (uint8_t)((now / 50u) & 1u);              /* armed: 10 Hz */
+    }
     return (uint8_t)((now - t->t0) % t->cycle_ms >= TJ_LED_GAP_MS);
 }

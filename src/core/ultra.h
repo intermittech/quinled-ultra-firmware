@@ -9,13 +9,16 @@
  *    ESPHome's constant_brightness balance for CW / WW recomputed every update;
  *  - effects: pulse, strobe (steps), flicker, random (ESPHome behaviour) + candle, breathe, color loop,
  *    sunrise, sunset; time-based effects follow the shared clock, so boards stay in phase;
- *  - min / max power per channel, power limit per channel and per board.
+ *  - min / max power per channel, power limit per channel (the board limit is the current sense's);
+ *  - power-on effects (SCENE_EFFECT, 0.6.0): each light's persisted head (below) is stored by main.c, and at
+ *    power-up the engine runs the effect on the light's SCENE values without a controller.
  * Clock: each frame header carries the host time (us). The board tracks offset and rate of its own 50 us tick
  * against it, so all boards run on the same time base (HSI +-2 % corrected).
  * render() is called every 1 ms and returns 16-bit outputs for CH1..CH5. */
 #ifndef ULTRA_H
 #define ULTRA_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "scene.h"
 #include "ultra_protocol.h"
@@ -53,12 +56,28 @@ typedef struct {
     ultra_vals_t v;
 } ultra_step_t;
 
+#define ULTRA_SCENE_FX_PARAMS 14u          /* the power-on effect's parameters kept (the effects' longest: 13) */
+
 typedef struct {
-    /* definition (LIGHT_DEF) */
-    uint8_t defined, mask, flags;         /* mask: channels with a role */
-    uint8_t role[5];
-    uint16_t min_p[5], max_p[5];
+    /* the persisted head (ULTRA_HEAD_BYTES; main.c stores it for the power-on effect, hal/hw.c): definition
+     * (LIGHT_DEF), options (LIGHT_OPT), power-on scene (SCENE) and effect (SCENE_EFFECT) */
     uint32_t g_q16;                       /* gamma x 65536 */
+    ultra_vals_t scene_v;                 /* SCENE values */
+    uint16_t min_p[5], max_p[5];
+    /* options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16);
+     * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending */
+    uint16_t opt_cw, opt_ww, opt_warm, opt_assist;
+    uint16_t opt_pm[ULTRA_OPT_POINTS_MAX], opt_pt[ULTRA_OPT_POINTS_MAX];
+    uint8_t mask, flags;                  /* mask: channels with a role */
+    uint8_t role[5];
+    uint8_t opt_flags, opt_n;
+    uint8_t scene_mode, scene_fade;       /* SCENE mode, take-over fade x 100 ms */
+    uint8_t scene_fx;                     /* SCENE_EFFECT: the power-on effect (ULTRA_FX_NONE = none) */
+    uint8_t scene_fxp[ULTRA_SCENE_FX_PARAMS];
+    /* RAM only */
+    uint8_t defined;                      /* LIGHT_DEF received since the init */
+    uint8_t scene_have, scene_fx_have;    /* SCENE / SCENE_EFFECT received since the init */
+    uint8_t scene_run;                    /* the power-on effect runs (from power-up until the take-over) */
     /* state: `cur` from t0 on, `prev` before (a command scheduled in the future) */
     ultra_ramp_t cur, prev;
     /* effect: the active one, and the next one (switches at its start time, also to FX_NONE) */
@@ -75,15 +94,13 @@ typedef struct {
     /* strobe steps */
     uint8_t step_count, step_seq, step_have;   /* step_have: bit mask of received steps for step_seq */
     ultra_step_t step[ULTRA_MAX_STEPS];
-    /* power-on scene (SCENE): received since the last init, mode, take-over fade x 100 ms, values */
-    uint8_t scene_have, scene_mode, scene_fade;
-    ultra_vals_t scene_v;
-    /* options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16);
-     * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending */
-    uint8_t opt_flags, opt_n;
-    uint16_t opt_cw, opt_ww, opt_warm, opt_assist;
-    uint16_t opt_pm[ULTRA_OPT_POINTS_MAX], opt_pt[ULTRA_OPT_POINTS_MAX];
 } ultra_light_t;
+
+#define ULTRA_HEAD_BYTES ((uint32_t)offsetof(ultra_light_t, defined))   /* the persisted head (98 on the target) */
+/* the power-on effect store (hal/hw.c writes it, two flash pages): magic (4) | light mask (1) | CRC-8 per light (5) |
+ * 2 spare, then light i's head at ULTRA_FX_HDR + i x ULTRA_HEAD_BYTES. The header is written last. */
+#define ULTRA_FX_MAGIC   0x31584653u      /* "SFX1" */
+#define ULTRA_FX_HDR     12u
 
 typedef struct {
     uint8_t synced, rated;                /* rated: rate measured at least once */
@@ -128,6 +145,17 @@ void     ultra_clock_gap(ultra_t *u);
  * power, power limit). Channels of a defined light that has not sent its SCENE yet keep `stored`; channels of no
  * defined light are not part of it. */
 void     ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out);
+
+/* the power-on effect (SCENE_EFFECT): the lights in `mask` (their heads restored, e.g. from flash) run their effect on
+ * their SCENE values from local tick `tick` on, without a controller; stop: the controller takes over (their effect
+ * ends, they render only if it defined them) */
+void     ultra_scene_fx_start(ultra_t *u, uint8_t mask, uint32_t tick);
+/* from a store image: the heads of its valid lights (CRC ok) into u; returns their mask, their CRCs into crc
+ * (core/scene.c, with the scene log: the engine itself stays free of the firmware's other modules) */
+uint8_t  ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS]);
+void     ultra_scene_fx_stop(ultra_t *u);
+/* a light's head is a power-on effect to store: defined, SCENE mode 1 and an effect it can run from power-up */
+int      ultra_scene_fx_ok(const ultra_light_t *L);
 
 /* exact gamma: x (Q32 fraction, M x A) -> Q16 output; g_q16 = gamma x 65536 (exposed for tests) */
 uint32_t ultra_gamma(uint32_t x_q32, uint32_t g_q16);

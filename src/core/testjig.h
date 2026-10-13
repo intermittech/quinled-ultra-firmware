@@ -15,6 +15,11 @@
  * Debounce: the pad has to read low for TJ_ENTER_MS in a row (sampled every ms from boot on) to enter, and high for
  * TJ_LEAVE_MS in a row to leave, back to normal operation without a reboot. A floating pad reads high (pull-up);
  * noise would have to hold it low for 50 samples in a row.
+ * Factory reset by TP9 (0.6.0), a gesture a jig never makes: on a board that is already running (the pad has read
+ * high since power-up; a jig that grounds it from power-up never counts), ground TP9 for TJ_RST_HOLD_MS or longer
+ * (test mode runs meanwhile; then D9 blinks fast: armed), release it, and within TJ_RST_WAIT_MS ground it again for
+ * TJ_RST_CONFIRM_MS. The second hold resets (main.c: as the console's `defaults`). Anything else (a shorter first hold,
+ * no second one in time, a second one released early) does nothing.
  * Pure logic, host-tested (test/test_testjig.c). */
 #ifndef TESTJIG_H
 #define TESTJIG_H
@@ -31,6 +36,12 @@
 #define TJ_HOLD_MS     30u          /* at the peak, per channel */
 #define TJ_MEAS_MS     20u          /* the current: averaged over the hold's last 20 ms (the supply settled) */
 #define TJ_LED_GAP_MS  100u
+#define TJ_RST_HOLD_MS    5000u
+#define TJ_RST_WAIT_MS    5000u
+#define TJ_RST_CONFIRM_MS 1000u
+#define TJ_EV_MODE     0x01u        /* tj_pad: test mode turned on or off */
+#define TJ_EV_RESET    0x02u        /* ... the reset gesture is complete */
+enum { TJ_RST_IDLE = 0, TJ_RST_HOLD, TJ_RST_ARMED, TJ_RST_WAIT, TJ_RST_CONFIRM };
 
 typedef struct {
     uint8_t  active;
@@ -43,17 +54,21 @@ typedef struct {
     uint8_t  meas_ch;
     int32_t  ma[5];                 /* each channel's current at the peak in the last cycle, mA */
     uint32_t cycles;                /* complete cycles (all five measured) */
+    uint8_t  rst;                   /* the reset gesture's step (TJ_RST_*); >= TJ_RST_ARMED: D9 blinks fast */
+    uint8_t  rst_ok;                /* the pad has read high since power-up */
+    uint32_t rst_ms;                /* when the step began */
 } testjig_t;
 
 void    tj_init(testjig_t *t, uint32_t cycle_ms);
-/* every ms: pad_low = the pad reads low. Returns 1 when test mode turns on or off. */
+/* every ms: pad_low = the pad reads low. Returns TJ_EV_MODE when test mode turns on or off, TJ_EV_RESET when the
+ * reset gesture is complete. */
 uint8_t tj_pad(testjig_t *t, uint32_t now, uint8_t pad_low);
 /* test mode: the five 16-bit outputs at now (one channel lit at a time) */
 void    tj_outputs(const testjig_t *t, uint32_t now, uint16_t v[5]);
 /* test mode, every ms: the board current of the last ms and its zero (mA). Returns 1 when a cycle's five currents
  * are complete (t->ma, t->cycles). */
 uint8_t tj_measure(testjig_t *t, uint32_t now, int32_t i_ma, int32_t zero_ma);
-/* D9's level in test mode */
+/* D9's level in test mode, or while the reset gesture is armed (fast blink) */
 uint8_t tj_led(const testjig_t *t, uint32_t now);
 
 #endif

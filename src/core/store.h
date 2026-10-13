@@ -15,11 +15,13 @@
 #define STORE_SLOT_BYTES  32u
 #define STORE_MAGIC       0x55AA2917u   /* a record of this layout (the CRC last) */
 
-/* the record's extension: the board current limit (core/isense.h); 0xFF = not set. The current calibration has its
- * own page (core/calstore.h). */
+/* the record's extension: the board current limit (core/isense.h) and options; 0xFF = not set. The current
+ * calibration has its own page (core/calstore.h). */
+#define STORE_OPT_SOFT_START 0x01u  /* opts: soft start on (core/sstart.h; 0.6.0) */
 typedef struct {
     uint8_t ilimit50;          /* board current limit, x 50 mA (0 / 0xFF = the board rating) */
-    uint8_t reserved[6];       /* 0xFF */
+    uint8_t opts;              /* STORE_OPT_*, 0xFF = the defaults (on) */
+    uint8_t reserved[5];       /* 0xFF */
 } store_ext_t;
 
 typedef struct {
@@ -36,7 +38,12 @@ int  store_find(const uint8_t *page, settings_t *out, uint32_t *seq);
 int  store_find_ext(const uint8_t *page, settings_t *out, store_ext_t *ext, uint32_t *seq);
 void store_ext_clear(store_ext_t *e);
 /* first erased slot, STORE_SLOTS when the page is full (erase needed) */
-int  store_next_free(const uint8_t *page);
+/* the first of n records of rec bytes that reads erased (n: none) */
+uint32_t store_first_erased(const uint8_t *p, uint32_t rec, uint32_t n);
+static inline int store_next_free(const uint8_t *page)
+{
+    return (int)store_first_erased(page, STORE_SLOT_BYTES, STORE_SLOTS);
+}
 /* n bytes (even, half-word aligned) of erased flash: every half-word reads 0xFFFF, or 0xE339 - the CH32V203 RM
  * (32.5.4) gives 0xE339E339 as the erased value; both are accepted until the bench settles it */
 int  store_erased(const uint8_t *b, uint32_t n);

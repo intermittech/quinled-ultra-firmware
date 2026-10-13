@@ -145,7 +145,7 @@ static void test_pwrev(void)
     }
     printf("  limit events after 2 s quiet, trips by cause + peak, latches cleared only by the matching count\n");
 
-    /* the console lines, decoded from the page bytes */
+    /* the console lines (from pwrev_t, as the page has them) */
     {
         cli_t c;
         cli_status_t st;
@@ -160,24 +160,19 @@ static void test_pwrev(void)
         c.set = &cli_set;
         c.st = &st;
         pwrev_init(&p, 0);
-        st.pw_state = pwrev_state(&p);
-        pwrev_page(&p, st.pw_page);
+        st.pw = &p;
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "power_state=ok\r\npower_events=limit 0, overload trips 0, short trips 0, nothing latched\r\n"
                               "power_last_limit=none\r\npower_last_trip=none\r\n") != NULL, "status: quiet");
         pw_run(&p, 0, 1000, pw_in(0, 0, ULTRA_PW_CAUSE_SHORT, 0, 15200));
         pw_run(&p, 1000, 4000, pw_in(0, 0, 0, 3000, 0));
         pw_run(&p, 4000, 9500, pw_in(1, 0, 0, 8100, 0));
-        st.pw_state = pwrev_state(&p);
-        pwrev_page(&p, st.pw_page);
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "power_state=limiting (factor 81.2 %)\r\n"
                               "power_events=limit 1, overload trips 0, short trips 1, latched: limit short\r\n"
                               "power_last_limit=5 s ago, 8.10 A\r\npower_last_trip=9 s ago, short, 15.20 A\r\n") != NULL,
               "status: limiting, a short before");
         pw_run(&p, 9500, 9600, pw_in(0, 0, ULTRA_PW_CAUSE_OVERLOAD, 0, 10600));
-        st.pw_state = pwrev_state(&p);
-        pwrev_page(&p, st.pw_page);
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "power_state=limiting, tripped (retry in 2 s)\r\n") != NULL, "status: tripped");
     }

@@ -543,6 +543,13 @@ uint32_t hw_reset_flags(void)
     return reset_flags;
 }
 
+uint32_t hw_uid_hash(void)
+{
+    const volatile uint32_t *u = (const volatile uint32_t *)0x1FFFF7E8u;   /* RM 31.2: UID registers 1..3 */
+    uint32_t h = (u[0] ^ u[1] ^ u[2]) * 0x9E3779B9u;
+    return h ^ (h >> 16);
+}
+
 void led_set(uint8_t on)
 {
     GPIOB->BSHR = on ? (1u << 15) : (1u << (15 + 16));  /* D9 on PB15 */
@@ -871,6 +878,63 @@ uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
     *count = cal_cnt;
     return flash_program(CAL_PAGE_ADDR + (uint32_t)slot * CAL_REC_BYTES, (const uint16_t *)rec, CAL_REC_BYTES / 2u,
                          erase);
+}
+
+/* Energy log (core/energy.h): one page of 8-byte entries; read only right after reset, the write position is tracked
+ * in RAM. */
+static uint32_t energy_next;
+
+uint32_t energy_load(void)
+{
+    energy_next = energy_log_next((const uint8_t *)ENERGY_ADDR);
+    return energy_log_find((const uint8_t *)ENERGY_ADDR);
+}
+
+uint32_t energy_store(uint32_t wh, uint8_t may_erase)
+{
+    uint32_t idx = energy_next, erase = 0;
+    if (idx >= ENERGY_RECS) {
+        if (!may_erase) {
+            return 0;
+        }
+        erase = ENERGY_ADDR;
+        idx = 0;
+    }
+    energy_next = idx + 1u;
+    core_scratch[0] = wh;
+    core_scratch[1] = ~wh;
+    return flash_program(ENERGY_ADDR + idx * ENERGY_REC_BYTES, (const uint16_t *)core_scratch, ENERGY_REC_BYTES / 2u,
+                         erase);
+}
+
+uint32_t energy_clear(void)
+{
+    energy_next = 0;
+    return flash_program(ENERGY_ADDR, 0, 0u, ENERGY_ADDR);
+}
+
+/* Power-on effect store (core/ultra.h ULTRA_FX_*): read only right after reset (main.c, ultra_fx_load; it keeps the
+ * mask and CRCs of what it stored). */
+typedef char fx_store_fits[(ULTRA_FX_HDR + ULTRA_LIGHTS * ULTRA_HEAD_BYTES <= 512u && ULTRA_HEAD_BYTES == 98u) ? 1 : -1];
+
+uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
+{
+    uint8_t *h = (uint8_t *)core_scratch;
+    uint32_t i, us = flash_program(SCENE_FX_ADDR, 0, 0u, SCENE_FX_ADDR);   /* erases page 0: the header goes */
+    if (mask == 0u) {
+        return us;
+    }
+    us += flash_program(SCENE_FX_ADDR + 256u, 0, 0u, SCENE_FX_ADDR + 256u);
+    for (i = 0; i < ULTRA_LIGHTS; i++) {
+        if (mask & (1u << i)) {
+            us += flash_program(SCENE_FX_ADDR + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES, (const uint16_t *)&u->light[i],
+                                ULTRA_HEAD_BYTES / 2u, 0u);
+        }
+        h[5u + i] = crc[i];
+    }
+    core_scratch[0] = ULTRA_FX_MAGIC;
+    h[4] = mask;
+    return us + flash_program(SCENE_FX_ADDR, (const uint16_t *)h, ULTRA_FX_HDR / 2u, 0u);   /* the header last */
 }
 
 /* Firmware update (core/upd_app.h): one half-word into the app descriptor page's status records (no erase; the

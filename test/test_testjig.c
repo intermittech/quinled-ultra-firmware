@@ -209,3 +209,79 @@ static void test_testjig(void)
         CHECK(strstr(cli_out, "supply n/a (cycle 1)") != NULL, "report line without the supply");
     }
 }
+
+/* the TP9 factory-reset gesture (0.6.0): runs ms [0, end) with the pad low in the given intervals; returns the resets
+ * and the ms the first came (or ~0u) */
+static uint32_t tjr_low[4][2];
+static uint32_t tjr_n;
+static int pad_iv(uint32_t ms)
+{
+    uint32_t i;
+    for (i = 0; i < tjr_n; i++) {
+        if (ms >= tjr_low[i][0] && ms < tjr_low[i][1]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint32_t tj_gesture(uint32_t end, uint32_t *at, uint32_t *armed_ms)
+{
+    testjig_t t;
+    uint32_t ms, resets = 0;
+    tj_init(&t, TJ_CYCLE_MS);
+    *at = ~0u;
+    *armed_ms = 0;
+    for (ms = 0; ms < end; ms++) {
+        uint8_t ev = tj_pad(&t, ms, (uint8_t)pad_iv(ms));
+        if (ev & TJ_EV_RESET) {
+            resets++;
+            if (*at == ~0u) {
+                *at = ms;
+            }
+        }
+        if (t.rst >= TJ_RST_ARMED) {
+            (*armed_ms)++;
+            CHECK(tj_led(&t, ms) == ((ms / 50u) & 1u), "armed: D9 blinks at 10 Hz (ms %u)", ms);
+        }
+    }
+    return resets;
+}
+
+static void test_tj_reset(void)
+{
+    static const struct { uint32_t n, iv[4][2], end, resets; const char *what; } G[] = {
+        { 2, { { 10000, 16000 }, { 18000, 19200 } }, 30000, 1, "hold 6 s, release, 1.2 s again within 5 s: reset" },
+        { 2, { { 10000, 14900 }, { 16000, 17200 } }, 30000, 0, "first hold 4.9 s: nothing" },
+        { 2, { { 10000, 16000 }, { 21200, 22400 } }, 30000, 0, "the second hold after 5.2 s: nothing" },
+        { 2, { { 10000, 16000 }, { 18000, 18900 } }, 30000, 0, "the second hold 0.9 s: nothing" },
+        { 1, { { 0, 40000 } }, 60000, 0, "a jig grounding it from power-up for 40 s: never" },
+        { 2, { { 0, 20000 }, { 21000, 23000 } }, 40000, 0, "a jig from power-up, released, grounded again: never" },
+        { 1, { { 10000, 300000 } }, 310000, 0, "grounded on a running board and left there: never" },
+        { 4, { { 10000, 16000 }, { 18000, 19200 }, { 30000, 36000 }, { 38000, 39500 } }, 50000, 2, "twice: two" },
+    };
+    uint32_t g, r, at, armed;
+
+    printf("TP9 factory reset: the gesture, and what never triggers it\n");
+    for (g = 0; g < sizeof G / sizeof G[0]; g++) {
+        memcpy(tjr_low, G[g].iv, sizeof tjr_low);
+        tjr_n = G[g].n;
+        r = tj_gesture(G[g].end, &at, &armed);
+        CHECK(r == G[g].resets, "%s (%u resets)", G[g].what, r);
+        if (g == 0u) {
+            /* armed from 5 s into the first hold (10049 + 5000) until the second hold's 1 s ends (18049 + 1000) */
+            CHECK(at == 18049u + TJ_RST_CONFIRM_MS && armed == at - (10049u + TJ_RST_HOLD_MS),
+                  "reset at %u ms, armed for %u ms", at, armed);
+        }
+    }
+    /* 2 h of random noise on the pad after boot: never */
+    {
+        testjig_t t;
+        uint32_t ms, resets = 0;
+        tj_init(&t, TJ_CYCLE_MS);
+        for (ms = 0; ms < 7200000u; ms++) {
+            resets += (tj_pad(&t, ms, (uint8_t)(rnd() & 1u)) & TJ_EV_RESET) != 0u;
+        }
+        CHECK(resets == 0, "2 h of noise: %u resets", resets);
+    }
+}

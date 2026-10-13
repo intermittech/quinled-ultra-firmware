@@ -837,7 +837,7 @@ static void test_ultra_compat(void)
     c_setup();
     ultra_slot_begin(s, ULTRA_CONFIG, ULTRA_LIGHT_BOARD, 0, cseq++);
     {
-        static const uint8_t ids[9] = { 200, ULTRA_CFG_DIM_FLOOR, 23, 127, ULTRA_CFG_STAGGER, 128, 255, 0,
+        static const uint8_t ids[9] = { 200, ULTRA_CFG_DIM_FLOOR, ULTRA_CFG_COUNT, 127, ULTRA_CFG_STAGGER, 128, 255, 0,
                                         ULTRA_CFG_LOSS_TIMEOUT };
         static const uint16_t vals[9] = { 0xBEEF, 1, 0x1111, 0x2222, 3, 0x3333, 0x4444, 0x5555, 12 };
         for (i = 0; i < 9; i++) {
@@ -1025,7 +1025,7 @@ static void test_ultra_compat(void)
 
     /* the hub's builders never emit an undefined value, whatever they are given */
     {
-        uint8_t rr[5] = { 9, 15, 3, 8, 7 }, ids[9] = { 0, 1, 200, 23, 22, 128, 255, 5, 127 };
+        uint8_t rr[5] = { 9, 15, 3, 8, 7 }, ids[9] = { 0, 1, 200, ULTRA_CFG_COUNT, 22, 128, 255, 5, 127 };
         uint16_t vals[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
         uint8_t par[22];
         memset(par, 0xEE, sizeof par);

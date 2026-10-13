@@ -17,10 +17,13 @@ static void add_ack(ack_t *a, uint16_t last_off)
     add(a, 100, last_off);
 }
 
+static void add_code(ack_t *a, uint32_t value, uint16_t gap);
+
 void ack_start(ack_t *a, ack_kind_t kind, uint8_t value_code)
 {
     a->nseg = 0;
     a->repeat = 0;
+    a->led_only = (uint8_t)(kind == ACK_P_FAULT);
     switch (kind) {
     case ACK_P_ACK:
         if (value_code == 0u) {
@@ -52,6 +55,10 @@ void ack_start(ack_t *a, ack_kind_t kind, uint8_t value_code)
         a->repeat = 1;
         a->repeat_left_s = 30;
         break;
+    case ACK_P_FAULT:
+        add(a, 1500, 800);
+        add_code(a, value_code - 1u, 1000);           /* value_code blinks (6 or less: short ones, 6 = long + short) */
+        break;
     }
     a->seg = 0;
     a->left = a->ms[0];
@@ -76,6 +83,7 @@ void ack_start_version(ack_t *a, uint32_t version)
     uint32_t pre = version & 0xFFu;
     a->nseg = 0;
     a->repeat = 0;
+    a->led_only = 0;
     if (version == 0u) {
         add_ack(a, 900);                              /* a development build: 3 fast, then one long flash */
         add(a, 1500, 1000);

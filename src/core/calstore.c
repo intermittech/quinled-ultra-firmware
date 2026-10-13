@@ -59,13 +59,3 @@ int cal_find(const uint8_t *page, isense_cal_t *out, uint32_t *seq, uint16_t *co
     return best;
 }
 
-int cal_next_free(const uint8_t *page)
-{
-    uint32_t i;
-    for (i = 0; i < CAL_RECS; i++) {
-        if (store_erased(page + i * CAL_REC_BYTES, CAL_REC_BYTES)) {
-            return (int)i;
-        }
-    }
-    return (int)CAL_RECS;
-}

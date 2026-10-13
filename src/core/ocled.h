@@ -3,9 +3,8 @@
 /* Overcurrent signal on the status LED D9 (Quindor 2026-10-13: "next to the actions taken also make the MCU LED blink
  * fast to signal the user"). A local signal only: nothing of it goes over the wire.
  *
- *   limit  fast blink, 100 ms on / 100 ms off (5 Hz): a board current limit is reducing the outputs (the user's limit,
- *          Ultra CONFIG 21 / stored ilimit, or the 8 A board rating; without the current sense: the Ultra power limit
- *          scaling to CONFIG 21 on the configured channel currents). Held OCLED_LIMIT_HOLD_MS after it ends.
+ *   limit  fast blink, 100 ms on / 100 ms off (5 Hz): the board current limit is reducing the outputs (the user's
+ *          limit, Ultra CONFIG 21 / stored ilimit, or the 8 A board rating). Held OCLED_LIMIT_HOLD_MS after it ends.
  *   trip   double flash, 2 x (100 ms on, 100 ms off), then 400 ms off (800 ms period): an overcurrent trip holds the
  *          outputs off (short or overload, through the retry waits). Held OCLED_TRIP_HOLD_MS after the outputs are
  *          back.

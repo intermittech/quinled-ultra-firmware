@@ -66,7 +66,7 @@ void isense_init(isense_t *s, uint8_t enabled, uint16_t fuse_ma, uint16_t board_
     s->fuse_ma = fuse_ma;
     s->board_ma = board_ma;
     s->limit_ma = board_ma;
-    s->k = s->k_meas = s->k_fb = Q16;
+    s->k = s->k_meas = s->k_fb = s->k_ss = Q16;
     s->g = Q16;
     for (i = 0; i < ISENSE_CH; i++) {
         shape_linear(s, i);
@@ -549,6 +549,9 @@ void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t out[ISENS
     if (k < K_MIN) {
         k = K_MIN;
     }
+    s->k = k;
+    s->limiting = (uint8_t)(k < Q16);
+    k = (uint32_t)(((uint64_t)k * s->k_ss) >> 16);    /* soft start: the outputs only */
     for (i = 0; i < ISENSE_CH; i++) {
         uint32_t v = k >= Q16 ? req[i] : (uint32_t)(((uint64_t)req[i] * k + 32768u) >> 16);
         if (v == 0u && req[i] != 0u) {
@@ -557,6 +560,4 @@ void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t out[ISENS
         out[i] = (uint16_t)v;
         s->applied[i] = s->tripped != ISENSE_TRIP_NONE ? 0u : out[i];
     }
-    s->k = k;
-    s->limiting = (uint8_t)(k < Q16);
 }

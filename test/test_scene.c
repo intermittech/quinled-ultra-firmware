@@ -85,7 +85,8 @@ static void test_scene_log(int e339)
         emax = serase[i] > emax ? serase[i] : emax;
     }
     CHECK(bad == 0, "newest record found after every simulated reboot (%d bad)", bad);
-    CHECK(emax - emin <= 1u && emax == 70000u / SCENE_RECS + 1u, "even wear: %u..%u erases per page", emin, emax);
+    CHECK(emax - emin <= 1u && emax >= 70000u / SCENE_RECS && emax <= 70000u / SCENE_RECS + 1u,
+          "even wear: %u..%u erases per page", emin, emax);
     printf("  70,000 writes: %u-%u erases per page (%u records per erase cycle: 10k cycles = %u writes)\n", emin, emax,
            SCENE_RECS, 10000u * SCENE_RECS);
     /* a write torn by a power cut: the previous record stays the newest; the next write skips the used slot */

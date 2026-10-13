@@ -80,13 +80,10 @@ int store_erased(const uint8_t *b, uint32_t n)
     return 1;
 }
 
-int store_next_free(const uint8_t *page)
+uint32_t store_first_erased(const uint8_t *p, uint32_t rec, uint32_t n)
 {
     uint32_t i;
-    for (i = 0; i < STORE_SLOTS; i++) {
-        if (store_erased(page + i * STORE_SLOT_BYTES, STORE_SLOT_BYTES)) {
-            return (int)i;
-        }
+    for (i = 0; i < n && !store_erased(p + i * rec, rec); i++) {
     }
-    return (int)STORE_SLOTS;
+    return i;
 }

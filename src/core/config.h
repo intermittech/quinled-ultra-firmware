@@ -37,6 +37,7 @@ enum {
     /* the input current sense (core/isense.h); NACK on a board without it */
     CMD_ISENSE_LIMIT  = 0x12,   /* board current limit x 50 mA, 0 = the board rating (main.c stores it) */
     CMD_ISENSE_CAL    = 0x13,   /* current calibration: ARG 0 = each channel at 25 / 50 / 75 / 100 %, 5..100 = at ARG % */
+    CMD_SOFT_START    = 0x14,   /* soft start (core/sstart.h): 0 off, 1 on (main.c stores it; 0.6.0) */
 };
 
 /* CMD_IDENTIFY's ARG for the version blink (main.c, ack.h) */
