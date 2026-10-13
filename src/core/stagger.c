@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "stagger.h"
+#include "scratch.h"
 
 #define N        STAGGER_GRID
+typedef char grid_fits_scratch[(4u * N <= CORE_SCRATCH_WORDS) ? 1 : -1];
 #define FULL     65536u
 #define DEADBAND 4                         /* counts: phase close enough (register read skew is ~2) */
 
@@ -188,8 +190,8 @@ void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t 
                         uint16_t cur_o3, uint16_t o_max, stagger_result_t *r)
 {
     uint32_t omax = o_max ? o_max : 0xFFFFu;
-    static uint32_t c2[N], c3[N], c23[N];  /* cost per offset, 0xFFFFFFFF = edge rule broken */
-    static uint32_t go[N];                 /* grid offsets */
+    /* cost per offset (0xFFFFFFFF = edge rule broken) and the grid offsets: in the main loop's shared scratch */
+    uint32_t *c2 = core_scratch, *c3 = core_scratch + N, *c23 = core_scratch + 2u * N, *go = core_scratch + 3u * N;
     pulses_t p;
     edges_t t1, t2, t3;
     uint32_t i, j, best = 0xFFFFFFFFu, bi = 0, bj = 0, b2, b3, s[5];

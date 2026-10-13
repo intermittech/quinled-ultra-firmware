@@ -45,8 +45,7 @@ typedef struct {
     uint32_t saves;                /* flash records written since boot */
     uint16_t stagger_o2, stagger_o3;   /* adaptive stagger: TIM2 / TIM3 offsets, Q16 of the period */
     uint32_t stagger_moves, ripple_ma; /* moves so far, LED_+ ripple estimate (mA rms) */
-    /* board current sense (core/isense.h); shown when isense = 1 */
-    uint8_t  isense;
+    /* board current sense (core/isense.h) */
     uint8_t  ilimit50;             /* stored board limit x 50 mA (0 = the board rating) */
     uint8_t  i_model;              /* channel model: 0 none, 1 learned, 2 calibrated */
     uint8_t  i_tripped, i_trip_cause;  /* outputs forced off now; last cause (1 short, 2 overload) */

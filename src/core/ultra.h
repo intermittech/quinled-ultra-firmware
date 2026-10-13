@@ -28,11 +28,19 @@
 #define ULTRA_EV_STATE       0x10u        /* a light got a state or an effect (SET / EFFECT): the host has taken over */
 #define ULTRA_EV_DEF         0x20u        /* a light (re)defined (LIGHT_DEF): its outputs for a scene may differ */
 
+/* 4-byte aligned on the target (24 bytes): its copies (ramps, steps, the last render) are word copies; at 22 bytes, a
+ * `to` at 2 mod 4 made memcpy copy byte by byte */
+#if defined(__GNUC__)
+#define ULTRA_ALIGN4 __attribute__((aligned(4)))
+#else
+#define ULTRA_ALIGN4
+#endif
+
 typedef struct {
     uint16_t m;
     uint16_t a[5];
     uint16_t b[5];
-} ultra_vals_t;
+} ULTRA_ALIGN4 ultra_vals_t;
 
 typedef struct {                          /* one interpolation from `from` to `to` */
     ultra_vals_t from, to;
@@ -94,12 +102,8 @@ typedef struct {
     uint32_t cfg_valid, cfg_changed;      /* bit masks by id */
     uint8_t identify;                     /* last IDENTIFY: ULTRA_IDENT_* 0..4 (unknown values are dropped) */
     uint8_t identify_arg;                 /* its second byte (calibration duty %) */
-    uint8_t board_limit_ext;              /* set by main: the board limit (CONFIG 21) is measured (isense), so
-                                             power_limit() leaves it out; set again after every ultra_init() */
-    uint8_t board_limited;                /* the last ultra_render() scaled the outputs to CONFIG 21 on the configured
-                                             channel currents (the computed board limit: D9's limit blink, ocled.h) */
-    uint8_t ch_limited;                   /* ... capped a channel at its CONFIG 16-20 limit (power events, pwrev.h) */
-    uint32_t board_total_ma;              /* ... the computed board current before the board limit, mA (CONFIG 11-15) */
+    uint8_t ch_limited;                   /* the last ultra_render() capped a channel at its CONFIG 16-20 limit (power
+                                             events, pwrev.h); the board limit (CONFIG 21) is the current sense's */
     uint16_t out[5];
 } ultra_t;
 
@@ -109,6 +113,8 @@ void     ultra_init(ultra_t *u, uint32_t seed);
 void     ultra_on_header(ultra_t *u, uint32_t tick, uint32_t host_us);
 /* one slot (32 bytes, CRC checked here); returns ULTRA_EV_* */
 uint32_t ultra_on_slot(ultra_t *u, const uint8_t *slot, uint32_t tick);
+/* the same for a slot whose CRC is already checked (frame_rx: frx_capture fills frx.slot only after the check) */
+uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *slot, uint32_t tick);
 /* outputs at local tick `tick`; returns 1 if any output changed */
 uint8_t  ultra_render(ultra_t *u, uint32_t tick, uint16_t *out);
 /* host time estimate for a local tick */
@@ -127,9 +133,12 @@ void     ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out);
 uint32_t ultra_gamma(uint32_t x_q32, uint32_t g_q16);
 /* ESPHome's transition curve 6x^5 - 15x^4 + 10x^3, Q16 */
 uint32_t ultra_smoothstep(uint32_t p_q16);
+/* the breathe effect's curve: sin^2(pi ph) for ph 0..65536 (Q16), Q16; 0 -> 0, 0.5 -> full, 1 -> 0 (also the test
+ * jig's fade, core/testjig.c) */
+uint32_t ultra_breathe(uint32_t ph_q16);
 
-extern const uint32_t ultra_log2_tab[257];
-extern const uint32_t ultra_exp2_tab[257];
+extern const uint32_t ultra_log2_poly[7];     /* 1 - log2(2 - u), u^1..u^7, Q29 (ultra_gamma; gen_ultra_tables.py) */
+extern const uint32_t ultra_exp2_poly[6];     /* 2^t, Q30 */
 extern const uint16_t ultra_sin_tab[65];
 
 #endif

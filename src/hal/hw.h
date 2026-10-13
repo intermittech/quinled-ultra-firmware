@@ -64,7 +64,7 @@ void led_set(uint8_t on);
 #else
 #define TESTJIG_PAD_LOW() ((uint8_t)0u)
 #endif
-/* settings + their extension (store_ext_t: current sense limit / calibration; all 0xFF from a v1 record) */
+/* settings + their extension (store_ext_t: the board current limit) */
 int  settings_load(settings_t *s, store_ext_t *ext);
 /* 1-2 ms (append), +16 ms when the page needs erasing; interrupts are off meanwhile. Returns that time in us
  * (estimate, BENCH: measure), so the caller can move its time base along. */

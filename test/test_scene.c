@@ -196,7 +196,7 @@ static void test_scene_engine(void)
     static const uint8_t roles[5] = { ULTRA_ROLE_RED, ULTRA_ROLE_GREEN, ULTRA_ROLE_BLUE, ULTRA_ROLE_WARM_WHITE, ULTRA_ROLE_COLD_WHITE };
     static const uint16_t mn[5] = { 0, 0, 0, 0, 0 }, mx[5] = { 65535, 65535, 65535, 65535, 65535 };
     static const uint16_t mn2[5] = { 655, 655, 655, 655, 655 };
-    uint8_t s[ULTRA_SLOT_BYTES], ids[3] = { ULTRA_CFG_CH_CURRENT, ULTRA_CFG_CH_CURRENT + 3, ULTRA_CFG_BOARD_MAX };
+    uint8_t s[ULTRA_SLOT_BYTES], ids[3] = { ULTRA_CFG_CH_CURRENT, ULTRA_CFG_CH_CURRENT + 3, ULTRA_CFG_CH_MAX + 3 };
     uint16_t a[5] = { 0, 0, 0, 52000, 21000 }, b[5] = { 65535, 65535, 65535, 65535, 65535 }, vals[3] = { 3000, 5000, 4000 };
     uint16_t out[5], v[5];
     ultra_t u;
@@ -205,7 +205,7 @@ static void test_scene_engine(void)
     uint32_t tick = 20000, t, i;
     int worst = 0, d;
 
-    printf("power-on scene: engine (gamma 2.8, constant brightness, min power, board limit) vs restored state\n");
+    printf("power-on scene: engine (gamma 2.8, constant brightness, min power, channel limit) vs restored state\n");
     ultra_init(&u, 3);
     ultra_on_header(&u, tick, 1000000);
     ultra_slot_config(s, 1, ids, vals, 3);
@@ -226,7 +226,7 @@ static void test_scene_engine(void)
         worst = d > worst ? d : worst;
     }
     CHECK(worst == 0, "scene == render of the same state (max %d counts)", worst);
-    printf("  RGBCCT light, warm 47 %%, board limit 4 A: scene %u/%u/%u/%u/%u = render, power limit included\n",
+    printf("  RGBCCT light, warm 47 %%, channel limit 4 A: scene %u/%u/%u/%u/%u = render, power limit included\n",
            sc.v[0], sc.v[1], sc.v[2], sc.v[3], sc.v[4]);
 
     /* a defined light whose SCENE has not come yet keeps the stored values; channels of no light are dropped */

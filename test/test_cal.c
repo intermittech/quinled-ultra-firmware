@@ -290,10 +290,11 @@ static void test_dark(void)
     CHECK(send(&U, 101, s) == ULTRA_EV_IDENTIFY && U.identify == ULTRA_IDENT_RELEASE, "RELEASE slot");
 }
 
-/* WS2805 gamma through ultra_gamma (core/gamma.c) against the formula the old tables held */
+/* WS2805 gamma through ultra_gamma (core/gamma.c) against round(65535 x (in / 255) ^ g): within 1 count (0.5.5: the
+ * 33-point tables, no correction list; test_gamma_tables.c compares with the former output too) */
 static void test_gamma_exact(void)
 {
-    uint32_t m, i, bad = 0;
+    uint32_t m, i, off = 0, bad = 0;
     printf("WS2805 gamma 2.2 / 2.8 against round(65535 x (in / 255) ^ g)\n");
     for (m = GAMMA_22; m <= GAMMA_28; m++) {
         double g = m == GAMMA_22 ? 2.2 : 2.8;
@@ -301,12 +302,11 @@ static void test_gamma_exact(void)
             long want = lround(65535.0 * pow(i / 255.0, g));
             long got = gamma_apply((uint8_t)m, (uint8_t)i);
             if (i > 0u && want == 0) want = 1;
-            if (got != want) {
-                bad++;
-                printf("  mode %u in %u: %ld, want %ld (fix %+ld)\n", (unsigned)m, (unsigned)i, got, want, want - got);
-            }
+            off += got != want;
+            bad += labs(got - want) > 1;
         }
     }
-    CHECK(bad == 0u, "gamma: %u of 512 differ", (unsigned)bad);
+    printf("  %u of 512 one count off, %u more\n", (unsigned)off, (unsigned)bad);
+    CHECK(bad == 0u, "gamma: %u of 512 more than 1 count off", (unsigned)bad);
     CHECK(gamma_apply(GAMMA_LINEAR, 200) == 200u * 257u, "linear");
 }

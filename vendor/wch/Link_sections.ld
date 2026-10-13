@@ -26,6 +26,7 @@ SECTIONS
 		*(.text.*)
 		*(.rodata)
 		*(.rodata*)
+		*(.srodata .srodata.*)		/* small constants: flash, as .rodata (not copied into RAM) */
 		*(.gnu.linkonce.t.*)
 		. = ALIGN(4);
 	} >FLASH AT>FLASH 
@@ -115,12 +116,6 @@ SECTIONS
     	*(.sdata .sdata.*)
 		*(.sdata2.*)
     	*(.gnu.linkonce.s.*)
-    	. = ALIGN(8);
-    	*(.srodata.cst16)
-    	*(.srodata.cst8)
-    	*(.srodata.cst4)
-    	*(.srodata.cst2)
-    	*(.srodata .srodata.*)
     	. = ALIGN(4);
 		PROVIDE( _edata = .);
 	} >RAM AT>FLASH

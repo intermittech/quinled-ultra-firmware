@@ -7,6 +7,7 @@
 #include "hw.h"
 #include "../core/store.h"
 #include "../core/stagger.h"
+#include "../core/scratch.h"
 
 uint32_t SystemCoreClock = 144000000u;
 
@@ -737,6 +738,10 @@ int settings_load(settings_t *s, store_ext_t *ext)
  * last values. Sequences as in WCH's ch32v20x_flash.c; BENCH: verify. Returns the stall estimate in us. */
 #define STORE_PROGRAM_US 2000u                           /* BENCH: measure (datasheet: fast page erase 16 ms) */
 #define STORE_ERASE_US   16000u
+/* the record being programmed: in the main loop's scratch (core/scratch.h) */
+typedef char rec_fits_scratch[(sizeof(cal_rec_t) <= CORE_SCRATCH_WORDS * 4u &&
+                               sizeof(store_slot_t) <= CORE_SCRATCH_WORDS * 4u &&
+                               sizeof(scene_rec_t) <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
 
 static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
@@ -791,17 +796,17 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
  * used. */
 uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
 {
-    static store_slot_t slot;
+    store_slot_t *slot = (store_slot_t *)core_scratch;
     int free_slot = store_free < 0 ? store_next_free((const uint8_t *)SETTINGS_ADDR) : store_free;
     uint32_t erase = 0;
 
-    store_pack_ext(s, ext, ++store_seq, &slot);
+    store_pack_ext(s, ext, ++store_seq, slot);
     if (free_slot >= (int)STORE_SLOTS) {
         erase = SETTINGS_ADDR;
         free_slot = 0;
     }
     store_free = free_slot + 1;                          /* STORE_SLOTS: the next save erases the page */
-    return flash_program(SETTINGS_ADDR + (uint32_t)free_slot * STORE_SLOT_BYTES, (const uint16_t *)&slot,
+    return flash_program(SETTINGS_ADDR + (uint32_t)free_slot * STORE_SLOT_BYTES, (const uint16_t *)slot,
                          STORE_SLOT_BYTES / 2u, erase);
 }
 
@@ -820,15 +825,15 @@ int scene_load(scene_t *sc)
 
 uint32_t scene_store(const scene_t *sc)
 {
-    static scene_rec_t rec;
+    scene_rec_t *rec = (scene_rec_t *)core_scratch;
     uint32_t idx = scene_next, erase = 0;
     if (scene_erase) {                                   /* entering a page: its oldest records go */
         erase = SCENE_LOG_ADDR + (idx / SCENE_RECS_PAGE) * SCENE_PAGE_BYTES;
     }
-    scene_log_pack(sc, ++scene_seq, &rec);
+    scene_log_pack(sc, ++scene_seq, rec);
     scene_next = (idx + 1u) % SCENE_RECS;
     scene_erase = (uint8_t)(scene_next % SCENE_RECS_PAGE == 0u);
-    return flash_program(SCENE_LOG_ADDR + idx * SCENE_REC_BYTES, (const uint16_t *)&rec, SCENE_REC_BYTES / 2u, erase);
+    return flash_program(SCENE_LOG_ADDR + idx * SCENE_REC_BYTES, (const uint16_t *)rec, SCENE_REC_BYTES / 2u, erase);
 }
 
 /* Current calibration (core/calstore.h): one page, 64-byte records. As with the settings, the page is only read
@@ -851,20 +856,20 @@ int cal_load(isense_cal_t *c, uint16_t *count)
 
 uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
 {
-    static cal_rec_t rec;
+    cal_rec_t *rec = (cal_rec_t *)core_scratch;
     int slot = cal_free < 0 ? cal_next_free((const uint8_t *)CAL_PAGE_ADDR) : cal_free;
     uint32_t erase = 0;
     if (c->levels != 0u) {
         cal_cnt++;
     }
-    cal_pack(c, ++cal_seq, cal_cnt, &rec);
+    cal_pack(c, ++cal_seq, cal_cnt, rec);
     if (slot >= (int)CAL_RECS) {
         erase = CAL_PAGE_ADDR;
         slot = 0;
     }
     cal_free = slot + 1;
     *count = cal_cnt;
-    return flash_program(CAL_PAGE_ADDR + (uint32_t)slot * CAL_REC_BYTES, (const uint16_t *)&rec, CAL_REC_BYTES / 2u,
+    return flash_program(CAL_PAGE_ADDR + (uint32_t)slot * CAL_REC_BYTES, (const uint16_t *)rec, CAL_REC_BYTES / 2u,
                          erase);
 }
 

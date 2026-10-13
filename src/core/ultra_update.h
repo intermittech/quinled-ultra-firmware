@@ -92,7 +92,7 @@ enum {
 /* board revisions (bit numbers of the revision mask; the bootloader carries its board's). An image installs only on
  * the hardware id and the revisions it lists. 0-2 were numbers of dig2analog-ultra drawings that were never built:
  * they stay unused, so no image can match them. */
-#define UPD_REV_D2A_R04      3u           /* dig2analog-ultra-5ch rev 0.4: LED on PB15, current sense, PA4 unused */
+#define UPD_REV_D2A_R04      3u           /* dig2analog-ultra-5ch rev 0.4: LED on PB15, current sense, supply on PA4 */
 
 /* version word: major << 24 | minor << 16 | patch << 8 | pre; compared as an unsigned number this sorts like
  * semver: 0.6.0-alpha.3 < 0.6.0-beta.1 < 0.6.0-rc.1 < 0.6.0 */

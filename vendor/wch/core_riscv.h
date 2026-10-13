@@ -129,7 +129,7 @@ typedef struct
  */
 __attribute__( ( always_inline ) ) RV_STATIC_INLINE void __enable_irq()
 {
-  __asm volatile ("csrs 0x800, %0" : : "r" (0x88) );
+  __asm volatile ("csrs 0x800, %0" : : "r" (0x88) : "memory");   /* QuinLED: a compiler barrier */
 }
 
 /*********************************************************************
@@ -141,8 +141,8 @@ __attribute__( ( always_inline ) ) RV_STATIC_INLINE void __enable_irq()
  */
 __attribute__( ( always_inline ) ) RV_STATIC_INLINE void __disable_irq()
 {
-  __asm volatile ("csrc 0x800, %0" : : "r" (0x88) );
-  __asm volatile ("fence.i");
+  __asm volatile ("csrc 0x800, %0" : : "r" (0x88) : "memory");   /* QuinLED: a compiler barrier */
+  __asm volatile ("fence.i" ::: "memory");
 }
 
 /*********************************************************************

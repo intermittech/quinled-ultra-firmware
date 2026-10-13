@@ -129,8 +129,8 @@ static void test_testjig(void)
             tj_pad(&t, ms, 1);
         }
         tj_outputs(&t, t.t0 + t.ramp_ms / 2u, v);
-        CHECK(v[0] > TJ_PEAK * 23u / 100u && v[0] < TJ_PEAK * 27u / 100u, "half way up: %u (a quarter of the peak, "
-              "gamma 2)", v[0]);
+        CHECK(v[0] > TJ_PEAK * 48u / 100u && v[0] < TJ_PEAK * 52u / 100u, "half way up: %u (half the peak, the "
+              "breathe curve)", v[0]);
         bad = 0;
         for (ms = t.t0; ms < t.t0 + 1500u; ms++) {
             tj_outputs(&t, ms, v);
@@ -201,8 +201,8 @@ static void test_testjig(void)
         cc.write = cap_write;
         cli_out[0] = 0;
         cli_test_report(&cc, ma, 33, 7, 24012);
-        CHECK(strcmp(cli_out, "test @33%: R 136 mA, G 131 mA, B 398 mA, W1 795 mA, W2 0 mA; "
-                              "est. @100%: R 412, G 397, B 1206, W1 2409, W2 0 mA; supply 24.01 V (cycle 7)\r\n") == 0,
+        CHECK(strcmp(cli_out, "test @33%: R 0.14 A, G 0.13 A, B 0.40 A, W1 0.80 A, W2 0.00 A; "
+                              "est. @100%: R 0.41, G 0.40, B 1.21, W1 2.41, W2 0.00 A; supply 24.01 V (cycle 7)\r\n") == 0,
               "report line: %s", cli_out);
         cli_out[0] = 0;
         cli_test_report(&cc, ma, 33, 1, 0);

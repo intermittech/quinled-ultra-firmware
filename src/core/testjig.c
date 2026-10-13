@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Test jig mode: see testjig.h. */
 #include "testjig.h"
+#include "ultra.h"                   /* ultra_breathe: the breathe effect's curve */
 
 void tj_init(testjig_t *t, uint32_t cycle_ms)
 {
@@ -69,7 +70,7 @@ static uint32_t tj_where(const testjig_t *t, uint32_t now, uint32_t *x)
 
 void tj_outputs(const testjig_t *t, uint32_t now, uint16_t v[5])
 {
-    uint32_t x, p = 0;
+    uint32_t x, ph = 0;
     uint32_t ch = tj_where(t, now, &x);
     uint8_t i;
     for (i = 0; i < 5u; i++) {
@@ -78,14 +79,16 @@ void tj_outputs(const testjig_t *t, uint32_t now, uint16_t v[5])
     if (ch >= 5u) {
         return;
     }
+    /* one breathe (the Ultra effect's curve): up its first half, TJ_HOLD_MS at the top, down its second half */
     if (x < t->ramp_ms) {
-        p = x * 65535u / t->ramp_ms;                                      /* up */
+        ph = x * 32768u / t->ramp_ms;
     } else if (x < t->ramp_ms + TJ_HOLD_MS) {
-        p = 65535u;                                                       /* hold at the peak */
+        v[ch] = (uint16_t)TJ_PEAK;                       /* the hold: exactly the peak (the current is measured here) */
+        return;
     } else if (x < 2u * t->ramp_ms + TJ_HOLD_MS) {
-        p = (2u * t->ramp_ms + TJ_HOLD_MS - 1u - x) * 65535u / t->ramp_ms;   /* down: the up ramp mirrored */
+        ph = 32768u + (x + 1u - t->ramp_ms - TJ_HOLD_MS) * 32768u / t->ramp_ms;
     }
-    v[ch] = (uint16_t)(p * p / 65535u * TJ_PEAK / 65535u);               /* gamma 2, scaled to the peak */
+    v[ch] = (uint16_t)(ultra_breathe(ph) * TJ_PEAK / 65536u);
 }
 
 uint8_t tj_measure(testjig_t *t, uint32_t now, int32_t i_ma, int32_t zero_ma)

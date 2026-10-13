@@ -20,7 +20,10 @@ LDARCH="-march=rv32imc -mabi=ilp32"   # selects the rv32imc multilib (libgcc)
 OUT="${OUT:-$FW/build/target}"
 mkdir -p "$OUT"
 echo "compiler: $("$GCC" --version | head -1)"
-CFLAGS="$ARCH -Os -g -ffunction-sections -fdata-sections -fno-common -msmall-data-limit=8 \
+# -msmall-data-limit=400: every variable up to 400 bytes goes to .sbss / .sdata, in reach of gp (one instruction
+# less per access); the big buffers (ul, din_ring / din_copy, tail_copy, uart_tx, the PWM tables) stay outside.
+# Small constants (.srodata) stay in flash (Link_sections.ld).
+CFLAGS="$ARCH -Os -g -ffunction-sections -fdata-sections -fno-common -msmall-data-limit=400 \
  -Wall -Wextra -Wno-unused-parameter -DCH32V20x_D6 -I$FW/vendor/wch -I$FW/src/hal -I$FW/src $EXTRA_CFLAGS"
 SRC="$FW/src/app/main.c $FW/src/hal/hw.c"
 for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
@@ -37,8 +40,10 @@ OBJS="$OUT/startup.o $OUT/isr.o"
 for s in $SRC; do
   o="$OUT/$(basename "${s%.c}").o"
   f=""
+  case "$s" in */ws_decode.c) f="-O2" ;; esac          # the per-frame bit decoder: -15 % cycles for 64 bytes
   case "$s" in */upd_app.c) f="$NOCRC" ;; esac
   case "$s" in */cli.c|*/config.c|*/store.c|*/scene.c|*/calstore.c|*/upd_app.c|*/ack.c|*/climit.c|*/mcutemp.c) f="$f $COLD" ;; esac
+  case "$s" in */pwrev.c|*/fwver.c) f="$f $COLD" ;; esac   # also cold: every ms at most / boot
   "$GCC" $CFLAGS $f -c "$s" -o "$o"
   OBJS="$OBJS $o"
 done

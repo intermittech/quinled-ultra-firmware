@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 #include "dither.h"
+#include "scratch.h"
 
 /* spread `count` marks evenly over len slots (Bresenham), starting at `phase`; mark -> hi, else lo */
 static void spread(uint32_t count, uint32_t len, uint32_t lo, uint32_t hi, uint8_t phase, uint16_t *dst,
@@ -103,9 +104,12 @@ void dither_build(uint16_t v16, uint32_t steps, uint8_t len, const dither_opts_t
 /* ---------------------------------------------------------------------------------------------- spread */
 #define VAR_MAX 64u
 
-/* the ideal counts of each entry, v x period / 65535 = q + r / 65535, computed once per table */
-static uint32_t var_q[VAR_MAX];
-static uint16_t var_r[VAR_MAX];
+/* the ideal counts of each entry, v x period / 65535 = q + r / 65535, computed once per table: in the main loop's
+ * shared scratch (scratch.h; the stagger search uses it at other times) */
+uint32_t core_scratch[CORE_SCRATCH_WORDS];
+#define var_q (core_scratch)
+#define var_r ((uint16_t *)(core_scratch + VAR_MAX))
+typedef char var_fits_scratch[(VAR_MAX * 4u + VAR_MAX * 2u <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
 
 /* x / 65535 without a divide: exact for x < 65535 x 65536 (v < 65535, period <= 65536) */
 static uint32_t div65535(uint32_t x)

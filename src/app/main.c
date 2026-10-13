@@ -44,7 +44,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.5.3"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.5.5"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -87,12 +87,34 @@ static isense_t is;
 #define TAIL_PAST  4u                      /* words past the ring position of the last-edge tick */
 static uint16_t tail_copy[TAIL_WORDS];     /* the end of the frame, for the Ultra header (ws_decode_last) */
 
+/* k words s -> d, both 4-byte aligned: 32-bit copies, four per step (the poll ISR's longest path); returns the end */
+static uint16_t *copy_run(uint16_t *d, const uint16_t *s, uint32_t k)
+{
+    uint32_t *dw = (uint32_t *)d;
+    const uint32_t *sw = (const uint32_t *)s, *se = sw + (k >> 1);
+    while (se - sw >= 4) {
+        uint32_t a = sw[0], b = sw[1], c = sw[2], e = sw[3];
+        dw[0] = a;
+        dw[1] = b;
+        dw[2] = c;
+        dw[3] = e;
+        dw += 4;
+        sw += 4;
+    }
+    while (sw < se) {
+        *dw++ = *sw++;
+    }
+    d = (uint16_t *)dw;
+    if (k & 1u) {
+        *d++ = *(const uint16_t *)sw;
+    }
+    return d;
+}
+
 /* ring words [start, end) -> dst (at most max words), two straight runs; returns the words copied */
 static uint32_t ring_copy(uint16_t *dst, uint32_t start, uint32_t end, uint32_t max)
 {
-    uint32_t n = (end - start) & (DIN_RING_WORDS - 1u), first, i;
-    uint16_t *d = dst;
-    const uint16_t *s = &din_ring[start];
+    uint32_t n = (end - start) & (DIN_RING_WORDS - 1u), first;
     if (n > max) {
         n = max;
     }
@@ -100,15 +122,8 @@ static uint32_t ring_copy(uint16_t *dst, uint32_t start, uint32_t end, uint32_t 
     if (first > n) {
         first = n;
     }
-    for (i = 0; i + 1u < first; i += 2u, d += 2, s += 2) {      /* start is even: 32-bit copies */
-        *(uint32_t *)d = *(const uint32_t *)s;
-    }
-    for (s = din_ring; i + 1u < n; i += 2u, d += 2, s += 2) {   /* first is even too (ring size even) */
-        *(uint32_t *)d = *(const uint32_t *)s;
-    }
-    if (i < n) {
-        *d = *s;
-    }
+    dst = copy_run(dst, &din_ring[start], first);              /* start is even: aligned */
+    (void)copy_run(dst, din_ring, n - first);                  /* when it wraps, first is even too (ring size even) */
     return n;
 }
 
@@ -126,7 +141,7 @@ void poll_isr(void)
         ms_now++;
         hw_adc_ms();                       /* the ADC's injected group: voltage channels / MCU temperature */
     }
-    if (is.enabled && isense_tick(&is, ISENSE_RAW())) {
+    if (is.enabled && isense_tick(&is, ISENSE_RAW())) {   /* (enabled: not before isense_setup at boot) */
         pwm_force_off(1);                  /* a short: all outputs off now, no table rebuild */
     }
     if (!rx_ready) {
@@ -339,9 +354,18 @@ static void limit_update(void)
 
 /* calibration (config frame, console, Ultra IDENTIFY 2): duty_pct 0 = the standard test (each channel alone at
  * 25 / 50 / 75 / 100 %), 5..100 = each channel alone at that duty only */
+/* the current sense from scratch (boot, factory reset): the tick is running, so no half-initialised trip level */
+static void isense_setup(void)
+{
+    __disable_irq();
+    isense_init(&is, 1, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
+    isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16 * 100u / ISENSE_AMP_GAIN);   /* board.h: amplifier gain */
+    __enable_irq();
+}
+
 static uint8_t isense_calibrate(uint8_t duty_pct)
 {
-    if (!is.enabled || is.tripped != ISENSE_TRIP_NONE || tj.active) {
+    if (is.tripped != ISENSE_TRIP_NONE || tj.active) {
         return 0;                          /* (the test jig's pattern keeps the outputs) */
     }
     isense_cal_start(&is, duty_pct == 0u ? 0u : (uint16_t)((uint32_t)duty_pct * 65535u / 100u));
@@ -357,9 +381,6 @@ static void flash_stall_end(uint32_t us);
 static void isense_service(void)
 {
     uint32_t sum, n, peak, ev;
-    if (!is.enabled) {
-        return;
-    }
     __disable_irq();
     isense_take(&is, &sum, &n, &peak);
     __enable_irq();
@@ -379,10 +400,6 @@ static void isense_service(void)
     }
     if (ev & ISENSE_EV_CAL_DONE) {
         cal_save_pend = 1;                 /* the test with its curves: its own page, once the content is back */
-        if (isense_export(&is, sext.ich25, &sext.izero)) {
-            settings_dirty = 1;            /* the 100 % values also in the settings (older firmware), debounced */
-            changed_ms = ms_now;
-        }
         limit_update();                    /* the connected load is known now */
     }
 }
@@ -509,11 +526,6 @@ static cfg_event_t scene_command(uint8_t cmd, uint8_t arg)
 static cfg_result_t handle_result(cfg_result_t r)
 {
     if (r.event == CFG_ACK && (r.cmd == CMD_ISENSE_LIMIT || r.cmd == CMD_ISENSE_CAL)) {
-        if (!is.enabled) {
-            r.event = CFG_NACK;            /* no current sense on this board */
-            ack_start(&ack, ACK_P_NACK, 0);
-            return r;
-        }
         if (r.cmd == CMD_ISENSE_CAL) {
             if (!isense_calibrate(r.arg)) {
                 r.event = CFG_NACK;        /* tripped: not now */
@@ -566,11 +578,7 @@ static cfg_result_t handle_result(cfg_result_t r)
                 flash_stall_end(cal_store(&none, &cal_cnt));
                 cal_present = 0;
             }
-            __disable_irq();               /* the tick must not see the half-initialised trip level */
-            isense_init(&is, is.enabled, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
-            isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16 * 100u / ISENSE_AMP_GAIN);
-            __enable_irq();
-            ul.board_limit_ext = is.enabled;
+            isense_setup();
         }
         apply_settings();
         settings_dirty = 1;
@@ -707,7 +715,7 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
     if (slot == 0) {
         return;
     }
-    ev = ultra_on_slot(&ul, slot, hdr_tick);
+    ev = ultra_apply_slot(&ul, slot, hdr_tick);       /* frx_capture checked its CRC */
     if (ev & ULTRA_EV_STATE) {
         scene_takeover(&srun, 0x1Fu, ms_now);   /* the host sends states: the power-on scene fades over */
         outputs_dirty = 1;
@@ -734,14 +742,14 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
     }
     if (ev & ULTRA_EV_IDENTIFY) {
         if (ul.identify == ULTRA_IDENT_CAL) {
-            (void)isense_calibrate(ul.identify_arg);   /* boards without current sense ignore it */
+            (void)isense_calibrate(ul.identify_arg);   /* refused while tripped or in test mode */
         } else if (ul.identify == ULTRA_IDENT_DARK) {
             dark_hold(&dk, ms_now, (ul.identify_arg ? ul.identify_arg : 60u) * 1000u);
         } else if (ul.identify == ULTRA_IDENT_RELEASE) {
             dark_release(&dk, ms_now);
         } else if (ul.identify == ULTRA_IDENT_VERSION) {
             ack_start_version(&ack, fw_version);
-        } else if (ul.identify == ULTRA_IDENT_ON) {      /* (ultra_on_slot drops unknown values) */
+        } else if (ul.identify == ULTRA_IDENT_ON) {      /* (ultra_apply_slot drops unknown values) */
             ack_start(&ack, ACK_P_IDENTIFY, 0);
         } else {
             ack_stop(&ack);
@@ -754,7 +762,6 @@ static void protocol_changed(proto_t from, proto_t to)
 {
     if (to == PROTO_ULTRA) {
         ultra_init(&ul, tick_now ^ 0xA5C3u);
-        ul.board_limit_ext = is.enabled;   /* CONFIG 21 is the measured limit (isense), not the computed one */
         ultra_on = 1;
     } else if (from == PROTO_ULTRA) {
         ultra_on = 0;                      /* the host's CONFIG ends with Ultra: stored settings again */
@@ -814,10 +821,17 @@ static void upd_action(uint32_t a)
     }
 }
 
+/* the decoded bits of a capture: this board's slot (process_capture) or a whole update frame (upd_capture), never
+ * both at once (each is used up within its call) */
+static union {
+    uint8_t slot[PROTO_BITS_BUF];
+    uint8_t upd[UPD_FRAME_BYTES + 4];
+} dec;
+
 static void upd_capture(void)
 {
     static const ws_timing_t tm = WS_TIMING_DEFAULT;
-    static uint8_t f[UPD_FRAME_BYTES + 4];
+    uint8_t *f = dec.upd;
     if (cap_bits < UPD_FRAME_BITS ||
         ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)UPD_FRAME_BITS, &tm, f) != (int)UPD_FRAME_BITS) {
         return;                            /* the session repeats every block (passes) */
@@ -878,7 +892,7 @@ static void upd_service(void)
 static void process_capture(void)
 {
     static const ws_timing_t tm = WS_TIMING_DEFAULT;
-    static uint8_t bits[PROTO_BITS_BUF];
+    uint8_t *bits = dec.slot;
     uint32_t skip = cap_skip, want = cap_bits - skip;
     proto_t p = (proto_t)cap_proto;
     slot_t slot;
@@ -1076,9 +1090,8 @@ static void status_snapshot(void)
     for (i = 0; i < 5u; i++) {
         stat.out[i] = ultra_on ? uout[i] : sm.cur[i];
     }
-    stat.isense = is.enabled;
     stat.ilimit50 = sext.ilimit50 == 0xFFu ? 0u : sext.ilimit50;
-    if (is.enabled) {
+    {
         stat.i_ma = is.i_avg;
         stat.i_peak_ma = is.peak_ma;
         stat.i_zero_ma = is.zero_valid ? is.zero_ma : 0;
@@ -1153,13 +1166,7 @@ int main(void)
     vsense_init(&vs_sup, VSENSE_SUPPLY_RT, VSENSE_SUPPLY_RB, VSENSE_VREF_MV);
     vsense_init(&vs_aux, VSENSE_AUX_RT, VSENSE_AUX_RB, VSENSE_VREF_MV);
     hw_adc_init();                         /* PA7 continuously, the injected group from the poll tick */
-    {
-        __disable_irq();                   /* the tick is running: no half-initialised trip level */
-        isense_init(&is, 1, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
-        isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16 * 100u / ISENSE_AMP_GAIN);   /* board.h: amplifier gain */
-        __enable_irq();
-    }
-    isense_restore(&is, sext.ich25, sext.izero);                         /* stored calibration (100 % values) */
+    isense_setup();
     {
         isense_cal_t c;
         if (cal_load(&c, &cal_cnt) == 0) {
@@ -1167,13 +1174,13 @@ int main(void)
             cal_present = 1;
         }
     }
-    ul.board_limit_ext = is.enabled;
     stat.reset_flags = hw_reset_flags();
     upd_boot();                            /* UPD_APP: the reset flags from the hand-over, the bootloader's result */
+#if UPD_APP
+    fw_version = upd.info.desc_ok ? upd.info.version : 0u;   /* the descriptor's: what the boards compare in an update */
+#else
     fw_version = fwver_parse(FW_VERSION);
-    if (upd.info.desc_ok && upd.info.version != 0u) {
-        fw_version = upd.info.version;     /* release builds: the descriptor, what the boards compare in an update */
-    }
+#endif
     fwver_format(fw_version, fw_version_text);
     stat.version = fw_version != 0u ? fw_version_text : FW_VERSION " (development build)";
     stat.bl_version = upd.info.bl_version;

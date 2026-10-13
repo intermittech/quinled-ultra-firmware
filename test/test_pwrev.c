@@ -171,9 +171,9 @@ static void test_pwrev(void)
         st.pw_state = pwrev_state(&p);
         pwrev_page(&p, st.pw_page);
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "power_state=limiting (factor 812 permille)\r\n"
+        CHECK(strstr(cli_out, "power_state=limiting (factor 81.2 %)\r\n"
                               "power_events=limit 1, overload trips 0, short trips 1, latched: limit short\r\n"
-                              "power_last_limit=5 s ago, 8100 mA\r\npower_last_trip=9 s ago, short, 15200 mA\r\n") != NULL,
+                              "power_last_limit=5 s ago, 8.10 A\r\npower_last_trip=9 s ago, short, 15.20 A\r\n") != NULL,
               "status: limiting, a short before");
         pw_run(&p, 9500, 9600, pw_in(0, 0, ULTRA_PW_CAUSE_OVERLOAD, 0, 10600));
         st.pw_state = pwrev_state(&p);

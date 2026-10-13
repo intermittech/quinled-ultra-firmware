@@ -1,24 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
+#include <stddef.h>
 #include "store.h"
 
 typedef char store_slot_size_check[(sizeof(store_slot_t) == STORE_SLOT_BYTES && sizeof(settings_t) == 16u &&
-                                    sizeof(store_ext_t) == 7u) ? 1 : -1];
+                                    sizeof(store_ext_t) == 7u &&
+                                    offsetof(store_slot_t, crc) == 8u + 16u + 7u) ? 1 : -1];   /* no padding */
 
-/* v1: seq + s; v2: seq + s, then ext (the crc byte sits in between) */
-static uint8_t slot_crc(const store_slot_t *sl, int v2)
+/* seq, s and ext: the bytes from seq up to the crc */
+static uint8_t slot_crc(const store_slot_t *sl)
 {
-    uint8_t c = crc8_smbus((const uint8_t *)&sl->seq, 4u + (uint32_t)sizeof(settings_t));
-    if (v2) {
-        uint8_t buf[1 + sizeof(store_ext_t)];
-        uint32_t i;
-        buf[0] = c;
-        for (i = 0; i < sizeof(store_ext_t); i++) {
-            buf[1u + i] = ((const uint8_t *)&sl->ext)[i];
-        }
-        c = crc8_smbus(buf, (uint32_t)sizeof buf);
-    }
-    return c;
+    return crc8_smbus((const uint8_t *)&sl->seq, 4u + (uint32_t)sizeof(settings_t) + (uint32_t)sizeof(store_ext_t));
 }
 
 void store_ext_clear(store_ext_t *e)
@@ -36,11 +28,11 @@ void store_pack_ext(const settings_t *s, const store_ext_t *e, uint32_t seq, sto
     for (i = 0; i < STORE_SLOT_BYTES; i++) {
         b[i] = 0xFF;
     }
-    slot->magic = STORE_MAGIC2;
+    slot->magic = STORE_MAGIC;
     slot->seq = seq;
     slot->s = *s;
     slot->ext = *e;
-    slot->crc = slot_crc(slot, 1);
+    slot->crc = slot_crc(slot);
 }
 
 void store_pack(const settings_t *s, uint32_t seq, store_slot_t *slot)
@@ -56,9 +48,7 @@ int store_find_ext(const uint8_t *page, settings_t *out, store_ext_t *ext, uint3
     uint32_t i, best_seq = 0;
     for (i = 0; i < STORE_SLOTS; i++) {
         const store_slot_t *sl = (const store_slot_t *)(page + i * STORE_SLOT_BYTES);
-        int ok = (sl->magic == STORE_MAGIC && sl->crc == slot_crc(sl, 0)) ||
-                 (sl->magic == STORE_MAGIC2 && sl->crc == slot_crc(sl, 1));
-        if (ok && (best < 0 || sl->seq > best_seq)) {
+        if (sl->magic == STORE_MAGIC && sl->crc == slot_crc(sl) && (best < 0 || sl->seq > best_seq)) {
             best = (int)i;
             best_seq = sl->seq;
         }
@@ -66,11 +56,7 @@ int store_find_ext(const uint8_t *page, settings_t *out, store_ext_t *ext, uint3
     if (best >= 0) {
         const store_slot_t *sl = (const store_slot_t *)(page + (uint32_t)best * STORE_SLOT_BYTES);
         *out = sl->s;
-        if (sl->magic == STORE_MAGIC2) {
-            *ext = sl->ext;
-        } else {
-            store_ext_clear(ext);
-        }
+        *ext = sl->ext;
         *seq = best_seq;
     }
     return best;

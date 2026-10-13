@@ -170,19 +170,19 @@ static void test_dtw(void)
                "(%.3f %%) per 1 ms update\n", steps_max, steps_max * 100.0 / 65535);
         CHECK(steps_max < 80, "smooth: largest step per 1 ms update %d counts", steps_max);
     }
-    /* 6. off is off; the power limit includes the red assist */
+    /* 6. off is off; the channel limit holds on the red assist */
     dtw_set(&on, 0, a, 0, o1);
     CHECK(!o1[0] && !o1[3] && !o1[4], "off");
     {
-        uint8_t s[ULTRA_SLOT_BYTES], ids[4] = { ULTRA_CFG_CH_CURRENT, ULTRA_CFG_CH_CURRENT + 3, ULTRA_CFG_CH_CURRENT + 4, ULTRA_CFG_BOARD_MAX };
-        uint16_t vals[4] = { 3000, 5000, 5000, 200 };
+        uint8_t s[ULTRA_SLOT_BYTES], ids[4] = { ULTRA_CFG_CH_CURRENT, ULTRA_CFG_CH_CURRENT + 3, ULTRA_CFG_CH_CURRENT + 4, ULTRA_CFG_CH_MAX };
+        uint16_t vals[4] = { 3000, 5000, 5000, 100 };
         uint32_t ma;
         dtw_ct(2700, a);
         ultra_slot_config(s, 9, ids, vals, 4);
         ultra_on_slot(&on.u, s, on.tick);
         dtw_set(&on, 20000, a, 0, o1);
-        ma = (o1[0] * 3000u + o1[3] * 5000u + o1[4] * 5000u) / 65535u;
-        CHECK(o1[0] != 0 && ma <= 201, "board limit 200 mA holds with red assist (%u mA)", ma);
+        ma = o1[0] * 3000u / 65535u;
+        CHECK(o1[0] != 0 && ma <= 100, "channel limit 100 mA holds on the red assist (%u mA)", ma);
     }
 
     /* 7. set points (ULTRA_OPT_POINTS), sent out of order: 100 % 4000 K, 30 % 3000 K, 5 % 2700 K */

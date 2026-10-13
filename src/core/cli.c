@@ -25,8 +25,8 @@ static const cli_key_t keys[] = {        /* short help: the values (README / wik
     { "gamma",    CMD_GAMMA,         "WS2805: 0 linear 1 2.2 2 2.8" },
     { "scene",    CMD_SCENE,         "power-on: 0 none 1 store now" },
     { "scenefade", CMD_SCENE_FADE,   "0..255 x 100 ms" },
-    { "ilimit",   CMD_ISENSE_LIMIT,  "x 50 mA, 0 = 8 A (isense)" },
-    { "ical",     CMD_ISENSE_CAL,    "0 = 25/50/75/100 %, 5..100 = one level (isense)" },
+    { "ilimit",   CMD_ISENSE_LIMIT,  "x 50 mA, 0 = 8 A" },
+    { "ical",     CMD_ISENSE_CAL,    "0 = 25/50/75/100 %, 5..100 = one level" },
 };
 #define NKEYS (sizeof(keys) / sizeof(keys[0]))
 
@@ -39,74 +39,106 @@ static int streq(const char *a, const char *b)
     return *a == *b;
 }
 
-static char *utoa10(uint32_t v, char *end)
-{
-    *--end = 0;
-    do {
-        *--end = (char)('0' + v % 10u);
-        v /= 10u;
-    } while (v);
-    return end;
-}
-
-static void wnum(cli_t *c, uint32_t v)
+/* v as decimal digits, at least `width` of them (zero-padded), then tail */
+static void wdig(cli_t *c, uint32_t v, uint32_t width, const char *tail)
 {
     char b[12];
-    c->write(utoa10(v, b + sizeof b));
+    char *p = b + sizeof b - 1;
+    *p = 0;
+    do {
+        *--p = (char)('0' + v % 10u);
+        v /= 10u;
+    } while (v || (uint32_t)(b + sizeof b - 1 - p) < width);
+    c->write(p);
+    c->write(tail);
 }
 
-/* mV in volts with two decimals, rounded to the nearest 10 mV: 12234 -> "12.23 V", 12235 -> "12.24 V" (the console;
- * telemetry stays in mV) */
-static void wvolt(cli_t *c, uint32_t mv)
+#define wnum(c, v) wdig((c), (v), 1u, "")
+
+/* the console's one number format: n / d rounded, as a number with dec (0..2) decimals, then the unit (12234 mV with
+ * d 10, dec 2 -> "12.23 V"). The console shows readable units (V, A, W, %, s); telemetry and the data structures stay
+ * raw (mV, mA, 16-bit outputs). */
+static void wdec(cli_t *c, uint32_t n, uint32_t d, uint32_t dec, const char *unit)
 {
-    uint32_t cv = (mv + 5u) / 10u;
-    wnum(c, cv / 100u);
-    c->write(cv % 100u < 10u ? ".0" : ".");
-    wnum(c, cv % 100u);
-    c->write(" V");
+    uint32_t p = dec == 2u ? 100u : dec == 1u ? 10u : 1u;
+    uint32_t v = (n + d / 2u) / d;
+    if (dec) {
+        wdig(c, v / p, 1, ".");
+        v %= p;
+    }
+    wdig(c, v, dec, unit);
+}
+
+/* mA in A with two decimals (negative: 0), mV in V with two decimals, a 16-bit level in % with one decimal */
+static void wamp(cli_t *c, int32_t ma, const char *unit)
+{
+    wdec(c, ma > 0 ? (uint32_t)ma : 0u, 10u, 2, unit);
+}
+
+#define wvolt(c, mv) wdec((c), (mv), 10u, 2u, " V")
+
+static void wpct16(cli_t *c, uint32_t v, const char *unit)
+{
+    wdec(c, v * 1000u, 65535u, 1, unit);
+}
+
+/* ms as h:mm:ss, with days when longer */
+static void wtime(cli_t *c, uint32_t ms, const char *tail)
+{
+    uint32_t sec = ms / 1000u, m = sec / 60u, h = m / 60u;
+    if (h >= 24u) {
+        wdig(c, h / 24u, 1, "d ");
+    }
+    wdig(c, h % 24u, 1, ":");
+    wdig(c, m % 60u, 2, ":");
+    wdig(c, sec % 60u, 2, tail);
+}
+
+/* key=value line: the value as wdec */
+static void kvd(cli_t *c, const char *k, uint32_t n, uint32_t d, uint32_t dec, const char *unit)
+{
+    c->write(k);
+    c->write("=");
+    wdec(c, n, d, dec, unit);
+    c->write("\r\n");
 }
 
 static void kv(cli_t *c, const char *k, uint32_t v)
 {
-    c->write(k);
-    c->write("=");
-    wnum(c, v);
-    c->write("\r\n");
+    kvd(c, k, v, 1u, 0u, "");
+}
+
+static void kva(cli_t *c, const char *k, int32_t ma)
+{
+    kvd(c, k, ma > 0 ? (uint32_t)ma : 0u, 10u, 2, " A");
 }
 
 void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
 {
     static const char *const name[5] = { "R ", "G ", "B ", "W1 ", "W2 " };
-    uint8_t i, k;
+    uint32_t i, k;
+    c->write("test @");
+    wdig(c, pct, 1, "%: ");
     for (k = 0; k < 2u; k++) {             /* as measured at pct %, then scaled to 100 % */
-        c->write(k == 0u ? "test @" : " mA; est. @100%: ");
-        if (k == 0u) {
-            wnum(c, pct);
-            c->write("%: ");
-        }
         for (i = 0; i < 5u; i++) {
             uint32_t v = ma[i] > 0 ? (uint32_t)ma[i] : 0u;
-            if (i != 0u) {
-                c->write(k == 0u ? " mA, " : ", ");
-            }
             c->write(name[i]);
-            wnum(c, k == 0u ? v : (v * 100u + pct / 2u) / (pct ? pct : 1u));
+            wdec(c, k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u), 100u, 2,
+                 i < 4u ? (k == 0u ? " A, " : ", ") : (k == 0u ? " A; est. @100%: " : " A; supply "));
         }
     }
-    c->write(" mA; supply ");
     if (supply_mv != 0u) {
         wvolt(c, supply_mv);
     } else {
         c->write("n/a");
     }
     c->write(" (cycle ");
-    wnum(c, cycle);
-    c->write(")\r\n");
+    wdig(c, cycle, 1, ")\r\n");
 }
 
 void cli_banner(cli_t *c)
 {
-    static const char *const app[] = { "standalone build (no bootloader, no updates over the data line)",
+    static const char *const app[] = { "standalone build (no bootloader)",
                                        "trial (not confirmed yet)", "confirmed" };
     const cli_status_t *s = c->st;
     c->write("QuinLED dig2analog-ultra firmware v");
@@ -114,14 +146,11 @@ void cli_banner(cli_t *c)
     c->write(", Copyright (C) 2026 QuinLED, GPL-3.0, source: github.com/intermittech/quinled-ultra-firmware\r\n");
     if (s->bl_version != 0u) {
         c->write("bootloader rev ");
-        wnum(c, s->bl_version);
-        c->write(" (build ");
+        wdig(c, s->bl_version, 1, " (build ");
         c->write(s->bl_build);
         c->write("), hardware ");
-        wnum(c, s->hw_id);
-        c->write(" revision ");
-        wnum(c, s->hw_rev);
-        c->write(", app ");
+        wdig(c, s->hw_id, 1, " revision ");
+        wdig(c, s->hw_rev, 1, ", app ");
     } else {
         c->write("app ");
     }
@@ -179,10 +208,11 @@ static void status(cli_t *c)
     static const char *const proto[] = { "none", "WS2915 32-bit header", "WS2915 26-bit header", "WS2805", "Ultra" };
     static const char *const mode[] = { "auto", "WS2915", "WS2805", "Ultra" };
     static const char *const err[] = { "", "no edge", "no gap", "short", "truncated", "pulse" };
+    static const char *const cause[] = { "-", "short", "overload" };
     uint32_t i;
     cli_banner(c);
-    kv(c, "uptime_ms", s->uptime_ms);
-    c->write("reset=");
+    c->write("uptime=");
+    wtime(c, s->uptime_ms, "\r\nreset=");
     c->write((s->reset_flags & 0x20000000u) ? "watchdog " : "");
     c->write((s->reset_flags & 0x08000000u) ? "power-on " : "");
     c->write((s->reset_flags & 0x04000000u) ? "pin " : "");
@@ -201,10 +231,7 @@ static void status(cli_t *c)
     for (i = 1; i < 6u; i++) {
         if (s->dec_err[i]) {
             c->write("decode_error ");
-            c->write(err[i]);
-            c->write("=");
-            wnum(c, s->dec_err[i]);
-            c->write("\r\n");
+            kv(c, err[i], s->dec_err[i]);
         }
     }
     if (s->ultra_headers || s->ultra_tail_err) {
@@ -216,35 +243,31 @@ static void status(cli_t *c)
     kv(c, "pwm_steps", s->steps);
     kv(c, "flash_saves", s->saves);
     if (s->stagger_moves || s->ripple_ma) {
-        kv(c, "stagger_tim2_permille", (uint32_t)s->stagger_o2 * 1000u >> 16);
-        kv(c, "stagger_tim3_permille", (uint32_t)s->stagger_o3 * 1000u >> 16);
+        kvd(c, "stagger_tim2", (uint32_t)s->stagger_o2 * 1000u, 65536u, 1, " %");     /* % of the period */
+        kvd(c, "stagger_tim3", (uint32_t)s->stagger_o3 * 1000u, 65536u, 1, " %");
         kv(c, "stagger_moves", s->stagger_moves);
-        kv(c, "ripple_ma_rms", s->ripple_ma);
+        kva(c, "ripple_rms", (int32_t)s->ripple_ma);
     }
     c->write("out R/G/B/W1/W2=");
     for (i = 0; i < 5u; i++) {
-        wnum(c, s->out[i]);
-        c->write(i < 4u ? "/" : "\r\n");
+        wpct16(c, s->out[i], i < 4u ? "/" : " %\r\n");
     }
-    if (s->isense) {
+    {
         static const char *const model[] = { "none", "learned", "calibrated" };
-        static const char *const cause[] = { "-", "short", "overload" };
-        kv(c, "current_ma", (uint32_t)(s->i_ma > 0 ? s->i_ma : 0));
-        kv(c, "current_peak_ma", (uint32_t)(s->i_peak_ma > 0 ? s->i_peak_ma : 0));
-        kv(c, "current_zero_ma", (uint32_t)(s->i_zero_ma > 0 ? s->i_zero_ma : 0));
-        kv(c, "current_limit_ma", s->i_limit_ma);
-        kv(c, "current_scale_permille", s->i_k_permille);
+        kva(c, "current", s->i_ma);
+        kva(c, "current_peak", s->i_peak_ma);
+        kva(c, "current_zero", s->i_zero_ma);
+        kva(c, "current_limit", (int32_t)s->i_limit_ma);
+        kvd(c, "current_scale", s->i_k_permille, 1u, 1, " %");
         kv(c, "current_trips", s->i_trips);
         c->write("current_state=");
         c->write(s->i_cal ? "calibrating" : (s->i_tripped ? "tripped, outputs off" : "ok"));
         c->write(", last trip ");
         c->write(cause[s->i_trip_cause < 3u ? s->i_trip_cause : 0]);
-        c->write("\r\nchannel_ma R/G/B/W1/W2=");
+        c->write("\r\nchannel R/G/B/W1/W2=");
         for (i = 0; i < 5u; i++) {
-            wnum(c, (uint32_t)(s->i_ch_ma[i] > 0 ? s->i_ch_ma[i] : 0));
-            c->write(i < 4u ? "/" : "");
+            wamp(c, s->i_ch_ma[i], i < 4u ? "/" : " A (");
         }
-        c->write(" (");
         c->write(model[s->i_model < 3u ? s->i_model : 0]);
         c->write(")\r\n");
         if (s->cal_levels) {
@@ -252,18 +275,15 @@ static void status(cli_t *c)
             uint32_t l;
             c->write("calibration=");
             for (l = 0; l < s->cal_levels && l < 4u; l++) {
-                wnum(c, s->cal_pct[l]);
-                c->write(l + 1u < s->cal_levels ? "/" : " %, ");
+                wdig(c, s->cal_pct[l], 1, l + 1u < s->cal_levels ? "/" : " %, ");
             }
-            wnum(c, s->cal_count);
-            c->write(" tests stored\r\n");
+            wdig(c, s->cal_count, 1, " tests stored\r\n");
             for (i = 0; i < 5u; i++) {
-                c->write("calibration_ma ");
+                c->write("calibration ");
                 c->write(ch[i]);
                 c->write("=");
                 for (l = 0; l < s->cal_levels && l < 4u; l++) {
-                    wnum(c, s->cal_ma[i][l]);
-                    c->write(l + 1u < s->cal_levels ? "/" : "\r\n");
+                    wamp(c, s->cal_ma[i][l], l + 1u < s->cal_levels ? "/" : " A\r\n");
                 }
             }
         }
@@ -277,10 +297,7 @@ static void status(cli_t *c)
             c->write("-");
             t = -t;
         }
-        wnum(c, (uint32_t)t / 10u);
-        c->write(".");
-        wnum(c, (uint32_t)t % 10u);
-        c->write(" C (die), vdda=");
+        wdec(c, (uint32_t)t, 1u, 1, " C (die), vdda=");
         wvolt(c, s->vdda_mv);
         c->write("\r\n");
     }
@@ -290,31 +307,26 @@ static void status(cli_t *c)
     wvolt(c, s->vs_supply_min_mv);
     c->write(", max ");
     wvolt(c, s->vs_supply_max_mv);
-    c->write(" since the last status)");
-    if (s->isense) {
-        /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A) */
+    c->write(")\r\n");
+    {
+        /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A): mW, shown in W */
         uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
-        c->write("\r\ninput_mw=");
-        wnum(c, s->vs_supply_mv / 10u * ma / 100u);
-        c->write(" (supply x current)");
+        kvd(c, "input", s->vs_supply_mv / 10u * ma / 100u, 100u, 1, " W");
     }
-    c->write("\r\ntp8=");
+    c->write("tp8=");
     wvolt(c, s->vs_aux_mv);
-    c->write(" (PA0, spare input)\r\n");
-    c->write(s->test_mode ? "test_mode=on (test pad grounded)\r\n" : "test_mode=off\r\n");
+    c->write(s->test_mode ? "\r\ntest_mode=on\r\n" : "\r\ntest_mode=off\r\n");
     c->write("board_limit=");
     if (s->lim_ma == 0xFFFFu) {
         c->write("none");
     } else {
-        wnum(c, s->lim_ma);
-        c->write(" mA (");
+        wamp(c, s->lim_ma, " A (");
         c->write(climit_src_name(s->lim_src));
         c->write(")");
     }
     c->write(", connected ");
     if (s->lim_conn_ma) {
-        wnum(c, s->lim_conn_ma);
-        c->write(" mA: ");
+        wamp(c, (int32_t)s->lim_conn_ma, " A: ");
         c->write(s->lim_need == CLIMIT_NEED_NO ? "no limit needed\r\n" : "the limit may engage\r\n");
     } else {
         c->write("not known\r\n");
@@ -324,26 +336,21 @@ static void status(cli_t *c)
     if (s->oc_show == 0u) {
         c->write("off");
     } else {
-        static const char *const cause[] = { "", " (short)", " (overload)" };
-        c->write(s->oc_show == 2u ? "trip" : "limit");
+        c->write(s->oc_show == 2u ? "trip (" : "limit");
         c->write(s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "");
-        c->write(", since ");
-        wnum(c, s->oc_since_ms);
-        c->write(" ms (");
-        wnum(c, s->uptime_ms - s->oc_since_ms);
-        c->write(" ms ago), ");
+        c->write(s->oc_show == 2u ? "), since " : ", since ");
+        wtime(c, s->oc_since_ms, " (");
+        wdec(c, s->uptime_ms - s->oc_since_ms, 100u, 1, " s ago), ");
         if (s->oc_show == 2u ? s->oc_tripped : s->oc_limiting) {
             c->write(s->oc_show == 2u ? "outputs off" : "board limit active");
         } else {
             c->write("hold ");
-            wnum(c, s->oc_hold_ms);
-            c->write(" ms");
+            wdec(c, s->oc_hold_ms, 100u, 1, " s");
         }
     }
     c->write("\r\n");
     /* the power events (core/pwrev.h), decoded from the POWER page bytes a Diff-Power ultra receiver would send */
     {
-        static const char *const cause[] = { "", "short", "overload" };
         const uint8_t *g = s->pw_page;
         uint8_t st = s->pw_state, lat = g[ULTRA_PW_LATCHED], cs = (uint8_t)(g[ULTRA_PW_SRC_CAUSE] & 0x0Fu);
         uint32_t age;
@@ -355,20 +362,15 @@ static void status(cli_t *c)
                                                                                            : "channel-limiting") : "");
         if (st & ULTRA_ST_TRIPPED) {
             c->write(" (retry in ");
-            wnum(c, g[ULTRA_PW_RETRY_S]);
-            c->write(" s)");
+            wdig(c, g[ULTRA_PW_RETRY_S], 1, " s)");
         } else if (st & ULTRA_ST_LIMITING) {
             c->write(" (factor ");
-            wnum(c, ultra_get16(g + ULTRA_PW_FACTOR) * 1000u / 65535u);
-            c->write(" permille)");
+            wdec(c, ultra_get16(g + ULTRA_PW_FACTOR) * 1000u / 65535u, 1u, 1, " %)");
         }
         c->write("\r\npower_events=limit ");
-        wnum(c, ultra_get16(g + ULTRA_PW_LIMIT_EVENTS));
-        c->write(", overload trips ");
-        wnum(c, ultra_get16(g + ULTRA_PW_OVL_TRIPS));
-        c->write(", short trips ");
-        wnum(c, ultra_get16(g + ULTRA_PW_SHORT_TRIPS));
-        c->write(lat ? ", latched:" : ", nothing latched");
+        wdig(c, ultra_get16(g + ULTRA_PW_LIMIT_EVENTS), 1, ", overload trips ");
+        wdig(c, ultra_get16(g + ULTRA_PW_OVL_TRIPS), 1, ", short trips ");
+        wdig(c, ultra_get16(g + ULTRA_PW_SHORT_TRIPS), 1, lat ? ", latched:" : ", nothing latched");
         c->write((lat & ULTRA_PW_EV_LIMITED) ? " limit" : "");
         c->write((lat & ULTRA_PW_EV_OVERLOAD) ? " overload" : "");
         c->write((lat & ULTRA_PW_EV_SHORT) ? " short" : "");
@@ -377,22 +379,18 @@ static void status(cli_t *c)
         if (age == PWREV_AGE_NONE) {
             c->write("none");
         } else {
-            wnum(c, age);
-            c->write(" s ago, ");
-            wnum(c, ultra_get16(g + ULTRA_PW_EVENT_MA));
-            c->write(" mA");
+            wdig(c, age, 1, " s ago, ");
+            wamp(c, ultra_get16(g + ULTRA_PW_EVENT_MA), " A");
         }
         c->write("\r\npower_last_trip=");
         age = ultra_get24(g + ULTRA_PW_TRIP_AGE);
         if (age == PWREV_AGE_NONE) {
             c->write("none");
         } else {
-            wnum(c, age);
-            c->write(" s ago, ");
+            wdig(c, age, 1, " s ago, ");
             c->write(cause[cs < 3u ? cs : 0]);
             c->write(", ");
-            wnum(c, ultra_get16(g + ULTRA_PW_TRIP_MA));
-            c->write(" mA");
+            wamp(c, ultra_get16(g + ULTRA_PW_TRIP_MA), " A");
         }
         c->write("\r\n");
     }
@@ -400,15 +398,13 @@ static void status(cli_t *c)
         c->write("power-on scene R/G/B/W1/W2=");
         for (i = 0; i < 5u; i++) {
             if (c->scene->mask & (1u << i)) {
-                wnum(c, c->scene->v[i]);
+                wpct16(c, c->scene->v[i], "");
             } else {
                 c->write("-");
             }
-            c->write(i < 4u ? "/" : "");
+            c->write(i < 4u ? "/" : " %, fade ");
         }
-        c->write(", fade ");
-        wnum(c, c->scene->fade * 100u);
-        c->write(" ms\r\n");
+        wdec(c, c->scene->fade, 1u, 1, " s\r\n");
     }
 }
 
@@ -483,7 +479,7 @@ void cli_exec(cli_t *c, const char *line)
         cli_banner(c);
         c->apply(CMD_IDENTIFY, CFG_IDENTIFY_VERSION);   /* and blink it */
     } else {
-        c->write("error: unknown command, try help\r\n");
+        c->write("error: unknown command\r\n");
     }
 }
 

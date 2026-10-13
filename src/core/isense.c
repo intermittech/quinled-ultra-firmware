@@ -236,36 +236,6 @@ int isense_model_ok(const isense_t *s)
     return s->enabled && model_usable(s);
 }
 
-void isense_restore(isense_t *s, const uint8_t ch25[ISENSE_CH], uint8_t zero_ma)
-{
-    int32_t ma[ISENSE_CH];
-    uint32_t i;
-    if (zero_ma == 0xFFu) {
-        return;
-    }
-    for (i = 0; i < ISENSE_CH; i++) {
-        if (ch25[i] == 0xFFu) {
-            return;
-        }
-        ma[i] = (int32_t)ch25[i] * 25;
-    }
-    isense_set_model(s, ma, zero_ma);
-}
-
-int isense_export(const isense_t *s, uint8_t ch25[ISENSE_CH], uint8_t *zero_ma)
-{
-    uint32_t i;
-    if (!s->calibrated) {
-        return 0;
-    }
-    for (i = 0; i < ISENSE_CH; i++) {
-        int32_t v = (s->ch_ma[i] + 12) / 25;
-        ch25[i] = (uint8_t)(v < 0 ? 0 : (v > 254 ? 254 : v));
-    }
-    *zero_ma = (uint8_t)(s->zero_ma < 0 ? 0 : (s->zero_ma > 254 ? 254 : s->zero_ma));
-    return 1;
-}
-
 /* model: board LED current (mA, zero excluded) for outputs v at k = 1 */
 uint32_t isense_model_ma(const isense_t *s, const uint16_t v[ISENSE_CH])
 {

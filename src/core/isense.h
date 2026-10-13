@@ -174,8 +174,6 @@ uint32_t isense_connected_ma(const isense_t *s);
 /* the channel model is trusted (calibrated, or learned with a small error) */
 int  isense_model_ok(const isense_t *s);
 /* calibration <-> flash (store_ext_t): channel currents x 25 mA (0xFF = none), zero in mA (0xFF = none) */
-void isense_restore(isense_t *s, const uint8_t ch25[ISENSE_CH], uint8_t zero_ma);
-int  isense_export(const isense_t *s, uint8_t ch25[ISENSE_CH], uint8_t *zero_ma);   /* 0: not calibrated */
 
 /* every ms: sum / n = isense_tick() samples of that ms (taken with interrupts off: isense_take) */
 uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak_raw);

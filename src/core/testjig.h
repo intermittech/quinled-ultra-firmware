@@ -5,7 +5,7 @@
  *  - each channel R, G, B, W1, W2 in turn fades up to TJ_PEAK_PCT (Quindor: "No need to go to full, go to 33% max"),
  *    holds TJ_HOLD_MS and fades down again; the whole cycle takes the cycle time (TJ_CYCLE_MS, 1-2 s), repeated while
  *    the pad stays grounded;
- *  - the ramps are square-law (gamma 2), so the fade looks even; the values then take the normal output path: the
+ *  - the fade is the Ultra breathe effect's curve (ultra_breathe, sin^2); the values then take the normal output path: the
  *    board limit and the trips (isense), dim floor, dither, stagger, spread spectrum;
  *  - the board current over the end of each channel's hold, minus the zero, is that channel's current at the peak:
  *    after W2 the console prints the five, and the estimate at 100 % (cli_test_report), so a jig can check pass /

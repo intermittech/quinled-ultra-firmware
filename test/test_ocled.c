@@ -131,19 +131,19 @@ static void test_ocled(void)
         st.oc_tripped = 1;
         st.oc_since_ms = 1000;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "overcurrent_led=trip (short), since 1000 ms (2500 ms ago), outputs off\r\n"
+        CHECK(strstr(cli_out, "overcurrent_led=trip (short), since 0:00:01 (2.5 s ago), outputs off\r\n"
                               "power_state=") != NULL, "status: tripped");
         st.oc_tripped = 0;
         st.oc_cause = 2;
         st.oc_hold_ms = 7500;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "overcurrent_led=trip (overload), since 1000 ms (2500 ms ago), hold 7500 ms\r\n") != NULL,
+        CHECK(strstr(cli_out, "overcurrent_led=trip (overload), since 0:00:01 (2.5 s ago), hold 7.5 s\r\n") != NULL,
               "status: trip hold");
         st.oc_show = OCLED_LIMIT;
         st.oc_limiting = 1;
         st.oc_hold_ms = 0;
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "overcurrent_led=limit, since 1000 ms (2500 ms ago), board limit active\r\n") != NULL,
+        CHECK(strstr(cli_out, "overcurrent_led=limit, since 0:00:01 (2.5 s ago), board limit active\r\n") != NULL,
               "status: limiting");
     }
 }

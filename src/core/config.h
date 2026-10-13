@@ -39,7 +39,7 @@ enum {
     CMD_ISENSE_CAL    = 0x13,   /* current calibration: ARG 0 = each channel at 25 / 50 / 75 / 100 %, 5..100 = at ARG % */
 };
 
-/* CMD_IDENTIFY's ARG for the version blink (main.c, ack.h). Older firmware shows the identify blink for any ARG. */
+/* CMD_IDENTIFY's ARG for the version blink (main.c, ack.h) */
 #define CFG_IDENTIFY_VERSION 1u
 
 /* stagger modes (CMD_STAGGER / Ultra CONFIG 7), each one followed by its spread-spectrum variant */

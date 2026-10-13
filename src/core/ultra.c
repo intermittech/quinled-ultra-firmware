@@ -18,11 +18,18 @@ static uint32_t clz32(uint32_t x)
     return n;
 }
 
-/* x^g for x = x_q32 / 2^32 via log2 / exp2 tables (257 entries, linear interpolation): relative error < 1e-5,
- * monotonic. Result x^g x 65535 rounded (0..65535). */
+/* one Horner step of the polynomials in ultra_tables.c: acc = c + acc x t (t = [0, 1) as Q32, the product floored).
+ * With coefficients >= 0 every step is monotonic in t. */
+#define HORNER(acc, c, t) ((acc) = (c) + (uint32_t)(((uint64_t)(acc) * (t)) >> 32))
+
+/* x^g for x = x_q32 / 2^32 = 2^(g log2 x): log2 of the mantissa and 2^ of the fraction as fixed-point polynomials
+ * with non-negative coefficients (tools/gen_ultra_tables.py), so the curve is monotonic at every input and continuous
+ * across powers of two. Within 1 count of the former 257-point tables at every 32-bit input, 0 and full scale
+ * exact (test/test_gamma_tables.c). Result x^g x 65535 rounded (0..65535). */
 uint32_t ultra_gamma(uint32_t x, uint32_t g_q16)
 {
-    uint32_t n, f, idx, r, lm, fp, e, sh, y;
+    const uint32_t *cl = ultra_log2_poly, *ce = ultra_exp2_poly;
+    uint32_t n, f, q, fp, e, sh, y;
     int64_t l2, L, k;
     if (x == 0u) {
         return 0;
@@ -32,16 +39,28 @@ uint32_t ultra_gamma(uint32_t x, uint32_t g_q16)
     }
     n = clz32(x);
     f = (x << n) << 1;                                   /* mantissa 1.f, f as Q32 */
-    idx = f >> 24;
-    r = f & 0xFFFFFFu;
-    lm = ultra_log2_tab[idx] + (uint32_t)(((uint64_t)(ultra_log2_tab[idx + 1] - ultra_log2_tab[idx]) * r) >> 24);
-    l2 = (int64_t)lm - ((int64_t)(n + 1u) << 31);        /* log2(x), Q31, < 0 */
+    f = ~f;                                              /* u = 1 - .f: log2(1.f) = 1 - q(u) */
+    q = cl[6];
+    HORNER(q, cl[5], f);
+    HORNER(q, cl[4], f);
+    HORNER(q, cl[3], f);
+    HORNER(q, cl[2], f);
+    HORNER(q, cl[1], f);
+    HORNER(q, cl[0], f);
+    HORNER(q, 0u, f);                                    /* q(u), Q29, <= 1 (the coefficients sum to 1) */
+    l2 = ((int64_t)((1u << 29) - q) << 2) - ((int64_t)(n + 1u) << 31);   /* log2(x), Q31, < 0 */
     L = (l2 * (int64_t)g_q16) / 65536;                   /* g * log2(x), Q31, <= 0 */
     k = -((-L + 0x7FFFFFFF) >> 31);                      /* floor(L / 2^31) */
-    fp = (uint32_t)(L - k * 0x80000000LL);               /* [0, 2^31) */
-    idx = fp >> 23;
-    r = fp & 0x7FFFFFu;
-    e = ultra_exp2_tab[idx] + (uint32_t)(((uint64_t)(ultra_exp2_tab[idx + 1] - ultra_exp2_tab[idx]) * r) >> 23);
+    fp = (uint32_t)(L - k * 0x80000000LL) << 1;          /* [0, 1) as Q32 */
+    e = ce[5];
+    HORNER(e, ce[4], fp);
+    HORNER(e, ce[3], fp);
+    HORNER(e, ce[2], fp);
+    HORNER(e, ce[1], fp);
+    HORNER(e, 1u << 30, fp);                           /* 2^fp, Q30 (ce[0] = 1.0) */
+    if (e > 0x80000000u) {
+        e = 0x80000000u;
+    }
     /* x^g = 2^fp * 2^k = e * 2^(k - 30), k <= 0; as Q24: e >> (6 - k), then x 65535 */
     sh = (uint32_t)(6 - k);
     if (sh >= 32u) {
@@ -329,6 +348,11 @@ static void opt_points(ultra_light_t *L, const uint8_t *p)
 
 uint32_t ultra_on_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
 {
+    return ultra_slot_check(s) != 0 ? 0u : ultra_apply_slot(u, s, tick);
+}
+
+uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
+{
     uint8_t type = s[0], light = (uint8_t)(s[1] >> 4), flags = (uint8_t)(s[1] & 0x0Fu), seq = s[2];
     const uint8_t *p = s + ULTRA_PAYLOAD;
     uint16_t *last;
@@ -337,7 +361,7 @@ uint32_t ultra_on_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
     (void)tick;
 
     /* compatibility rules (ultra_protocol.h): what this firmware doesn't know is ignored, the state stays untouched */
-    if (ultra_slot_check(s) != 0 || type == ULTRA_NOP || type == ULTRA_POLL || type >= ULTRA_TYPES) {
+    if (type == ULTRA_NOP || type == ULTRA_POLL || type >= ULTRA_TYPES) {
         /* POLL: reserved for the return channel, not implemented (frame_rx also skips RW / EXT / UPD frames);
          * 0x0A-0x7F later commands; 0x80-0xFF broadcast slots, never a board's own slot (a wrong board count) */
         return 0;
@@ -678,15 +702,18 @@ static void fx_candle(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ult
     o->m = (uint16_t)((b->m * (L->candle_f > 65536u ? 65536u : L->candle_f)) >> 16);
 }
 
+uint32_t ultra_breathe(uint32_t ph)
+{
+    uint32_t s = sin16(ph <= 32768u ? ph * 2u : (65536u - ph) * 2u);   /* sin(pi ph) */
+    return (s * s) >> 16;
+}
+
 /* breathe: brightness min..max along (1 - cos) / 2, starts at min */
 static void fx_breathe(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *o)
 {
-    uint32_t per = fx_period(L), mn = ultra_get16(L->fxp + 3), mx = ultra_get16(L->fxp + 5), ph, s;
-    ph = frac16((now - L->fx_t0) % per, per);
-    s = sin16(ph <= 32768u ? ph * 2u : (65536u - ph) * 2u);   /* sin(pi ph) */
-    s = (s * s) >> 16;
+    uint32_t per = fx_period(L), mn = ultra_get16(L->fxp + 3), mx = ultra_get16(L->fxp + 5);
     *o = *b;
-    o->m = lerp16(mn, mx, s);
+    o->m = lerp16(mn, mx, ultra_breathe(frac16((now - L->fx_t0) % per, per)));
 }
 
 /* color loop: hue rotation at the given saturation on the RGB channels (W / CW / WW off) */
@@ -970,12 +997,11 @@ static void light_out(const ultra_light_t *L, const ultra_vals_t *vp, uint32_t *
     }
 }
 
-/* power limit: per channel and per board, from the LED current of each channel at 100 %. Returns 1 when the board
- * limit (CONFIG 21) scaled the outputs, | 2 when a channel limit (CONFIG 16-20) capped a channel; *total_ma = the
- * computed board current before the board limit */
-static uint8_t power_limit(const ultra_t *u, uint32_t *res, uint32_t *total_ma)
+/* power limit per channel (CONFIG 16-20), from the LED current of each channel at 100 % (CONFIG 11-15). Returns 1
+ * when a channel was capped. The board limit (CONFIG 21) is the current sense's (main.c, core/isense.h). */
+static uint8_t power_limit(const ultra_t *u, uint32_t *res)
 {
-    uint32_t ch, total = 0;
+    uint32_t ch;
     uint8_t f = 0;
     for (ch = 0; ch < 5u; ch++) {
         uint32_t ia = u->cfg[ULTRA_CFG_CH_CURRENT + ch], imax = u->cfg[ULTRA_CFG_CH_MAX + ch];
@@ -984,18 +1010,8 @@ static uint8_t power_limit(const ultra_t *u, uint32_t *res, uint32_t *total_ma)
         }
         if (imax != 0u && res[ch] * ia > imax * 65535u) {
             res[ch] = imax * 65535u / ia;
-            f = 2u;
+            f = 1u;
         }
-        total += (res[ch] * ia + 32767u) / 65535u;
-    }
-    *total_ma = total;
-    if (!u->board_limit_ext && u->cfg[ULTRA_CFG_BOARD_MAX] != 0u && total > u->cfg[ULTRA_CFG_BOARD_MAX]) {
-        for (ch = 0; ch < 5u; ch++) {
-            if (u->cfg[ULTRA_CFG_CH_CURRENT + ch] != 0u) {
-                res[ch] = (uint32_t)(((uint64_t)res[ch] * u->cfg[ULTRA_CFG_BOARD_MAX]) / total);
-            }
-        }
-        f |= 1u;
     }
     return f;
 }
@@ -1003,7 +1019,7 @@ static uint8_t power_limit(const ultra_t *u, uint32_t *res, uint32_t *total_ma)
 uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
 {
     uint32_t now = host_ms(u, tick), res[5] = { 0, 0, 0, 0, 0 }, l, ch;
-    uint8_t changed = 0, lim;
+    uint8_t changed = 0;
 
     for (l = 0; l < ULTRA_LIGHTS; l++) {
         ultra_light_t *L = &u->light[l];
@@ -1014,9 +1030,7 @@ uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
         light_values(L, now, &v);
         light_out(L, &v, res);
     }
-    lim = power_limit(u, res, &u->board_total_ma);
-    u->board_limited = (uint8_t)(lim & 1u);
-    u->ch_limited = (uint8_t)(lim >> 1);
+    u->ch_limited = power_limit(u, res);
 
     for (ch = 0; ch < 5u; ch++) {
         if (u->out[ch] != res[ch]) {
@@ -1030,7 +1044,7 @@ uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
 
 void ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out)
 {
-    uint32_t res[5] = { 0, 0, 0, 0, 0 }, l, ch, total;
+    uint32_t res[5] = { 0, 0, 0, 0, 0 }, l, ch;
     uint8_t mask = 0, keep = 0, fade = 0, have_fade = 0;
     for (l = 0; l < ULTRA_LIGHTS; l++) {
         const ultra_light_t *L = &u->light[l];
@@ -1058,7 +1072,7 @@ void ultra_scene(const ultra_t *u, const scene_t *stored, scene_t *out)
             res[ch] = 0;
         }
     }
-    (void)power_limit(u, res, &total);
+    (void)power_limit(u, res);
     out->mask = (uint8_t)(mask | keep);
     for (ch = 0; ch < 5u; ch++) {
         out->v[ch] = (out->mask & (1u << ch)) ? (uint16_t)res[ch] : 0u;

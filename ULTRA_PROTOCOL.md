@@ -219,7 +219,7 @@ Boards with the input current sense (the dig2analog-ultra-5ch rev 0.4; wiki: Cur
 CONFIG 21 on the measured input current instead, after rendering; the per-channel limits (16-20) stay estimates
 from 11-15. Adaptive stagger then uses the measured channel currents as weights.
 
-The gamma uses fixed-point log2/exp2 tables with interpolation: error under 0.7 counts of 65535 against
+The gamma uses fixed-point log2 / exp2 polynomials: error under 0.7 counts of 65535 against
 `pow()` for gamma 0.45 to 3.0, monotonic. An output that should be on is never rounded to 0.
 
 The outputs go to the PWM dither tables. Every PWM period after an update uses the new value. A 10 s fade

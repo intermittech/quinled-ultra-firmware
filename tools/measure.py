@@ -140,9 +140,9 @@ def measure_ultra(emu, scratch, copy):
         n = emu.call("ultra_on_header", [ul, tick, t_us])
         return n, emu.cycles()
 
-    def slot(s, tick):
+    def slot(s, tick):                                  # main applies frx.slot: CRC checked in frx_capture
         emu.poke(buf, s)
-        n = emu.call("ultra_on_slot", [ul, buf, tick])
+        n = emu.call("ultra_apply_slot" if "ultra_apply_slot" in emu.syms else "ultra_on_slot", [ul, buf, tick])
         return n, emu.cycles()
 
     def render(tick):
@@ -222,8 +222,11 @@ def measure_isense(emu, scratch):
     emu.call("isense_init", [IS, 1, 10000, 8000])
     run("no model, 2 A (regression windows)", 500, 64)
     run("no model, limiting 12 A of content", 3000, 64)
-    emu.poke(scratch + 3100, struct.pack("<5i", 2500, 2600, 2400, 3000, 2800))
-    emu.call("isense_set_model", [IS, scratch + 3100, 40])
+    # a stored standard test (isense_cal_t: levels, pct[4], zero, ma[5][4]), as the boot loads it (cal_load)
+    full = (2500, 2600, 2400, 3000, 2800)
+    ma = [m * k // 4 for m in full for k in (1, 2, 3, 4)]
+    emu.poke(scratch + 3100, struct.pack("<B4Bxh20H", 4, 25, 50, 75, 100, 40, *ma))
+    emu.call("isense_cal_set", [IS, scratch + 3100])
     run("calibrated, limiting", 2000, 64)
     emu.call("isense_cal_start", [IS, 16384])
     run("calibration running", 300, 160)

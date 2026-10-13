@@ -220,7 +220,7 @@ static void test_store(void)
     CHECK(store_next_free(page) == 4, "a half-written slot is not free");
 }
 
-/* v2 records: the extension (current sense) round-trips, v1 records (firmware before it) still load */
+/* records with the extension (the current limit): round trip, covered by the CRC; another magic is ignored */
 static void test_store_ext(void)
 {
     uint8_t page[256];
@@ -230,37 +230,43 @@ static void test_store_ext(void)
     uint32_t seq;
     uint8_t i;
 
-    printf("settings records v2: extension round trip, v1 compatibility, extension covered by the CRC\n");
+    printf("settings records: extension round trip, extension covered by the CRC, foreign records ignored\n");
     memset(page, 0xFF, sizeof page);
     settings_default(&s);
     s.pwm_preset = 5;
-    /* a v1 record as the earlier firmware wrote it: magic 1, CRC over seq + s, padding 0xFF */
-    memset(&slot, 0xFF, sizeof slot);
-    slot.magic = STORE_MAGIC;
-    slot.seq = 1;
-    slot.s = s;
-    slot.crc = crc8_smbus((const uint8_t *)&slot.seq, 4u + (uint32_t)sizeof(settings_t));
+    /* records with an earlier layout's magic (0x55AA2915, 0x55AA2916: the CRC before the extension), even with a CRC
+     * that is valid in this layout: ignored */
+    for (i = 0; i < 2u; i++) {
+        memset(&slot, 0xFF, sizeof slot);
+        slot.magic = 0x55AA2915u + i;
+        slot.seq = 9;
+        slot.s = s;
+        slot.crc = crc8_smbus((const uint8_t *)&slot.seq,
+                              4u + (uint32_t)sizeof(settings_t) + (uint32_t)sizeof(store_ext_t));
+        memcpy(page, &slot, sizeof slot);
+        memset(&eo, 0, sizeof eo);
+        CHECK(store_find_ext(page, &out, &eo, &seq) == -1, "a record with magic 0x%08X is ignored", slot.magic);
+    }
+    store_pack(&s, 1, &slot);
     memcpy(page, &slot, sizeof slot);
-    memset(&eo, 0, sizeof eo);
-    CHECK(store_find_ext(page, &out, &eo, &seq) == 0 && seq == 1 && out.pwm_preset == 5, "v1 record loads");
-    CHECK(eo.ilimit50 == 0xFFu && eo.ich25[0] == 0xFFu && eo.izero == 0xFFu, "v1 record: extension not set");
-    /* v2 with an extension, appended after the v1 record */
+    CHECK(store_find_ext(page, &out, &eo, &seq) == 0 && seq == 1 && out.pwm_preset == 5 && eo.ilimit50 == 0xFFu,
+          "a record without a limit");
+    /* with the limit, appended */
     store_ext_clear(&e);
     e.ilimit50 = 120;                                    /* 6 A */
-    for (i = 0; i < 5u; i++) e.ich25[i] = (uint8_t)(40u + i);
-    e.izero = 37;
+    for (i = 0; i < 6u; i++) e.reserved[i] = 0xFFu;
     s.pwm_preset = 6;
     store_pack_ext(&s, &e, 2, &slot);
     memcpy(page + store_next_free(page) * STORE_SLOT_BYTES, &slot, sizeof slot);
     CHECK(store_find_ext(page, &out, &eo, &seq) == 1 && seq == 2 && out.pwm_preset == 6 && memcmp(&e, &eo, sizeof e) == 0,
-          "v2 extension round trip");
-    page[1 * STORE_SLOT_BYTES + 26] ^= 0x01;             /* flip a bit of ich25: the CRC covers the extension */
+          "extension round trip");
+    page[1 * STORE_SLOT_BYTES + 25] ^= 0x01;             /* flip a bit of the limit: the CRC covers the extension */
     CHECK(store_find_ext(page, &out, &eo, &seq) == 0 && out.pwm_preset == 5, "corrupt extension -> older record");
     store_pack(&s, 3, &slot);                            /* store_pack: v2 with a cleared extension */
     memcpy(page + store_next_free(page) * STORE_SLOT_BYTES, &slot, sizeof slot);
-    CHECK(store_find_ext(page, &out, &eo, &seq) == 2 && seq == 3 && eo.ilimit50 == 0xFFu && eo.izero == 0xFFu,
+    CHECK(store_find_ext(page, &out, &eo, &seq) == 2 && seq == 3 && eo.ilimit50 == 0xFFu && eo.reserved[0] == 0xFFu,
           "store_pack: extension not set");
-    CHECK(store_find(page, &out, &seq) == 2 && seq == 3, "store_find reads v2");
+    CHECK(store_find(page, &out, &seq) == 2 && seq == 3, "store_find reads it");
 }
 
 /* ------------------------------------------------------------------------------------------------ current sense */
@@ -343,14 +349,11 @@ static void test_cli(void)
     CHECK(strstr(cli_out, "<saved>") != NULL, "save");
     run_cli(&c, "defaults\r");
     CHECK(cli_set.pwm_preset == PWM_PRESET_DEFAULT && cli_set.signal_loss == 0, "factory reset");
-    /* current sense: keys, and the status block only on boards that have it */
-    run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "current_ma") == NULL, "no current lines without current sense");
+    /* current sense: keys and the status block */
     run_cli(&c, "set ilimit 120\r");
     CHECK(strstr(cli_out, "ok") != NULL, "set ilimit");
     run_cli(&c, "set ical 4\r");
     CHECK(strstr(cli_out, "error") != NULL, "ical range");
-    st.isense = 1;
     st.ilimit50 = 120;
     st.i_model = 2;
     st.i_ma = 5432;
@@ -364,9 +367,10 @@ static void test_cli(void)
     run_cli(&c, "get\r");
     CHECK(strstr(cli_out, "ilimit=120\r\n") && strstr(cli_out, "ical=0\r\n"), "get ilimit / ical");
     run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "current_ma=5432\r\n") && strstr(cli_out, "current_limit_ma=6000\r\n") &&
+    CHECK(strstr(cli_out, "current=5.43 A\r\ncurrent_peak=6.10 A\r\ncurrent_zero=0.04 A\r\ncurrent_limit=6.00 A\r\n"
+                          "current_scale=100.0 %\r\ncurrent_trips=1\r\n") &&
           strstr(cli_out, "current_state=ok, last trip overload") &&
-          strstr(cli_out, "channel_ma R/G/B/W1/W2=1000/1100/1200/1300/1400 (calibrated)"), "status current sense");
+          strstr(cli_out, "channel R/G/B/W1/W2=1.00/1.10/1.20/1.30/1.40 A (calibrated)"), "status current sense");
     st.i_tripped = 1;
     st.i_trip_cause = 1;
     run_cli(&c, "status\r");
@@ -377,9 +381,24 @@ static void test_cli(void)
     st.vs_supply_min_mv = 23980;
     st.vs_supply_max_mv = 24050;
     run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V since the last status)\r\n"
-                          "input_mw=130422 (supply x current)\r\ntp8=1.65 V (PA0, spare input)\r\n") != NULL,
-          "status voltages, input power (24.012 V x 5432 mA)");
+    CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V)\r\ninput=130.4 W\r\ntp8=1.65 V\r\n"
+                          "test_mode=off\r\n") != NULL, "status voltages, input power (24.012 V x 5432 mA)");
+    /* uptime h:mm:ss (days beyond 24 h), outputs in %, the stagger offsets in % of the period, ripple in A */
+    st.uptime_ms = 3723000u;
+    st.out[0] = 34078; st.out[1] = 0; st.out[2] = 65535; st.out[3] = 655; st.out[4] = 21627;
+    st.stagger_moves = 3;
+    st.stagger_o2 = 22938;
+    st.stagger_o3 = 43691;
+    st.ripple_ma = 1234;
+    st.i_k_permille = 812;
+    run_cli(&c, "status\r");
+    CHECK(strstr(cli_out, "uptime=1:02:03\r\n") && strstr(cli_out, "out R/G/B/W1/W2=52.0/0.0/100.0/1.0/33.0 %\r\n") &&
+          strstr(cli_out, "stagger_tim2=35.0 %\r\nstagger_tim3=66.7 %\r\nstagger_moves=3\r\nripple_rms=1.23 A\r\n") &&
+          strstr(cli_out, "current_scale=81.2 %\r\n"), "status: uptime, outputs, stagger, ripple, scale");
+    st.uptime_ms = 90061000u;                  /* 1 d 1:01:01 */
+    run_cli(&c, "status\r");
+    CHECK(strstr(cli_out, "uptime=1d 1:01:01\r\n") != NULL, "status: uptime with days");
+    st.uptime_ms = 0;
     /* volts with two decimals, rounded to 10 mV, no float */
     {
         static const struct { uint32_t mv; const char *txt; } VR[] = {
@@ -399,7 +418,4 @@ static void test_cli(void)
         CHECK(strstr(cli_out, "mcu_temp=35.0 C (die), vdda=3.28 V\r\n") != NULL, "status: the 3.3 V rail in volts");
         st.vs_supply_mv = 24012;
     }
-    st.isense = 0;
-    run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "input_mw") == NULL, "no input power without the current sense");
 }

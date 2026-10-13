@@ -2,7 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 #include "scene.h"
 #include "store.h"                   /* store_erased */
-#include "ultra.h"                   /* ultra_smoothstep, ultra_crc8 */
+#include "ultra.h"                   /* ultra_smoothstep */
 
 void scene_clear(scene_t *s)
 {
@@ -73,7 +73,7 @@ int scene_save_due(scene_budget_t *b, uint32_t now, uint32_t changed_ms, int maj
 /* ----------------------------------------------------------------------------------------------- log */
 static uint8_t rec_crc(const scene_rec_t *r)
 {
-    return ultra_crc8((const uint8_t *)r, 14u);
+    return crc8_smbus((const uint8_t *)r, 14u);       /* (config.h: the same CRC-8, one copy in the image) */
 }
 
 static int rec_valid(const scene_rec_t *r)
