@@ -22,7 +22,7 @@ typedef struct {
 } rxp_eff_t;
 
 typedef struct {
-    uint32_t vbus_mv, ibus_ma, vb_mv;       /* the inputs: bus voltage (PA5), bus current (PA7), buck output (PA0) */
+    uint32_t vbus_mv, ibus_ma, vb_mv;       /* the inputs: bus voltage (PA4), bus current (PA7), buck output (PA0) */
     uint32_t pin_mw;                        /* V_bus x I_bus */
     uint32_t pout_mw;                       /* estimated output power: pin x efficiency */
     uint16_t eff_permille;                  /* the efficiency used */

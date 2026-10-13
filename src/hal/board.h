@@ -9,9 +9,9 @@
  *  20       PA6        DIN sampler: SPI1_MISO 36 MHz + TIM3_CH1 capture (edge source for TIM4)        DIN
  *   2       PA1        forwarding gate: GPIO, written by DMA on TIM4 CC2                              FWD_EN
  *   3 / 4   PA2 / PA3  console: USART2 TX / RX                                                        TP5 / TP6
- *   5       PA4        unused (no connection): analog input                                           -
- *   6       PA5        ADC_IN5, injected group (1 kHz): the supply, R36 220 k / R37 10 k / C29 1 uF  VSENSE
- *                      (receiver: the bus). SPI1_SCK stays internal (BOARD_VSENSE 0: the AF pin instead)
+ *   5       PA4        ADC_IN4, injected group (1 kHz): the supply, R36 220 k / R37 10 k / C29 1 uF  VSENSE
+ *                      (receiver: the bus)
+ *   6       PA5        SPI1_SCK, internal only (pad not connected)                                    -
  *   7       PA7        ADC_IN7: board current (shunt + TPA158A3 + RC), continuous conversion          ISENSE
  *  15 / 14  PA9 / PA8  PWM R / G: TIM1_CH2 / TIM1_CH1 (G right-aligned)                               PWM_R / PWM_G
  *  11       PB11       PWM B: TIM2_CH4 (partial remap 2)                                              PWM_B
@@ -28,7 +28,8 @@
  *  - TIM2 partial remap 2 also maps CH1 / ETR to PA0, CH2 to PA1 and CH3 to PB10. TIM2 enables CC4E only: CC1E /
  *    CC2E / CC3E stay 0 (CH3 is B's DMA trigger at count 2, no output; PB10 is USART3_TX on the receiver).
  *  - USART3 (the receiver's return channel) is TX only: RE stays 0, because its default RX pin PB11 is PWM_B.
- *  - SPI1 is a receive-only master: MOSI (PA7, the current sense) is never driven; NSS is software (PA4 unused).
+ *  - SPI1 is a receive-only master: MOSI (PA7, the current sense) is never driven; NSS is software (SSM), so its
+ *    default pin PA4 is free for the supply divider.
  *  - TIM1 enables CC1E / CC2E only and TIM3 CC1E (capture) / CC3E / CC4E, so PA10 / PB14 / PB15 / PA7 stay GPIO /
  *    analog. */
 #ifndef BOARD_H
@@ -40,11 +41,9 @@
 #define BOARD BOARD_D2A_ULTRA
 #endif
 
-/* the PA5 supply / bus divider: ADC_IN5 instead of the SPI1_SCK pin. Rev 0.4 has it (Quindor 2026-10-13: the supply
- * in the console only), the receiver reads its bus there. 0 keeps PA5 as SPI1_SCK, for a bench check of the sampler. */
-#ifndef BOARD_VSENSE
-#define BOARD_VSENSE     1
-#endif
+/* the supply / bus divider on PA4 (ADC_IN4): rev 0.4 has it (Quindor 2026-10-13: the supply in the console only;
+ * moved from PA5 the same day, so SPI1's clock pin stays as it was), the receiver reads its bus there */
+#define VSENSE_SUPPLY_CH 4u
 
 /* test jig mode (core/testjig.h): TP9 = PB10 with the internal pull-up, grounded by the jig. PB10 because the
  * dig2analog-ultra never needs it otherwise (its data line is one-way: no return channel) and it is 5 V tolerant;
@@ -66,7 +65,7 @@
 /* voltage channels (core/vsense.h): the divider on each input, top / bottom resistor in ohm. The ADC reference is
  * the 3.3 V rail (the current sense's scale assumes 3.28 V as well). */
 #define VSENSE_VREF_MV   3280u
-#define VSENSE_SUPPLY_RT 220000u    /* PA5: supply (dig2analog-ultra) / bus (receiver), 1 : 23, full scale 75.4 V */
+#define VSENSE_SUPPLY_RT 220000u    /* PA4: supply (dig2analog-ultra) / bus (receiver), 1 : 23, full scale 75.4 V */
 #define VSENSE_SUPPLY_RB 10000u
 #if BOARD == BOARD_D2A_ULTRA
 #define VSENSE_AUX_RT    0u         /* PA0: the spare input on TP8, read directly (0 .. 3.3 V) */

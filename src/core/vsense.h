@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Voltage channels: the supply / bus voltage on PA5 (boards with the divider, BOARD_VSENSE) and the PA0 input (the
+/* Voltage channels: the supply / bus voltage on PA4 (R36 / R37 / C29 on rev 0.4) and the PA0 input (the
  * spare input on TP8 of the dig2analog-ultra; the buck output V_B on a Diff-Power ultra receiver). Divider scaling,
  * a 16 ms average, and the lowest / highest average since the last report.
  *

@@ -44,7 +44,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.5.1"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.5.2"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -244,7 +244,7 @@ static pwrev_t pw;
 static mcutemp_t mt;
 static uint32_t temp_ms;
 static uint8_t temp_started;
-/* voltage channels (core/vsense.h): PA5 supply (BOARD_VSENSE), PA0 the spare input on TP8 */
+/* voltage channels (core/vsense.h): PA4 the supply, PA0 the spare input on TP8 */
 static vsense_t vs_sup, vs_aux;
 static testjig_t tj;                       /* test jig mode (core/testjig.h): TP9 grounded */
 
@@ -1060,7 +1060,7 @@ static void testjig_service(void)
     }
     outputs_dirty = 1;
     if (tj_measure(&tj, ms_now, is.i_ms, is.zero_ma)) {
-        cli_test_report(&cli, tj.ma, TJ_PEAK_PCT, tj.cycles, BOARD_VSENSE && vs_sup.valid ? vs_sup.mv : 0u);
+        cli_test_report(&cli, tj.ma, TJ_PEAK_PCT, tj.cycles, vs_sup.valid ? vs_sup.mv : 0u);
     }
 }
 
@@ -1112,7 +1112,6 @@ static void status_snapshot(void)
     stat.mcu_temp_c10 = mt.c10;
     stat.vdda_mv = mt.vdda_mv;
     stat.test_mode = tj.active;
-    stat.vs_supply_fitted = BOARD_VSENSE;
     stat.vs_supply_mv = vs_sup.valid ? vs_sup.mv : 0u;
     vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
     stat.vs_aux_mv = vs_aux.valid ? vs_aux.mv : 0u;

@@ -47,7 +47,7 @@ uint32_t din_ring_pos(void);                    /* words written so far into din
 void hw_adc_init(void);
 void hw_adc_ms(void);                           /* poll tick, every 1 ms */
 #define ISENSE_RAW() ((uint32_t)(ADC1->RDATAR & 0xFFFu))
-/* the voltage channels since the last take: sums of pairs of conversions (sum2[0] PA5 supply / bus, sum2[1] PA0
+/* the voltage channels since the last take: sums of pairs of conversions (sum2[0] PA4 supply / bus, sum2[1] PA0
  * spare / V_B), n pairs each */
 void hw_vsense_take(uint32_t sum2[2], uint32_t *n);
 /* MCU temperature: the temperature sensor and VREFINT twice each (~84 us), converted at the next ms after

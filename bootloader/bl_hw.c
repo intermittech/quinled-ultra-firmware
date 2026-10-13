@@ -7,7 +7,7 @@
  * decoder thresholds (bootloader/measure_bl.py: ~61 % CPU inside a frame). Flash operations run at HCLK / 2 (the
  * flash access clock must stay <= 60 MHz; the app's sequence, RM 32.1 note 2); the main loop resyncs the decoder
  * after each one, since the sampler ran at half speed meanwhile.
- * Pins (rev 0.4, the app's pin map): PA6 DIN = SPI1_MISO (sampler, 36 MHz; SCK PA5 internal) and TIM3_CH1, whose
+ * Pins (rev 0.4, the app's pin map): PA6 DIN = SPI1_MISO (sampler, 36 MHz; SCK PA5, pad NC) and TIM3_CH1, whose
  * capture trigger clocks TIM2 (ITR2): the edge counter; PA1 FWD_EN = TIM2_CH2 (gate); PA9 TIM1_CH2 = PWM_R
  * (feedback, 10 %); PB15 D9; PA2 USART2_TX (TP5); PA0 / PA4 analog (unused here). All other PWM pins stay inputs: the
  * board's pull-downs keep their gate drivers off. */

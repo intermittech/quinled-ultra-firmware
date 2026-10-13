@@ -275,22 +275,18 @@ static void status(cli_t *c)
         c->write("\r\n");
     }
     c->write("supply_mv=");
-    if (!s->vs_supply_fitted) {
-        c->write("n/a (PA5 not read: BOARD_VSENSE 0)");
-    } else {
-        wnum(c, s->vs_supply_mv);
-        c->write(" (min ");
-        wnum(c, s->vs_supply_min_mv);
-        c->write(", max ");
-        wnum(c, s->vs_supply_max_mv);
-        c->write(" since the last status)");
-        if (s->isense) {
-            /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A) */
-            uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
-            c->write("\r\ninput_mw=");
-            wnum(c, s->vs_supply_mv / 10u * ma / 100u);
-            c->write(" (supply_mv x current_ma)");
-        }
+    wnum(c, s->vs_supply_mv);
+    c->write(" (min ");
+    wnum(c, s->vs_supply_min_mv);
+    c->write(", max ");
+    wnum(c, s->vs_supply_max_mv);
+    c->write(" since the last status)");
+    if (s->isense) {
+        /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A) */
+        uint32_t ma = s->i_ma > 0 ? (uint32_t)s->i_ma : 0u;
+        c->write("\r\ninput_mw=");
+        wnum(c, s->vs_supply_mv / 10u * ma / 100u);
+        c->write(" (supply_mv x current_ma)");
     }
     c->write("\r\ntp8_mv=");
     wnum(c, s->vs_aux_mv);

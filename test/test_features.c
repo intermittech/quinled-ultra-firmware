@@ -371,18 +371,14 @@ static void test_cli(void)
     st.i_trip_cause = 1;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "current_state=tripped, outputs off, last trip short") != NULL, "status tripped");
-    /* voltage channels: the supply on PA5 (when read) with min / max, the spare input on TP8 */
+    /* voltage channels: the supply on PA4 with min / max and the input power, the spare input on TP8 */
     st.vs_aux_mv = 1650;
-    run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "supply_mv=n/a (PA5 not read: BOARD_VSENSE 0)\r\ntp8_mv=1650 (PA0, spare input)\r\n") != NULL,
-          "status voltages, PA5 not read");
-    st.vs_supply_fitted = 1;
     st.vs_supply_mv = 24012;
     st.vs_supply_min_mv = 23980;
     st.vs_supply_max_mv = 24050;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "supply_mv=24012 (min 23980, max 24050 since the last status)\r\n"
-                          "input_mw=130422 (supply_mv x current_ma)\r\ntp8_mv=1650") != NULL,
+                          "input_mw=130422 (supply_mv x current_ma)\r\ntp8_mv=1650 (PA0, spare input)\r\n") != NULL,
           "status voltages, input power (24.012 V x 5432 mA)");
     st.isense = 0;
     run_cli(&c, "status\r");

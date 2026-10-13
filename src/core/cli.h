@@ -12,7 +12,7 @@
  * Boards with the input current sense: set ilimit <x 50 mA>, set ical <%> (calibration: 0 = the standard test at
  * 25 / 50 / 75 / 100 %), status shows the current, the calibration and the board limit in effect.
  * Every board: status shows the MCU (die) temperature and the 3.3 V rail from the internal sensor / VREFINT, the
- * voltage channels (the supply on PA5 when its divider is fitted, the spare input on TP8), the
+ * voltage channels (the supply on PA4 with the input power, the spare input on TP8), the
  * overcurrent signal on D9 (core/ocled.h: limit / trip, since when, the hold left) and the power events
  * (core/pwrev.h: state, counters, latches, the last limit event and trip; what a Diff-Power ultra receiver reports). */
 #ifndef CLI_H
@@ -68,8 +68,7 @@ typedef struct {
     /* MCU temperature (core/mcutemp.h), every board */
     int16_t  mcu_temp_c10;         /* 0.1 C, MCUTEMP_NA (-32768) = not valid */
     uint16_t vdda_mv;              /* the 3.3 V rail from VREFINT, 0 = not known */
-    /* voltage channels (core/vsense.h): PA5 supply when its divider is fitted, PA0 the spare input on TP8 */
-    uint8_t  vs_supply_fitted;
+    /* voltage channels (core/vsense.h): PA4 the supply, PA0 the spare input on TP8 */
     uint32_t vs_supply_mv, vs_supply_min_mv, vs_supply_max_mv;   /* min / max: since the last status */
     uint32_t vs_aux_mv;
     uint8_t  test_mode;            /* test jig mode (core/testjig.h): the test pad is grounded */

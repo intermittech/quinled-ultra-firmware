@@ -369,7 +369,7 @@ void pwm_force_off(uint8_t off)
  * Regular group: PA7 = ADC_IN7, the current sense, converted continuously: 71.5 cycles (6 us, any source up to 50 k),
  * 84 cycles = 7 us per result; ISENSE_RAW() is the newest.
  * Injected group, started by the poll tick once per ms (hw_adc_ms):
- *  - the voltage channels: IN5, IN0, IN5, IN0 (with BOARD_VSENSE; else IN0 four times), 71.5 cycles each (28 us);
+ *  - the voltage channels: IN4, IN0, IN4, IN0 (PA4 the supply, PA0 TP8), 71.5 cycles each (28 us);
  *  - instead, once a second when hw_temp_start() asked: the temperature sensor (IN16) and VREFINT (IN17), 16, 17,
  *    16, 17 at 239.5 cycles (20 us each, the datasheet asks >= 17.1 us; 84 us).
  * Either way 1 + 3 and 2 + 4 are the pairs, whichever way IDATAR1-4 map to the ranks. Scan mode (the regular group is
@@ -378,7 +378,7 @@ void pwm_force_off(uint8_t off)
  * much later. A sequence is read at the next ms (it ends well within it). BENCH: the start sequence (RM 12.2.2 /
  * 12.2.4: ADON again starts, CONT keeps converting) and the injected insertion during continuous conversion. */
 #define INJ_SEQ(a, b) ((3u << 20) | ((uint32_t)(b) << 15) | ((uint32_t)(a) << 10) | ((uint32_t)(b) << 5) | (uint32_t)(a))
-#define INJ_VOLT      INJ_SEQ(BOARD_VSENSE ? 5u : 0u, 0u)
+#define INJ_VOLT      INJ_SEQ(VSENSE_SUPPLY_CH, 0u)
 #define INJ_TEMP      INJ_SEQ(16u, 17u)
 
 static volatile uint8_t inj_run;                         /* the sequence running: 0 none, 1 voltages, 2 temperature */
@@ -630,16 +630,12 @@ void hw_init(void)
     AFIO->PCFR1 = (AFIO->PCFR1 & ~AFIO_PCFR1_TIM2_REMAP) | AFIO_PCFR1_TIM2_REMAP_PARTIALREMAP2;
     pin_cfg(GPIOA, 0, CFG_ANALOG);                       /* the spare input on TP8 (receiver: V_B) */
     pin_cfg(GPIOA, 6, CFG_IN_FLOAT);
-#if BOARD_VSENSE
-    pin_cfg(GPIOA, 5, CFG_ANALOG);                       /* the supply / bus voltage (SPI1 clocks internally) */
-#else
-    pin_cfg(GPIOA, 5, CFG_AF_PP);                        /* SPI1_SCK on the pin (bench check of the sampler) */
-#endif
+    pin_cfg(GPIOA, 5, CFG_AF_PP);                        /* SPI1_SCK, internal only (pad not connected) */
     GPIOA->BSHR = 1u << (FWD_PIN + 16u);                 /* gate closed */
     pin_cfg(GPIOA, FWD_PIN, CFG_OUT_PP);
     pin_cfg(GPIOA, 2, CFG_AF_PP);
     pin_cfg(GPIOA, 3, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 4, CFG_ANALOG);                       /* unused (no connection) */
+    pin_cfg(GPIOA, 4, CFG_ANALOG);                       /* the supply / bus voltage (R36 / R37 / C29) */
     pin_cfg(GPIOA, 7, CFG_ANALOG);                       /* the current sense */
     pin_cfg(GPIOA, 8, CFG_AF_PP);
     pin_cfg(GPIOA, 9, CFG_AF_PP);
