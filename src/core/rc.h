@@ -17,7 +17,9 @@
  *   turned around by ULTRA_RW_DIR_MAX_US) the turnaround check: the line HIGH for RC_PREAMBLE_CYC and read back, LOW =
  *   the segment above is still driven (a board there doesn't take part): stop driving upstream for this window (0.2.4);
  *   answer at t0 + ULTRA_RW_FIRST_US + index x the slot pitch (at the first poll tick at or after it: 0-50 us late,
- *   inside the -20 / +80 us tolerance); back at t0 + ULTRA_RW_FIRST_US + R x the pitch (the same 0-50 us).
+ *   inside the -20 / +80 us tolerance; slot 0 never early, ULTRA_RW_EARLY0_US) with a 0xFF lead byte before the
+ *   answer (ULTRA_RW_LEAD_BYTES); back at t0 + ULTRA_RW_FIRST_US + R x the pitch + RC_END_US (within
+ *   ULTRA_RW_END_US). Protocol 0.2.4 (ultra_protocol.h, wiki: Return channel).
  *
  * Pure logic, host-tested (test/test_rc.c). The window itself runs in the poll ISR (main.c), the transmitter is
  * hal/hw.c's. Called only in the receiver's build (BOARD_RETURN): the dig2analog-ultra never reports back, and its
@@ -30,10 +32,10 @@
 
 #define RC_DIR_US        500u          /* turn around here (the middle of ULTRA_RW_DIR_MIN_US .. _MAX_US) */
 #define RC_CHECK_US      920u          /* the turnaround check (0.2.4): after ULTRA_RW_DIR_MAX_US, before slot 0 */
-#define RC_END_US        6u            /* forward again W + this: the rate (+-200 ppm: 4.7 us at the longest W, 23.6 ms)
+#define RC_END_US        6u            /* forward again W + this: the rate (+-200 ppm: 4.8 us at the longest W, 24.2 ms)
                                           and t0 errors keep it >= W (review r6: 0.6.6's 2 went to W - 2.7 us); with
-                                          the slowest tick it lands W .. W+62 us: the 0.2.4 amendment's end (64 or 80
-                                          us), still before the host's W+200 us */
+                                          the slowest tick it lands W + 1.2 .. 62 us, ~67 us with the poll ISR's
+                                          latency: inside ULTRA_RW_END_US (80; test_r6_host_rc.c r6_schedule) */
 #define RC_ANSWER_BYTES  32u
 #define RC_RATES         3u            /* POLL return rate: 0 = 1 Mbaud, 1 = 500 kbaud, 2 = 250 kbaud (0.2.4) */
 #define RC_SAMPLES_TICK  1800u         /* DIN samples (36 MHz) per poll tick (50 us) */

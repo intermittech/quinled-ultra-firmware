@@ -2,7 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Power events: the board limit and overcurrent state, the events with counters, ages and currents, and the
  * controller's acknowledge, in one struct (protocol 0.2.2: STATUS byte 8 ULTRA_ST_STATE, POWER page 0x08 ULTRA_PW_*;
- * quinled-ultra-protocol wiki "Reserved extensions").
+ * quinled-ultra-protocol wiki "Return channel").
  *
  * Updated every ms from the limiter and trip state (main.c) and shown by the console's `status`. The dig2analog-ultra
  * can't report back, so there it stays local. A QuinLED Diff-Power ultra receiver answers its STATUS and POWER polls

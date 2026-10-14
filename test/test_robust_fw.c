@@ -579,9 +579,36 @@ static uint8_t *fl;
 static uint32_t fl_writes[FL_SIZE / 256u], fl_erases[FL_SIZE / 256u];
 static uint32_t load_raw(void);
 
+/* (0.6.8) the option bytes and FLASH->WPR (hal/hw.c hw_boot_open / hw_option_bytes; boot_protect): the random runs
+ * start with the bootloader's sectors protected (as every board after its first boot); `robust_fw wrp <case>` sets
+ * them up */
+static uint32_t sim_wpr = 0xFFFFFFFCu, sim_ob_writes, sim_ob_fail, sim_vdd;
+static uint16_t sim_ob[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFF, 0xFF, 0xFF, 0xFF };
+uint32_t hw_boot_open(void) { return (sim_wpr & 3u) != 0u; }
+uint32_t hw_option_bytes(uint16_t ob[8])
+{
+    memcpy(ob, sim_ob, sizeof sim_ob);
+    return ob[0];
+}
+
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
     uint32_t i, us = 100u * halfwords;
+    if (addr == HW_OB_ADDR) {
+        CHECK(halfwords == 8u && erase_addr == HW_OB_ADDR, "the option bytes: all 8 erased and written (%u, %08x)",
+              halfwords, erase_addr);
+        if (sim_vdd) {
+            return FLASH_ERR_VDD;
+        }
+        sim_ob_writes++;
+        if (sim_ob_fail) {
+            return FLASH_ERR_WRP;
+        }
+        for (i = 0; i < 8u; i++) {
+            sim_ob[i] = (uint16_t)(src[i] & 0xFFu);      /* (the hardware writes each inverse) */
+        }
+        return FLASH_OK;
+    }
     CHECK(addr >= FL_BASE && addr + 2u * halfwords <= FL_BASE + FL_SIZE, "flash write outside the chip: %08x", addr);
     if (addr >= UPD_APP_DESC && addr < UPD_APP_DESC + UPD_PAGE_BYTES && halfwords != 0u) {
         CHECK(halfwords == 1u && addr >= UPD_APP_DESC + UPD_DESC_BYTES && (addr & 1u) == 0u,
@@ -614,7 +641,7 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     return FLASH_OK;
 }
 uint32_t uart_busy(void) { return 0; }
-uint32_t hw_vdd_low(void) { return 0; }                   /* (r6) the PVD: VDD fine here */
+uint32_t hw_vdd_low(void) { return sim_vdd; }             /* (r6) the PVD: VDD fine here (0.6.8: wrp vdd) */
 void hw_flash_trip(void) { pwm_force_off(1); }
 static uint32_t sim_window;                              /* (0.6.5) the boot window for the record reads: opened */
 void hw_records_window(uint32_t open) { sim_window += open; }
@@ -1064,6 +1091,57 @@ static int regress_fx(void)
     return g_fail ? 1 : 0;
 }
 
+/* (0.6.8) `robust_fw wrp <open | protected | vdd | nodesc | rdp | fail>`: the bootloader's write protection at the
+ * boot (main.c boot_protect). open: the option bytes rewritten once (WRPR0 & 0xFC, RDPR 0xA5 and the rest kept), then
+ * the reset; protected / vdd (deferred) / nodesc (no valid bootloader info and descriptor) / rdp (read-protected): not
+ * touched, the boot goes on; fail (the write refused): no reset, the boot goes on */
+static int wrp_case(const char *c)
+{
+    static const uint16_t ob0[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFF, 0xFF, 0xFF, 0xFF };
+    const int open = strcmp(c, "protected") != 0, want_write = !strcmp(c, "open") || !strcmp(c, "fail");
+    uint32_t t;
+    g_seed = 0x5EEDull;
+    rs = 0x7654321ull;
+    flash_map();
+    memcpy(fl + 0x10u, "QDBL\x01\x01\x03", 7);
+    fl[0x17] = 0;
+    if (strcmp(c, "nodesc") != 0) {
+        mk_desc(fl + 0x2000u, 0x000602FFu, 1, 0x8u, 1);
+    }
+    mk_desc(desc_this, 0x000602FFu, 1, 0x8u, 1);
+    map_handover();
+    uid_hash = 1;
+    chain_n = 1;
+    wire_quiet = 1;
+    sim_wpr = open ? 0xFFFFFFFFu : 0xFFFFFFFCu;
+    sim_vdd = !strcmp(c, "vdd");
+    sim_ob_fail = !strcmp(c, "fail");
+    if (!strcmp(c, "rdp")) {
+        sim_ob[0] = 0xFF;
+    }
+    fib_main = ConvertThreadToFiber(0);
+    fib_fw = CreateFiber(1u << 20, fw_entry, 0);
+    SwitchToFiber(fib_fw);                               /* the boot */
+    sim_vdd = 0;                                         /* (VDD back: the rest of the run as usual) */
+    for (t = 0; t < 2000u && !sim_reset && !sim_crash; t++) {
+        sim_tick();
+        pass();
+    }
+    printf("wrp %s: option byte writes %u, reset %u, WRPR0 %02X, RDPR %02X\n", c, sim_ob_writes, sim_reset, sim_ob[4],
+           sim_ob[0]);
+    CHECK(!sim_crash, "wrp %s: no exception", c);
+    CHECK(sim_ob_writes == (uint32_t)want_write, "wrp %s: the option bytes written %u time(s)", c, sim_ob_writes);
+    if (!strcmp(c, "open")) {
+        CHECK(sim_reset && sim_ob[4] == 0xFCu && sim_ob[0] == 0xA5u && sim_ob[1] == ob0[1] && sim_ob[2] == ob0[2] &&
+              sim_ob[3] == ob0[3] && sim_ob[5] == 0xFFu && sim_ob[6] == 0xFFu && sim_ob[7] == 0xFFu,
+              "wrp open: WRPR0 0xFC, RDPR 0xA5, USER / DATA / WRPR1-3 kept, then the reset");
+    } else {
+        CHECK(!sim_reset && sim_ob[4] == 0xFFu, "wrp %s: no reset, WRPR0 untouched (the boot goes on)", c);
+    }
+    printf("wrp %s: %s (%d failures)\n", c, g_fail ? "FAILED" : "passed", g_fail);
+    return g_fail ? 1 : 0;
+}
+
 int main(int argc, char **argv)
 {
     uint32_t sim_s = 4, i, settings_w, scene_w, cal_w, energy_w, fx_w, ms0, tick0;
@@ -1071,6 +1149,9 @@ int main(int argc, char **argv)
     void *ho;
     if (argc > 1 && strcmp(argv[1], "regress") == 0) {
         return regress_fx();
+    }
+    if (argc > 2 && strcmp(argv[1], "wrp") == 0) {
+        return wrp_case(argv[2]);
     }
     g_seed = argc > 1 ? strtoull(argv[1], 0, 16) : 0x600D5EEDull;
     if (argc > 2) {

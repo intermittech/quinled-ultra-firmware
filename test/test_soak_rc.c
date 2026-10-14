@@ -206,7 +206,7 @@ static int rc_timing_ok(const rc_obs_t *o, const uint8_t *poll)
     double s_i = ULTRA_RW_FIRST_US + (double)rc_slot_us(poll[RC_P_RATE]) * poll[RC_P_INDEX];
     int ok = o->turned && o->gate_closed && o->turn_us >= ULTRA_RW_DIR_MIN_US && o->turn_us <= ULTRA_RW_DIR_MAX_US &&
              o->checked && o->check_us >= ULTRA_RW_DIR_MAX_US && o->check_us <= ULTRA_RW_FIRST_US - 23.0 &&
-             o->fwd_us >= o->w_us && o->fwd_us <= o->w_us + 64.0;
+             o->fwd_us >= o->w_us && o->fwd_us <= o->w_us + ULTRA_RW_END_US;
     if (o->sent) {
         ok &= o->tx_us >= s_i - 20.0 && o->tx_us <= s_i + 80.0;
     }
@@ -343,7 +343,7 @@ static void sc_rcpages(void)
     pg = rc_ask(ULTRA_PAGE_IDENTITY, 0, 0, &o);
     CHECK(pg == ULTRA_PAGE_IDENTITY && memcmp(D(&o), rc_uid, 12) == 0 &&
           ultra_get32(D(&o) + ULTRA_ID_FW_VERSION) == fw_version && D(&o)[17] == BOARD &&
-          ultra_get16(D(&o) + 18) == 0x002Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x1FFBFu,
+          ultra_get16(D(&o) + 18) == 0x000Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x1FFBFu,
           "rcpages: IDENTITY version %08X, hw %u, caps %04X, features %08X", ultra_get32(D(&o) + 12), D(&o)[17],
           ultra_get16(D(&o) + 18), ultra_get32(D(&o) + 20));
 

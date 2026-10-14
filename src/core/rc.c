@@ -22,7 +22,7 @@ RC_MEASURED int rc_poll_parse(const uint8_t *s)
 
 uint32_t rc_slot_us(uint8_t rate)
 {
-    return (320u << rate) + 130u;
+    return (330u << rate) + 130u;          /* as ultra_rw_slot_us (0.2.4: the lead byte and the answer, 33 bytes) */
 }
 
 RC_MEASURED int32_t rc_last_edge(const uint16_t *w, uint32_t words)

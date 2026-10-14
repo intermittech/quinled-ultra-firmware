@@ -47,8 +47,10 @@ Program `...-factory.hex` with WCH-LinkUtility / wlink (WCH-LinkE on TP1-TP4):
 
 1. Erase the whole chip.
 2. Program the hex. Its addresses are 0x0000-based like the build's `fw.hex`; the tools map them to 0x08000000.
-3. Set write protection for sectors 0-1 in the option bytes (WRPR0 bits 0 and 1 = 0): the bootloader can then never
-   be erased by the app.
+3. Let the board boot once. Since 0.6.8 the app write-protects sectors 0-1 itself at its first boot (WRPR0 bits 0
+   and 1 = 0; README "New in 0.6.8"), then resets: the bootloader can then never be erased by the app. The jig's
+   `wrp = verify` checks FLASH->WPR after that reset (and RDPR 0xA5: no read protection). A power cut during that
+   rewrite leaves the chip read-protected: erase it (which lifts the protection) and program it again.
 
 **Two cautions:**
 

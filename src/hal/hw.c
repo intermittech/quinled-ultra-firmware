@@ -1060,6 +1060,20 @@ uint32_t hw_vdd_low(void)
     return (PWR->CSR & PWR_CSR_PVDO) != 0u;             /* PVDO = 1: VDD below the threshold (flash_op's test) */
 }
 
+uint32_t hw_boot_open(void)
+{
+    return (FLASH->WPR & 3u) != 0u;                      /* a bit at 1: that 4 KB sector is writable (RM 32.4.7) */
+}
+
+uint32_t hw_option_bytes(uint16_t ob[8])
+{
+    uint32_t i;
+    for (i = 0; i < 8u; i++) {
+        ob[i] = (uint16_t)(((volatile const uint16_t *)HW_OB_ADDR)[i] & 0xFFu);
+    }
+    return ob[0];
+}
+
 /* the SRAM path's trip: all five outputs forced low (as pwm_force_off(1)); never back to PWM */
 RAMCODE void hw_flash_trip(void)
 {
@@ -1109,6 +1123,7 @@ static void flash_clock(uint32_t cfgr, uint32_t slow)
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
     uint32_t i, r = FLASH_OK, cfgr, mtvec, adc = adc_ready, txctl;
+    const uint32_t ob = addr == HW_OB_ADDR;              /* (0.6.8) the option bytes: OBKEYR, OPTER / OPTPG (RM 32.6) */
 #if CONSOLE_FULL
     uint32_t rxw;
 #endif
@@ -1159,36 +1174,40 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     FLASH->KEYR = FLASH_KEY2;
     FLASH->MODEKEYR = FLASH_KEY1;                        /* fast mode: the 256-byte page erase */
     FLASH->MODEKEYR = FLASH_KEY2;
+    if (ob) {
+        FLASH->OBKEYR = FLASH_KEY1;                      /* the option bytes' own lock (OBWRE) */
+        FLASH->OBKEYR = FLASH_KEY2;
+    }
     __enable_irq();
-    if (FLASH->CTLR & (FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK)) {
+    if ((FLASH->CTLR & (FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK)) || (ob && !(FLASH->CTLR & FLASH_CTLR_OPTWRE))) {
         r = FLASH_ERR_KEY;
     } else {
         if (erase_addr != 0u) {
             FLASH->STATR = FLASH_STATR_EOP | FLASH_STATR_WRPRTERR;   /* (write 1 to clear) */
-            FLASH->CTLR |= FLASH_CTLR_PAGE_ER;
+            FLASH->CTLR |= ob ? FLASH_CTLR_OPTER : FLASH_CTLR_PAGE_ER;   /* (the option bytes: all of them) */
             FLASH->ADDR = erase_addr;
             FLASH->CTLR |= FLASH_CTLR_STRT;
             r = flash_wait();
-            FLASH->CTLR &= ~(FLASH_CTLR_PAGE_ER | FLASH_CTLR_STRT);
+            FLASH->CTLR &= ~(FLASH_CTLR_PAGE_ER | FLASH_CTLR_OPTER | FLASH_CTLR_STRT);
             watchdog_kick();
         }
         if (r == FLASH_OK && halfwords != 0u) {
-            FLASH->CTLR |= FLASH_CTLR_PG;
+            FLASH->CTLR |= ob ? FLASH_CTLR_OPTPG : FLASH_CTLR_PG;
             for (i = 0; i < halfwords && r == FLASH_OK; i++) {
                 FLASH->STATR = FLASH_STATR_EOP | FLASH_STATR_WRPRTERR;
                 *(volatile uint16_t *)(addr + 2u * i) = src[i];
                 r = flash_wait();
 #if FLASH_VERIFY
-                if (r == FLASH_OK && *(volatile const uint16_t *)(addr + 2u * i) != src[i]) {
+                if (r == FLASH_OK && (*(volatile const uint16_t *)(addr + 2u * i) & (ob ? 0xFFu : 0xFFFFu)) != src[i]) {
                     r = FLASH_ERR_VERIFY;
                 }
 #endif
             }
-            FLASH->CTLR &= ~FLASH_CTLR_PG;
+            FLASH->CTLR &= ~(FLASH_CTLR_PG | FLASH_CTLR_OPTPG);
             watchdog_kick();
         }
     }
-    FLASH->CTLR |= FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK;
+    FLASH->CTLR = (FLASH->CTLR & ~FLASH_CTLR_OPTWRE) | FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK;   /* (OBWRE: 0 locks) */
     __disable_irq();
     flash_clock(cfgr, 0);
     PFIC->VTFADDR[0] = 0;

@@ -50,10 +50,9 @@ static void rc_poll_slot(uint8_t *s, uint8_t seq, uint8_t index, uint8_t slots, 
     ultra_put16(s + 30, ultra_crc16(s, 30));
 }
 
-/* forward mode again W .. W + this (review r6: the 0.2.4 proposal's ULTRA_RW_END_US 60 can't hold a 50 us tick with
- * a 200 ppm rate error over the longest window, 4.7 us each way: proposed 80 (claude-telemetry, as ULTRA_RW_LATE_US) or
- * 64 (gpt-protocol); held to the stricter here) */
-#define RCS_END_US 64.0
+/* forward mode again W .. W + this (protocol 0.2.4: ULTRA_RW_END_US 80; review r6: the proposal's 60 can't hold a
+ * 50 us tick with a 200 ppm rate error over the longest window) */
+#define RCS_END_US ((double)ULTRA_RW_END_US)
 
 static void test_rc_units(void)
 {
@@ -85,7 +84,8 @@ static void test_rc_units(void)
     s[1] = ULTRA_LIGHT_BOARD << 4;
     s[0] = ULTRA_SET;
     CHECK(rc_poll_parse(s) != 0, "rc: not a POLL");
-    CHECK(rc_slot_us(0) == 450u && rc_slot_us(1) == 770u && rc_slot_us(2) == 1410u, "rc: pitches 450 / 770 / 1410");
+    CHECK(rc_slot_us(0) == 460u && rc_slot_us(1) == 790u && rc_slot_us(2) == 1450u && rc_slot_us(1) ==
+          ultra_rw_slot_us(1), "rc: pitches 460 / 790 / 1450 (0.2.4: with the lead byte), as ultra_rw_slot_us");
 
     memset(w, 0, sizeof w);
     CHECK(rc_last_edge(w, 40) == -1, "rc: no edge");
@@ -99,21 +99,23 @@ static void test_rc_units(void)
     rc_poll_slot(s, 9, 3, 5, 0, 0, 0, 0);
     rc_schedule(&sc, 1000u, 0, nominal, s);
     CHECK(sc.dir_tick == 1010u && sc.check_tick == 1019u && sc.late_tick == 1018u &&
-          sc.tx_tick == 1000u + (1000u + 1350u + 49u) / 50u &&
-          sc.end_tick == 1000u + (1000u + 2250u + RC_END_US + 49u) / 50u,
+          sc.tx_tick == 1000u + (1000u + 3u * rc_slot_us(0) + 49u) / 50u &&
+          sc.end_tick == 1000u + (1000u + 5u * rc_slot_us(0) + RC_END_US + 49u) / 50u,
           "rc: schedule at the nominal rate (%u %u %u %u %u)", sc.dir_tick - 1000u, sc.check_tick - 1000u,
           sc.late_tick - 1000u, sc.tx_tick - 1000u, sc.end_tick - 1000u);
     rc_schedule(&sc, 1000u, 1800, nominal, s);           /* t0 one tick before the read */
-    CHECK(sc.dir_tick == 1009u && sc.end_tick == 1000u + 66u - 1u, "rc: t0 a tick back (%u %u)", sc.dir_tick - 1000u,
-          sc.end_tick - 1000u);
+    CHECK(sc.dir_tick == 1009u && sc.end_tick == 1000u + (1000u + 5u * rc_slot_us(0) + RC_END_US + 49u) / 50u - 1u,
+          "rc: t0 a tick back (%u %u)", sc.dir_tick - 1000u, sc.end_tick - 1000u);
     rc_schedule(&sc, 1000u, -40, nominal, s);            /* the edge 1.1 us after the read: 500 us is past tick 10 */
     CHECK(sc.dir_tick == 1011u, "rc: t0 just after the read (%u)", sc.dir_tick - 1000u);
     rc_schedule(&sc, 0xFFFFFFF0u, 0, nominal, s);
-    CHECK(sc.dir_tick == 0xFFFFFFF0u + 10u && sc.end_tick == 0xFFFFFFF0u + 66u, "rc: across the tick's wrap");
+    CHECK(sc.dir_tick == 0xFFFFFFF0u + 10u &&
+          sc.end_tick == 0xFFFFFFF0u + (1000u + 5u * rc_slot_us(0) + RC_END_US + 49u) / 50u, "rc: across the tick's wrap");
     rc_schedule(&sc, 0, 0, (uint32_t)(50.0 / 1.02 * 65536.0), s);   /* a 2 % fast HSI: more ticks per host us */
-    CHECK(sc.end_tick == (uint32_t)ceil((3250.0 + RC_END_US) * 1.02 / 50.0), "rc: a fast HSI's ticks (%u)", sc.end_tick);
+    CHECK(sc.end_tick == (uint32_t)ceil((1000.0 + 5.0 * rc_slot_us(0) + RC_END_US) * 1.02 / 50.0),
+          "rc: a fast HSI's ticks (%u)", sc.end_tick);
     /* (review r6) forward again at W .. W + RCS_END_US for every t0 phase in the tick and a +-200 ppm error of the
-     * measured rate, at the longest window (16 slots at 250 kbaud: W = 23,560 us); 3 us for the ISR's latency and a
+     * measured rate, at the longest window (16 slots at 250 kbaud: W = 24,200 us); 3 us for the ISR's latency and a
      * 2.2 % slow HSI's longer tick */
     {
         double lo = 1e9, hi = -1e9, e;
@@ -123,17 +125,18 @@ static void test_rc_units(void)
         for (sgn = -1; sgn <= 1; sgn += 2) {
             for (bk = 0; bk < 1800; bk += 3) {
                 rc_schedule(&sc, 1000u, bk, (uint32_t)(nominal * (1.0 + sgn * 200e-6)), s);
-                e = (double)(sc.end_tick - 1000u) * 50.0 + bk / 36.0 - 23560.0;
+                e = (double)(sc.end_tick - 1000u) * 50.0 + bk / 36.0 - (1000.0 + 16.0 * rc_slot_us(2));
                 lo = e < lo ? e : lo;
                 hi = e > hi ? e : hi;
             }
         }
-        CHECK(lo >= 0.0 && hi + 3.0 <= RCS_END_US, "rc: forward again W %+.1f .. %+.1f us (+-200 ppm, 23.6 ms)",
+        CHECK(lo >= 0.0 && hi + 3.0 <= RCS_END_US, "rc: forward again W %+.1f .. %+.1f us (+-200 ppm, 24.2 ms)",
               lo, hi);
     }
     rc_poll_slot(s, 9, ULTRA_POLL_RELAY_ONLY, 16, 0, 2, 0, 0);
     rc_schedule(&sc, 0, 0, nominal, s);
-    CHECK(sc.end_tick == (1000u + 16u * 1410u + 49u) / 50u, "rc: relay only, 16 slots at 250 kbaud (%u)", sc.end_tick);
+    CHECK(sc.end_tick == (1000u + 16u * 1450u + RC_END_US + 49u) / 50u, "rc: relay only, 16 slots at 250 kbaud (%u)",
+          sc.end_tick);
 
     CHECK(rc_brr(nominal, 0) == 144u && rc_brr(nominal, 1) == 288u && rc_brr(nominal, 2) == 576u, "rc: BRR nominal");
     CHECK(rc_brr((uint32_t)(50.0 / 1.02 * 65536.0), 0) == 147u, "rc: BRR for a 2 %% fast HSI (%u)",
@@ -697,7 +700,7 @@ static void test_rc_chain(void)
         (void)rcs_window(&c, idx, ULTRA_PAGE_ENERGY, 7);
         rcs_free(&c);
         c.b[2].ans[ULTRA_RSP_DATA + 3] ^= 0x10u;         /* sent damaged: as a bit flipped on the line */
-        rcs_simulate(&c, c.t0 + ULTRA_RW_FIRST_US + 450.0 * 5 + 400.0);
+        rcs_simulate(&c, c.t0 + ULTRA_RW_FIRST_US + rc_slot_us(0) * 5.0 + 400.0);
         rcs_hub_decode(&c);
         dropped = c.got_n[2] == 0 && c.hub_bytes_bad == 1;
         rcs_free(&c);

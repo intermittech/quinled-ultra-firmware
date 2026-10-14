@@ -288,6 +288,7 @@ def adc(elf):
 FLASH, RCC_CFGR0, SYST, PFIC_B, USART2, DMA6_CNTR = 0x40022000, 0x40021004, 0xE000F000, 0xE000E000, 0x40004400, \
     DMA + 8 + 20 * 5 + 4
 KEY1, KEY2 = 0x45670123, 0xCDEF89AB
+OB_ADDR = 0x1FFFF800                                  # (0.6.8) the user option bytes (RM 32.6)
 
 
 class FlashHal(Hal):
@@ -297,8 +298,9 @@ class FlashHal(Hal):
         super().__init__(elf)
         self.csr = {0x800: 0x88, 0x305: self.addr("trap_entry")}   # interrupts on; the app's entry (0.6.5)
         self.ops = []                                    # (kind, address, state) per erase / half-word
-        self.no_eop = self.wrp = self.no_unlock = False
+        self.no_eop = self.wrp = self.no_unlock = self.no_ob_unlock = False
         self.keys = []
+        self.ob = [0xA5, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]   # (0.6.8) the option bytes' low bytes (RM 32.6)
         self.mmio[FLASH + 0x10] = 0x8080                 # LOCK, FAST_LOCK
         self.mmio[USART2] = 0x00C0                       # TC, TXE
         self.mmio[RCC_CFGR0] = 0x0002 | (4 << 11)        # SW = PLL, PPRE2 /2
@@ -336,6 +338,18 @@ class FlashHal(Hal):
         return super().rd(a, n)
 
     def wr(self, a, n, v):
+        if OB_ADDR <= a < OB_ADDR + 16 and n == 2:     # (0.6.8) an option byte: OBPG with OBWRE, unlocked
+            ctl = self.mmio.get(FLASH + 0x10, 0)
+            if ctl & 0x10 and ctl & 0x200 and not ctl & 0x80:
+                self.ops.append(("obprog", a, self.state(), v & 0xFFFF))
+                self.ob[(a - OB_ADDR) // 2] = v & 0xFF
+                self.flash_done()
+            return
+        if a == FLASH + 0x08:                            # OBKEYR: the pair sets OBWRE (CTLR bit 9)
+            self.keys.append((a, v))
+            if len(self.keys) >= 2 and self.keys[-2] == (a, KEY1) and v == KEY2 and not self.no_ob_unlock:
+                self.mmio[FLASH + 0x10] = self.mmio.get(FLASH + 0x10, 0) | 0x200
+            return
         if 0x08000000 <= a < 0x08010000:
             ctl = self.mmio.get(FLASH + 0x10, 0)
             if ctl & 1 and not ctl & 0x80:               # PG, unlocked: a half-word
@@ -353,6 +367,11 @@ class FlashHal(Hal):
             self.mmio[a] = self.mmio.get(a, 0) & ~(v & 0x30)
             return
         if a == FLASH + 0x10:
+            if v & 0x40 and v & 0x20 and v & 0x200 and not v & 0x80:   # STRT with OBER (and OBWRE): the option bytes
+                self.ops.append(("oberase", OB_ADDR, self.state(), None))
+                self.ob = [0xFF] * 8
+                self.flash_done()
+                v &= ~0x40
             if v & 0x40 and v & 0x20000 and not v & 0x80:   # STRT with PAGE_ER: an erase
                 self.ops.append(("erase", self.mmio.get(FLASH + 0x14, 0), self.state()))
                 base = self.mmio.get(FLASH + 0x14, 0) - 0x08000000
@@ -387,7 +406,7 @@ def flash(elf):
     tick, fault = e.addr("flash_tick"), e.addr("flash_fault")
     e.call("flash_op", [0x0800FF00, src, 4, 0x0800FF00])
     ok = e.ret == 1
-    kinds = [k for k, _, _ in e.ops]
+    kinds = [o[0] for o in e.ops]
     check(ok and kinds == ["erase", "prog", "prog", "prog", "prog"], "erase + 4 half-words: FLASH_OK (%d), %s"
           % (e.ret, kinds))
     check(e.peek(0x0800FF00, 8) == bytes([0x34, 0x12, 0x78, 0x56, 0xBC, 0x9A, 0xF0, 0xDE]), "the data programmed")
@@ -395,7 +414,8 @@ def flash(elf):
     irq1 = (1 << 12) | (1 << 13) | (1 << 14)           # TIM2 / TIM3 / TIM4
     if "rc_uart_isr" in e.syms:
         irq1 |= 1 << 23                                # the receiver (BOARD=2): its return channel's USART3 too
-    for k, a, s in e.ops:
+    for o in e.ops:
+        k, a, s = o[0], o[1], o[2]
         if not s["irq_on"]:
             bad.append("%s: interrupts off" % k)
         if (s["cfgr"] >> 4) & 0xF != 0x8 or (s["cfgr"] >> 11) & 7 != 0:
@@ -464,6 +484,37 @@ def flash(elf):
     t.call("flash_poll_isr")
     check(one != 4 and all(t.mode(n) == 4 for n in CH) and t.rd(t.addr("pwm_forced"), 1) == 1,
           "the SRAM tick: two samples over the trip level force every output low (after one: %d)" % one)
+
+
+def option_bytes(elf):
+    print("option bytes (0.6.8): flash_op on HW_OB_ADDR, the bootloader's write protection (boot_protect)")
+    src = 0x20004000
+    want = [0xA5, 0x5A, 0xFF, 0xFF, 0xFC, 0xFF, 0xFF, 0xFF]   # RDPR, USER, DATA0, DATA1, WRPR0 & 0xFC, WRPR1-3
+    e = FlashHal(elf)
+    e.poke(src, b"".join(bytes([v, 0]) for v in want))
+    e.call("flash_op", [OB_ADDR, src, 8, OB_ADDR])
+    kinds = [o[0] for o in e.ops]
+    check(e.ret == 1 and kinds == ["oberase"] + ["obprog"] * 8, "the option bytes erased, then 8 half-words: FLASH_OK "
+          "(%d), %s" % (e.ret, kinds))
+    check([o[1] for o in e.ops[1:]] == [OB_ADDR + 2 * i for i in range(8)] and e.ob == want,
+          "programmed in order, as given: RDPR 0xA5 kept, WRPR0 0xFC (%s)" % ["%02X" % v for v in e.ob])
+    check((FLASH + 0x08, KEY1) in e.keys and (FLASH + 0x08, KEY2) in e.keys, "OBKEYR unlocked (OBWRE)")
+    bad = [o[0] for o in e.ops if not o[2]["irq_on"] or (o[2]["cfgr"] >> 4) & 0xF != 0x8 or o[2]["mtvec"] !=
+           e.addr("flash_fault") or 4 in o[2]["modes"]]
+    check(not bad, "as every flash operation: the SRAM tick, HCLK / 2, the fault handler, no output touched %s" % bad)
+    check(e.mmio.get(FLASH + 0x10, 0) & 0x8280 == 0x8080, "after: LOCK and FAST_LOCK set, OBWRE cleared (CTLR %05x)"
+          % e.mmio.get(FLASH + 0x10, 0))
+    f = FlashHal(elf)
+    f.no_ob_unlock = True
+    f.poke(src, b"".join(bytes([v, 0]) for v in want))
+    f.call("flash_op", [OB_ADDR, src, 8, OB_ADDR])
+    check(f.ret == 4 and not f.ops and f.ob[0] == 0xA5, "OBKEYR refused: FLASH_ERR_KEY (%d), the option bytes untouched"
+          % f.ret)
+    g = FlashHal(elf)
+    g.poke(src, bytes([0x34, 0x12]))
+    g.call("flash_op", [0x0800FF00, src, 1, 0])
+    check(g.ret == 1 and (FLASH + 0x08, KEY1) not in g.keys and g.ob[4] == 0xFF,
+          "a record write never unlocks the option bytes")
 
 
 def records(elf):
@@ -552,9 +603,10 @@ def ramtext(elf):
 if __name__ == "__main__":
     elf = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "build", "target-lto0",
                                                              "fw.elf")
-    which = sys.argv[2:] or ["h2", "h6", "adc", "flash", "records", "vectors", "ramtext"]
+    which = sys.argv[2:] or ["h2", "h6", "adc", "flash", "option_bytes", "records", "vectors", "ramtext"]
     for w in which:
-        {"h2": h2, "h6": h6, "adc": adc, "flash": flash, "records": records, "vectors": vectors,
+        {"h2": h2, "h6": h6, "adc": adc, "flash": flash, "option_bytes": option_bytes, "records": records,
+         "vectors": vectors,
          "ramtext": ramtext}[w](elf)
     print("hal_check: %s (%d failed)" % ("FAILED" if fails else "passed", fails))
     sys.exit(1 if fails else 0)

@@ -53,7 +53,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.7"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.8"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -1598,6 +1598,27 @@ static void upd_capture(void)
     upd_action(upd_app_frame(&upd, f, ms_now));
 }
 
+#if UPD_APP
+/* (0.6.8, Quindor: "option A") the bootloader's sectors 0-1 write-protected by the app itself, at its first boot behind
+ * the bootloader (RELEASING.md "Production": no CLI flasher sets WRPR through a WCH-LinkE). Once per board, in the jig:
+ * the sectors open, VDD above the PVD, the bootloader's info and the descriptor valid, the chip not read-protected.
+ * The option bytes are rewritten with WRPR0 & 0xFC (bits 0, 1: 8 KB), RDPR (0xA5), USER, DATA and WRPR1-3 as they
+ * were, then a reset loads them (RM 32.6: at a system reset). Never RDPR: never read protection. A power cut between
+ * the option erase and the rewrite leaves RDPR erased (read-protected): the jig erases and programs again. VDD below
+ * the PVD: the next boot. Before the outputs start (they are dark until data anyway); a failed write: the next boot */
+static void boot_protect(void)
+{
+    uint16_t ob[8];
+    if (!hw_boot_open() || hw_vdd_low() || !upd.info.desc_ok || hw_option_bytes(ob) != 0xA5u) {
+        return;
+    }
+    ob[4] &= 0xFCu;                                      /* WRPR0: sectors 0 and 1 */
+    if (flash_op(HW_OB_ADDR, ob, 8u, HW_OB_ADDR) == FLASH_OK) {
+        NVIC_SystemReset();
+    }
+}
+#endif
+
 /* boot: what the bootloader left in the hand-over block (UPD_APP), the app's descriptor and status records */
 static void upd_boot(void)
 {
@@ -1678,8 +1699,9 @@ static void upd_service(void)
                      ULTRA_FEAT_VERSION_BLINK | ULTRA_FEAT_POWER_EVENTS | ULTRA_FEAT_SUPPLY_DIPS | ULTRA_FEAT_HEALTH | \
                      ULTRA_FEAT_ENERGY | ULTRA_FEAT_SOFT_START | ULTRA_FEAT_SCENE_EFFECT)
 /* 0.2.4 hardware capabilities: answers (0x01), relays the boards behind it (0x02), the bus voltage (0x04), the input
- * current (0x08), a second voltage input (0x20: the buck output V_B); no board NTC (0x10) */
-#define RC_HW_CAPS  0x002Fu
+ * current (0x08); no board NTC (0x10). (0.6.8: the proposal's 0x20, a second voltage input, is gone from 0.2.4: no
+ * page carries its value) */
+#define RC_HW_CAPS  (ULTRA_HWCAP_RETURN | ULTRA_HWCAP_RELAY | ULTRA_HWCAP_VBUS | ULTRA_HWCAP_CURRENT)
 #ifndef RC_PAGES_024
 #define RC_PAGES_024 1                     /* the pages only the 0.2.4 proposal defines: OUTPUTS, ACKS, ERRORS (0: they
                                               answer ULTRA_PAGE_UNSUPPORTED; ~0.6 KB less). 0.6.6: the receiver's
@@ -2377,6 +2399,9 @@ int main(void)
     }
     stat.reset_flags = hw_reset_flags();
     upd_boot();                            /* UPD_APP: the reset flags from the hand-over, the bootloader's result */
+#if UPD_APP
+    boot_protect();                        /* (0.6.8) the bootloader's sectors write-protected (once, in the jig) */
+#endif
 #if UPD_APP
     fw_version = upd.info.desc_ok ? upd.info.version : 0u;   /* the descriptor's: what the boards compare in an update */
 #else

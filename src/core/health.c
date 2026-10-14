@@ -139,7 +139,8 @@ void health_page(const health_t *h, int16_t temp_peak, uint32_t peak_age_s, uint
         uint32_t v[3];
         v[0] = (uint16_t)h->dark_ma;
         v[1] = (uint16_t)temp_peak;
-        v[2] = peak_age_s > 0xFFFFFEu ? 0xFFFFFEu : peak_age_s;
+        v[2] = temp_peak == (int16_t)ULTRA_ST_NA ? 0xFFFFFFu                 /* (0.2.4) no peak yet: none */
+             : peak_age_s > 0xFFFFFEu ? 0xFFFFFEu : peak_age_s;
         rc_pack(out + ULTRA_HE_DARK_MA, v, len, 3);
     }
 }

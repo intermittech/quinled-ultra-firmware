@@ -124,7 +124,7 @@ The hub reaches a WS-forced board with the board's own WS config frames: `ultra_
 | Header field | Bytes | |
 |---|---|---|
 | MAGIC | 2 | `0x5AD2` |
-| VERSION << 4 \| FLAGS | 1 | VERSION 2 (the wire format of protocol 0.2); FLAGS 0x01 RW, 0x02 HINT, 0x04 EXT, 0x08 UPD: see [Compatibility rules](#compatibility-rules), [Reserved](#reserved-return-channel) and [Firmware update](#firmware-update-frames) (0 in normal frames) |
+| VERSION << 4 \| FLAGS | 1 | VERSION 2 (the wire format of protocol 0.2); FLAGS 0x01 RW, 0x02 HINT, 0x04 EXT, 0x08 UPD: see [Compatibility rules](#compatibility-rules), [Return channel](#return-channel) and [Firmware update](#firmware-update-frames) (0 in normal frames) |
 | TIME | 4 | host clock in µs (low 32 bits) **at the end of the frame**: the falling edge of the header's last bit |
 | CRC-8 | 1 | SMBus (poly 0x07) over the first 7 bytes |
 
@@ -169,13 +169,13 @@ Measured in the host test, two boards with HSI +2.0 % and −1.7 % stay within 8
 | Type | Name | Payload |
 |---|---|---|
 | 0 | NOP | — |
-| 1 | LIGHT_DEF | roles CH1-CH5 (nibbles, 3 bytes), gamma × 1000 (2), flags (1), min power ×5 (2 each), max power ×5 (2 each) |
+| 1 | LIGHT_DEF | roles CH1-CH5 (nibbles, 3 bytes), gamma × 1000 (2; 0 = linear, as 1000: protocol 0.2.4), flags (1), min power ×5 (2 each), max power ×5 (2 each) |
 | 2 | SET | M (2), A ×5 (2 each), B ×5 (2 each), duration ms (3), start ms (int16) |
 | 3 | EFFECT | effect (1), start ms (int32), parameters (≤ 22) |
 | 4 | STEP | index << 4 \| count (1), duration ms (2), transition ms (2), M, A ×5, B ×5 (like SET) |
 | 5 | CONFIG | up to 9 × (id (1), value (2)) |
 | 6 | IDENTIFY | 1 = blink the identify pattern (30 s), 0 = stop; 2 = current calibration (boards with the input current sense: zero, then each channel alone; payload byte 2 = 0: the standard test at 25 / 50 / 75 / 100 %, 0.95 s; 5..100: at that duty only, 0.18 s; visible; stored on the board; other boards ignore it); 3 = DARK: every output fades to dark (0.3 s) and stays dark for payload byte 2 s (0 = 60 s) or until 4 = RELEASE, which fades back; the light engine keeps running underneath, so states and effects continue. The hub calibrates a pin with them: DARK to every board, then one board's test after the other in chain order, then RELEASE. 5 = VERSION (protocol 0.2.1): the board blinks its firmware version once on the feedback channel (3 fast, then major, minor, patch as value codes 1.2 s apart, then alpha 1 / beta 2 / rc 3 short; a development build: one long flash); a board without it ignores the slot, so no blink means older firmware. Values 6-255 and calibration arguments 1-4 / 101-255 are reserved (the slot is ignored) |
-| 7 | POLL | *reserved* for the return channel, see [Reserved](#reserved-return-channel); boards ignore it |
+| 7 | POLL | in an RW frame only: the [return channel](#return-channel) (protocol 0.2.4, Diff-Power receivers); the dig2analog-ultra ignores it |
 | 8 | SCENE | mode (1: 0 not in the scene, 1 these values; 2-255 reserved), fade × 100 ms (1), M (2), A ×5 (2 each), B ×5 (2 each) |
 | 9 | LIGHT_OPT | flags (1: 0x01 dim to warm, 0x02 set points), CW LED mireds × 10 (2), WW LED mireds × 10 (2), warm end mireds × 10 (2), red assist (2, 0..65535 = 0..100 %), set points: 4 × (M (2), mireds × 10 (2)), unused = 0 |
 | 0x0A | SCENE_EFFECT | protocol 0.2.3: effect (1), parameters (≤ 22, as EFFECT): the light's [power-on effect](#scene_effect-power-on-effect) |
@@ -379,7 +379,7 @@ from 20,000 random calls with undefined inputs).
 | IDENTIFY value 6-255 (5 before 0.2.1), calibration argument 1-4 / 101-255 | ignores the slot | same |
 | SCENE mode 2-255 | ignores the slot (the stored scene stays) | same |
 | Header FLAGS 0x02 HINT | processes the frame as usual | `test_ultra_compat` (frame_rx), `test_wire.c` |
-| Header FLAGS 0x04 EXT | keeps its lock and the clock sync, ignores every slot of the frame (as for RW) | same |
+| Header FLAGS 0x04 EXT | keeps its lock and the clock sync, ignores every slot of the frame (with RW: no window) | same |
 | Another VERSION | rejects the frame: no lock, no clock sync, no slot | `test_ultra_compat` (frame_rx) |
 
 **Rules for later protocol parts:**
@@ -398,9 +398,10 @@ from 20,000 random calls with undefined inputs).
 - **`ULTRA_VERSION` changes only for an incompatible change.** A board rejects every frame of another version (no
   lock, no clock, no slot), so a new version means updating every board on the pin. (A bootloader ends its listen
   window at the first normal version-2 header; with another version it waits its full 150 ms.)
-- **The host can't ask a board what it supports** ([capability reporting](#capability-reporting-reserved) is
-  reserved for QuinLED Diff-Power ultra receivers; the dig2analog-ultra never answers). It relies on the fallbacks above: an unknown command does nothing, an unknown effect shows the plain
-  state, an unknown role leaves the channel dark.
+- **The host can ask only QuinLED Diff-Power ultra receivers what they support** ([capability
+  reporting](#capability-reporting), protocol 0.2.4); the dig2analog-ultra never answers. Otherwise it relies on the
+  fallbacks above: an unknown command does nothing, an unknown effect shows the plain state, an unknown role leaves
+  the channel dark.
 
 **Reserved ranges:**
 
@@ -411,8 +412,10 @@ from 20,000 random calls with undefined inputs).
 | Role | 0-7 | 8-15 (e.g. amber, UV, lime) |
 | Effect | 0-9 | 10-127 official, 128-255 custom |
 | CONFIG id | 1-23 (23 soft start: protocol 0.2.3) | 24-127 official, 128-255 hardware-specific (e.g. a Diff-Power receiver, a current-sense revision; 128 = the MCU temperature offset, reserved) |
-| Header FLAGS | 0x02 HINT, 0x04 EXT (no hint or extension defined yet); 0x01 RW, 0x08 UPD (reserved below) | — |
-| Return-channel page | 0x00-0x0B (0x08 POWER: protocol 0.2.2; 0x09 SUPPLY, 0x0A HEALTH, 0x0B ENERGY: 0.2.3) | 0x0C-0x7F official, 0x80-0xFD hardware-specific; 0xFE BUSY, 0xFF UNSUPPORTED |
+| Header FLAGS | 0x02 HINT, 0x04 EXT (no hint or extension defined yet); 0x01 RW ([return channel](#return-channel), protocol 0.2.4), 0x08 UPD (below) | — |
+| Return-channel page | 0x00-0x0B (0x08 POWER: protocol 0.2.2; 0x09 SUPPLY, 0x0A HEALTH, 0x0B ENERGY: 0.2.3; all defined in 0.2.4, 0x05 FW_UPDATE reserved) | 0x0C-0x7F official, 0x80-0xFD hardware-specific; 0xFE BUSY, 0xFF UNSUPPORTED |
+| Return rate (POLL) | 0-2 (protocol 0.2.4) | 3-255 |
+| Hardware capability (IDENTITY) | 0x0001-0x0010 (protocol 0.2.4) | 0x0020-0x8000 |
 | Feature bit (IDENTITY) | 0-16 (11 POWER_EVENTS: protocol 0.2.2; 12-16: 0.2.3) | 17-23 official, 24-31 hardware-specific |
 
 ### Broadcast / extension slots (reserved)
@@ -451,7 +454,7 @@ DIN samples at the frame end):
   deadline of ~0.5 ms.
 - **Suggested:** one broadcast slot at most, 27 bytes per frame for every board.
 
-### Capability reporting (reserved)
+### Capability reporting
 
 For QuinLED Diff-Power ultra receivers only (the dig2analog-ultra never reports back): the return channel's
 IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version and a 32-bit feature bitmap:
@@ -462,7 +465,7 @@ IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version 
 | 12 | 4 | firmware version word: major << 24 \| minor << 16 \| patch << 8 \| pre-release (`ultra_update.h`); 0 = unknown |
 | 16 | 1 | bootloader version (0 = none) |
 | 17 | 1 | hardware id |
-| 18 | 2 | hardware capabilities (reserved; wiki: Reserved extensions) |
+| 18 | 2 | hardware capabilities (protocol 0.2.4, `ULTRA_HWCAP_*`): 0x0001 answers POLLs, 0x0002 relays the boards behind it, 0x0004 the supply / bus voltage, 0x0008 the input current, 0x0010 a board temperature sensor; 0x0020-0x8000 reserved. The receiver: 0x000F |
 | 20 | 4 | firmware features, below |
 
 | Bit | Name | Feature |
@@ -489,58 +492,100 @@ IDENTITY page (0x04, `ULTRA_ID_*`, `ULTRA_FEAT_*`) carries the firmware version 
 
 - Firmware 0.6.0's features are 0x1FFBF (bits 0-5 and 7-16: the board current sense is always in on rev 0.4),
   0x1FFFF behind a bootloader (bit 6, release builds); a Diff-Power ultra receiver would report them.
-- **Until Diff-Power receivers answer, the host can't read this** (a dig2analog-ultra never answers). It sends what is configured, and a board without a feature
-  falls back as above (e.g. firmware without SCENE would show nothing at power-up).
+- **Only Diff-Power receivers answer** (protocol 0.2.4); for a dig2analog-ultra the host can't read this. It sends
+  what is configured, and a board without a feature falls back as above (e.g. firmware without SCENE would show
+  nothing at power-up).
 
-## Reserved: return channel
+## Return channel
 
-For **QuinLED Diff-Power ultra receivers only** (their RS-485 pair turns around). The QuinLED dig2analog-ultra-5ch
-never reports back, in any revision: its data line is one-way, and what it measures (current, voltage, temperature,
-calibration) stays on the board.
+**Protocol 0.2.4.** For **QuinLED Diff-Power ultra receivers only** (their RS-485 pair turns around). The QuinLED
+dig2analog-ultra-5ch never reports back, in any revision: its data line is one-way, and what it measures (current,
+voltage, temperature, calibration) stays on the board.
 
-Implemented by the Diff-Power ultra receiver's firmware build since firmware 0.6.6 (`BOARD=2`, `core/rc.h`); the
-dig2analog-ultra's build has none of it. The values were reserved so firmware and hosts could add it without another
-change to the frame layout. Constants: `ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTRA_RW_*`, `ULTRA_RSP_*`,
-`ULTRA_PAGE_*`). Background: wiki, Reserved extensions.
+Implemented by the Diff-Power ultra receiver's firmware build (`BOARD=2`, `core/rc.h`, `core/rc.c`, `main.c`
+`rc_arm` / `rc_tick` / `rc_page`, `hal/hw.c` `rc_hw_send`): firmware 0.6.6 and 0.6.7 the 0.2.4 proposal, **0.6.8 the
+released 0.2.4** (the slot pitch with the lead byte). The dig2analog-ultra's build has none of it. Constants:
+`ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTRA_POLL_*`, `ULTRA_RW_*`, `ULTRA_RSP_*`, `ULTRA_PAGE_*`). The
+normative text and the hub's side: the protocol's wiki, Return channel.
 
 | FLAGS bit | Name | Meaning | What a board of this firmware does |
 |---|---|---|---|
-| 0x01 | RW | A response window follows this frame; every slot is a POLL | Clock sync from the header; ignores every slot; keeps its lock (an RW frame is a normal Ultra frame for auto-detect). A Diff-Power receiver (0.6.6) also answers its POLL in the window |
+| 0x01 | RW | A response window follows this frame | Clock sync from the header; keeps its lock (an RW frame is a normal Ultra frame for auto-detect). The dig2analog-ultra ignores every slot; a Diff-Power receiver answers its POLL (below) and ignores any other slot |
 | 0x02 | HINT | Optional frame-level hint ([Compatibility rules](#compatibility-rules)); none defined yet | Processes the frame as usual |
-| 0x04 | EXT | Must understand: the frame uses an extension; none defined yet | Clock sync from the header; ignores every slot; keeps its lock |
+| 0x04 | EXT | Must understand: the frame uses an extension; none defined yet | Clock sync from the header; ignores every slot; keeps its lock. With RW: no window (a receiver doesn't take part) |
 | 0x08 | UPD | Firmware update frame, see [Firmware update frames](#firmware-update-frames) | No clock sync, no slot; keeps its lock |
 
 RW and UPD are never set together: the host never sends that, and a board ignores such a frame (as an UPD frame).
 
-- **Slot type 7, POLL:** valid only in an RW frame. Payload: answer index 0-15 (0xFF = relay only), R = response
-  slots in the window (1-16), page, return rate, page arguments. A dig2analog-ultra drops POLL slots in any frame; a
-  Diff-Power receiver (0.6.6) answers a valid POLL of an RW frame and drops one in any other frame.
-- **Response window timing** is defined from **t0 = the frame end**: the falling edge of the RW frame's last bit (the
-  header's last bit), as each board sees it. With the header as a trailer, t0 is also the moment the board can read
-  RW. Its own POLL slot was decoded earlier, from the frame start.
+**The RW frame (host rules):**
+
+- Every board's slot is a **POLL** (type 7, LIGHT 0xF); behind the last board that answers or relays, any type.
+- **Every POLL has the same R and rate**; the answer indices are unique, < R, and rise along the chain; the boards
+  between the hub and an answering board get 0xFF (relay only).
+- The first RW frame **1 s** (`ULTRA_RW_LOCK_MS`) of headers after the preamble; none during an update session; never
+  with UPD or EXT.
+- **The next frame ≥ W + 200 µs** after t0, answers or not. A missing answer is retried in a later window with a new
+  SEQ.
+
+**POLL:** slot byte 3 the answer index (0..R−1, 0xFF = relay only: the page and its arguments are ignored), 4 R
+(1-16), 5 the page, 6 the rate (0 = 1 Mbaud, 1 = 500 kbaud, 2 = 250 kbaud; 3-255 reserved), 7-29 the page arguments
+("argument 0" = slot byte 7). A receiver answers a valid POLL of an RW frame (`ultra_poll_valid`; a repeated SEQ too)
+and drops one in any other frame; the dig2analog-ultra drops POLL slots in any frame.
+
+**Window timing** from **t0 = the frame end**: the falling edge of the RW frame's last bit (the header's last bit), as
+each board sees it, in the hub's µs (the board scales with the clock rate it measured). With the header as a trailer,
+t0 is also the moment the board can read RW; its own POLL slot was decoded earlier, from the frame start.
 
 | After t0 | Who | What | Constant |
 |---|---|---|---|
 | ≤ 150 µs | host / sender | stops driving | `ULTRA_RW_RELEASE_US` |
 | 250-900 µs | every board taking part | turns around: forwarding gate held CLOSED (DOUT LOW), upstream port drives | `ULTRA_RW_DIR_MIN_US`, `_MAX_US` |
-| s_i = 1000 + 450 × i µs | the board with index i | one 32-byte response slot, UART 8N1 LSB first, 1 Mbaud | `ULTRA_RW_FIRST_US`, `_SLOT_US`, `_BAUD` |
-| W = 1000 + 450 × R µs | every board taking part | back to forward mode | |
+| 920-977 µs | every board taking part | the turnaround check: the line HIGH ≤ 5 µs, read back | `ULTRA_RW_CHECK_US`, `_CHECK_HIGH_US` |
+| s_i = 1000 + i × pitch | the board with index i | its burst | `ULTRA_RW_FIRST_US`, `ultra_rw_slot_us` |
+| W = 1000 + R × pitch | every board taking part | forward mode again, within W .. W + 80 µs | `ultra_rw_window_us`, `ULTRA_RW_END_US` |
 | ≥ W + 200 µs | host | next frame | `ULTRA_RW_HOLDOFF_US` |
 
-- **Response slot:** SYNC `0xA5` \| PAGE \| INDEX << 4 \| RFLAGS \| SEQ \| UID16 (2) \| DATA (24) \| CRC-16 (2).
-- **Pages:** 0x00 STATUS, 0x01 OUTPUTS, 0x02 ACKS, 0x03 ERRORS, 0x04 IDENTITY ([layout](#capability-reporting-reserved)),
-  0x05 FW_UPDATE, and for the current calibration (wiki: Current sense)
-  the power events (0x08 POWER, protocol 0.2.2) and the monitoring pages (0x09 SUPPLY, 0x0A HEALTH, 0x0B ENERGY,
-  protocol 0.2.3) below; 0x0C-0x7F reserved for later pages, 0x80-0xFD hardware-specific:
+- **Pitch** (`ultra_rw_slot_us`) = (330 << rate) + 130 µs: **460 / 790 / 1450 µs** at 1 M / 500 k / 250 kbaud (the
+  burst's 33 bytes plus 130 µs of tolerance).
+- **The burst:** the line HIGH at s_i − 20 .. + 80 µs (slot 0 from s_0 − 5 µs), the first start bit 2-10 µs later,
+  **one 0xFF lead byte** and the 32-byte answer (UART 8N1, LSB first, at the POLL's rate), the line LOW again by
+  s_i + pitch − 30 µs. The lead byte ends any junk byte the turnaround checks' pulses started in the hub's UART: SYNC
+  follows ≥ 9 bit times of HIGH.
+- **This firmware** (0.6.8, `test_r6_host_rc.c` `r6_schedule` over every R, rate, ±200 ppm, ±2.2 % HSI and edge
+  phase, with 5 µs of the poll ISR's latency): the burst's HIGH at s_i − 4.5 .. + 60.7 µs (slot 0 never more than
+  0.2 µs early), the guard kept by ≥ 37 µs, forward again at W + 1.2 .. 67.0 µs.
 
-  **0x00 STATUS**, the fields the firmware measures already (console `status`; `ULTRA_ST_*`). A Diff-Power ultra
-  receiver reports them; on the dig2analog-ultra they stay local:
+**Taking part:** a receiver whose own slot is a valid POLL in a frame with RW and not EXT, with its clock's rate
+measured. It turns around, checks, sends its burst with the same read-back after the line goes HIGH, and goes
+forward again. **A failed read-back** (the check or the burst): no answer and no relay for the rest of the window
+(it would drive into the board above), CONTENTION in the next answer.
+
+- **Response slot:** the lead byte, then SYNC `0xA5` \| PAGE \| INDEX << 4 \| RFLAGS \| SEQ \| UID16 (2) \| DATA (24)
+  \| CRC-16 (2). UID16 = `ultra_crc16` over the 12 unique-id bytes. RFLAGS: 0x01 EVENT, 0x02 STALE (reserved, never
+  sent: every answer is built when its POLL's frame ends), 0x04 CONTENTION.
+- **Pages:** 0x00 STATUS, 0x01 OUTPUTS, 0x02 ACKS, 0x03 ERRORS (the last three optional), 0x04 IDENTITY
+  ([layout](#capability-reporting)), 0x05 FW_UPDATE (reserved), 0x06 CALIBRATION, 0x07 CAL_TEST, 0x08 POWER (0.2.2),
+  0x09 SUPPLY, 0x0A HEALTH, 0x0B ENERGY (0.2.3); 0x0C-0x7F reserved for later pages, 0x80-0xFD hardware-specific;
+  0xFE BUSY, 0xFF UNSUPPORTED:
+
+  **0x00 STATUS** (`ULTRA_ST_*`):
 
   | Off | Size | Field |
   |---|---|---|
+  | 0 | 3 | firmware version: major, minor, patch (0 = a development build) |
+  | 3 | 1 | hardware id << 4 \| revision |
+  | 4 | 3 | uptime, s (wraps after 194 days: compare modulo 2^24) |
+  | 7 | 1 | reset cause: 0x01 pin, 0x02 power, 0x04 software (also an update's restart), 0x08 watchdog, 0x10 window watchdog, 0x20 low power |
   | 8 | 1 | power state (protocol 0.2.2, `ULTRA_ST_STATE`): 0x01 LIMITING (the board limit reduces the outputs, held 2 s), 0x02 TRIPPED (outputs off until the retry), 0x04 POWER_EVENT (a POWER latch not acknowledged), 0x08 CH_LIMITING (a CONFIG 16-20 channel limit reduces a channel, held 2 s); details on the POWER page |
   | 9 | 2 | MCU temperature, int16, 0.1 °C; **0x8000 = not valid** (no good conversion yet, or 5 bad ones in a row) |
+  | 11 | 2 | board temperature sensor, int16 0.1 °C (0x8000 = none: the receiver has none) |
+  | 13 | 2 | supply / bus voltage, × 10 mV (0xFFFF = not measured) |
   | 15 | 2 | the 3.3 V rail (VDDA from VREFINT), mV; 0 = not known |
+  | 17 | 2 | input current (~100 ms average), mA |
+  | 19 | 1 | measured: 0x01 the voltage, 0x02 the current, 0x04 the board sensor, 0x08 the channel currents (OUTPUTS 10-19) come from a calibrated model |
+  | 20 | 1 | PWM preset in use (CONFIG 1), 0xFF = a raw period (CONFIG 2) |
+  | 21 | 2 | CONFIG fingerprint: `ultra_config_crc` over (id, value) of every CONFIG id the host set, in id order |
+  | 23 | 1 | protocol mode (CONFIG 22's values) << 4 \| stagger (CONFIG 7) |
 
   - The CH32V203's internal sensor (ADC channel 16) against VREFINT (channel 17), converted once a second and
     filtered (~8 s), with the datasheet's typical V25 = 1.40 V and 4.3 mV/°C (`core/mcutemp.h`).
@@ -549,6 +594,13 @@ RW and UPD are never set together: the host never sends that, and a board ignore
     one-point calibration offset is reserved as CONFIG 128 (hardware-specific range, int16 0.1 °C; not settable
     yet, boards skip it). VDDA carries VREFINT's ±2.5 %.
   - Feature bit 9 (MCU_TEMP) says a board fills them.
+
+  **0x01 OUTPUTS, 0x02 ACKS, 0x03 ERRORS** (optional; `ULTRA_OU_*`, `ULTRA_AK_*`, `ULTRA_ER_*`): the outputs now after
+  every limit and the model's channel currents, the lights with an effect / a LIGHT_DEF, the channels still on the
+  power-on scene and why the outputs differ from the lights' states; the last SEQ taken per target and slot type (the
+  duplicate filter, not a confirmation that a setting was stored); u16 counters (frames, headers, tail errors,
+  decodes, windows, answers, missed POLLs, contention aborts, flash writes, the stack's high-water mark). Layouts:
+  `ultra_protocol.h` and the protocol's wiki. The receiver answers them (`RC_PAGES_024`, the default).
 
   **0x06 CALIBRATION** (boards with the input current sense; others answer 0xFF = not supported):
 
@@ -564,7 +616,8 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   | 21 | 2 | board limit in effect, mA (0xFFFF = none) |
   | 23 | 1 | its source << 4 \| needed: source 0 board rating, 1 user (CONFIG 21 / stored), 2 PWM preset (C10), 3 fuse; needed 0 load not known, 1 no (the connected load can't reach it), 2 yes |
 
-  **0x07 CAL_TEST:** the stored test in two parts; POLL payload byte 4 = the part.
+  **0x07 CAL_TEST:** the stored test in two parts; POLL argument 0 (slot byte 7) = the part; parts 2-255 answer
+  UNSUPPORTED.
 
   | Part | Off | Size | Field |
   |---|---|---|---|
@@ -607,7 +660,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
     (`ULTRA_PW_HOLD_MS`): one long overload is one event. Overload trip: above the limit's trip level for 200 ms.
     Short-circuit trip: ≥ 1.5 × the fuse rating for 50-100 µs.
   - **While a latch is set,** every answer carries RFLAGS EVENT and STATUS byte 8 POWER_EVENT.
-  - **Acknowledge:** a POLL of this page with payload byte 7 = 0x01 (`ULTRA_PW_ARG_ACK`) and bytes 8-15 = the four
+  - **Acknowledge:** a POLL of this page with slot byte 7 = 0x01 (`ULTRA_PW_ARG_ACK`) and slot bytes 8-15 = the four
     counts the controller read (u16 each: limit events, overload trips, short trips, supply dips (0.2.3; a 0.2.2
     controller sends 0 there, so its acknowledge leaves a dip latched)). A latch clears only when its count still
     equals the acknowledged one, so an event after the read stays latched and a lost or repeated POLL does no harm.
@@ -616,7 +669,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
 
   **0x09 SUPPLY** (protocol 0.2.3, feature bit 12): dips of the supply / bus voltage. A dip: the 1 ms readings fall
   below 90 % of a slow mean of the supply (~4 s) for at least 3 ms, ending above 93 % for 3 ms; so it works at 12, 24
-  or 48 V alike. Each new dip also latches POWER 0x08. POLL payload byte 7: which logged dip the event fields show
+  or 48 V alike. Each new dip also latches POWER 0x08. POLL argument 0 (slot byte 7): which logged dip the event fields show
   (0 = the newest, up to 3). On the dig2analog-ultra: console `status` (`supply_dips`, `supply_dip_deepest`,
   `supply_dip 1..4`).
 
@@ -632,7 +685,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   | 13 | 3 | the selected dip: s since it began (0xFFFFFF = none) |
   | 16 | 2 | its lowest reading, mV |
   | 18 | 1 | that reading in % of its reference |
-  | 19 | 2 | how long it lasted, ms (65535 = longer, or still going) |
+  | 19 | 2 | how long it lasted, ms (65535 = 65.5 s or longer; a dip still going isn't in the log yet) |
   | 21 | 2 | the board current at its lowest reading, mA |
   | 23 | 1 | reserved |
 
@@ -646,8 +699,8 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   | 6 | 5 | CH1-CH5: the last test at 100 % against the test stored before it, int8 % (-128 = n/a) |
   | 11 | 5 | CH1-CH5: the running model at 100 % against the stored test, int8 % (-128 = n/a) |
   | 16 | 2 | the board current with every output off, over the stored test's zero (logic + offset), int16 mA |
-  | 18 | 2 | the highest MCU die temperature since power-up, int16 0.1 °C (0x8000 = none) |
-  | 20 | 3 | s since then |
+  | 18 | 2 | the highest MCU die temperature since power-up, int16 0.1 °C (0x8000 = none yet) |
+  | 20 | 3 | s since then (0xFFFFFF = none yet; 0.6.8, protocol 0.2.4) |
   | 23 | 1 | reserved |
 
   The firmware's thresholds (`core/health.h`): no load under 20 mA at 100 %; far above / below at ±30 % and ±50 mA;
@@ -660,7 +713,7 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   | Off | Size | Field (`ULTRA_EN_*`) |
   |---|---|---|
   | 0 | 4 | since power-up, mWh |
-  | 4 | 4 | the board's lifetime, Wh (stored on the board at most hourly, when the outputs go dark, and at a supply dip; a factory reset clears it) |
+  | 4 | 4 | the board's lifetime, Wh (stored on the board at most hourly, when the outputs go dark, and at a supply dip; a factory reset keeps it) |
   | 8 | 4 | the input power now, mW |
   | 12 | 3 | s since the lifetime value was last stored (0xFFFFFF = not since power-up) |
   | 15 | 9 | reserved |
@@ -671,16 +724,11 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   - So the board holds the gate closed from its turn-around until the window ends, then re-arms with the newest plan.
 - **Timing reference:** response slots are timed from **the locally measured t0**, the last edge the tail copy finds
   in the DIN ring, not from the shared clock's phase. The shared clock is too coarse (50 µs tick) and lags by a frame.
-- **When to poll:**
-  - No POLL before the chain is locked (after the start-up DARK preamble), and none during an update session.
-  - The answers carry UID16, so the host notices when the indices shifted (a board added, removed or not locked).
 - **Decode deadline:** a board must know RW and its POLL by t0 + 900 µs.
   - Its slot is decoded during the frame.
-  - The header follows from the tail copy (in the poll ISR, at t0 + 100-150 µs) and its decode (130 µs). That is
-    less work after t0 than format 1's whole-capture decode.
-  - It is tight anyway: the adaptive stagger search blocks the main loop for up to ~0.5 ms. Firmware with the return
-    channel must hold that search back while a frame end is pending (0.6.6's receiver build does, and every flash
-    write too, from the POLL's capture to the window's end).
+  - The header follows from the tail copy (in the poll ISR, at t0 + 100-150 µs) and its decode (130 µs).
+  - The receiver's build holds the adaptive stagger search back while a frame end is pending, and every flash write
+    from the POLL's capture to the window's end.
 
 ## Firmware update frames
 
@@ -761,6 +809,11 @@ Protocol releases are numbered 0.x.y while nothing is released as 1.0; the MINOR
 - **Protocol 0.2.3:** SCENE_EFFECT (slot type 0x0A, power-on effects), CONFIG 23 (soft start), the SUPPLY, HEALTH and
   ENERGY pages and the POWER latch 0x08 (supply dip), feature bits 12-16. Compatible both ways: older boards ignore
   the new slot type and CONFIG id.
+- **Protocol 0.2.4:** the [return channel](#return-channel) defined: POLL's fields, the RW frame's rules (the same R
+  and rate, no EXT), the rates, the 0xFF lead byte and the slot pitch with it (460 / 790 / 1450 µs), the burst's
+  tolerances, the turnaround check, the window's end (W .. W + 80 µs), the STATUS / OUTPUTS / ACKS / ERRORS layouts,
+  the hardware capabilities; LIGHT_DEF gamma 0 = linear. Firmware 0.6.8's receiver build implements it. Nothing
+  changes for a board without a return channel.
 - **From VERSION 2 on, the wire VERSION changes only for an incompatible change** (the release then becomes
   0.3.0; [Compatibility rules](#compatibility-rules)).
   Everything else goes into the reserved ranges, behind HINT / EXT, or into broadcast slots.

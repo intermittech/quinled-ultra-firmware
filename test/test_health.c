@@ -291,6 +291,9 @@ static void test_health(void)
           (int8_t)pg[ULTRA_HE_TEST_DEV + 2] == 45 && (int8_t)pg[ULTRA_HE_TEST_DEV + 3] == ULTRA_HE_NA &&
           (int8_t)pg[ULTRA_HE_MODEL_DEV + 4] == h.model_dev[4] && (int16_t)ultra_get16(pg + ULTRA_HE_TEMP_PEAK) == 412 &&
           ultra_get24(pg + ULTRA_HE_TEMP_AGE) == 75, "HEALTH page fields");
+    health_page(&h, (int16_t)ULTRA_ST_NA, 1234u, pg);  /* (0.2.4) no temperature peak yet: none, not the uptime */
+    CHECK(ultra_get16(pg + ULTRA_HE_TEMP_PEAK) == ULTRA_ST_NA && ultra_get24(pg + ULTRA_HE_TEMP_AGE) == 0xFFFFFFu,
+          "HEALTH page: no peak yet = 0x8000 / 0xFFFFFF (age %06X)", ultra_get24(pg + ULTRA_HE_TEMP_AGE));
 
     /* the D9 code: one long flash, then the code as a value code, D9 only */
     {

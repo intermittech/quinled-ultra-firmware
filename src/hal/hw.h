@@ -143,6 +143,13 @@ void hw_flash_trip(void);
 /* (review round 6) VDD below the PVD's 2.9 V (hw_init): flash_op would refuse (FLASH_ERR_VDD), so main.c's flash_may
  * admits no write then: a store's budget token and its A/B entry are not used up by an operation that never starts */
 uint32_t hw_vdd_low(void);
+/* (0.6.8) the user option bytes (RM 32.6): flash_op(HW_OB_ADDR, ob, 8, HW_OB_ADDR) erases all 8 and programs ob[0..7]
+ * (the low bytes: the hardware writes each inverse). hw_boot_open: the bootloader's sectors 0-1 (4 KB each) are not
+ * write-protected (FLASH->WPR, loaded at a system reset); hw_option_bytes: the 8 option bytes' low bytes into ob,
+ * returns RDPR (0xA5: no read protection) */
+#define HW_OB_ADDR 0x1FFFF800u
+uint32_t hw_boot_open(void);
+uint32_t hw_option_bytes(uint16_t ob[8]);
 /* (0.6.5) the record pages' reads at boot, before hw_init: open = HCLK / 2 (the upper CodeFlash, board.h), 0 = back */
 void hw_records_window(uint32_t open);
 #if BOARD_RETURN

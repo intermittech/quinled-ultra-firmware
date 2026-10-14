@@ -16,24 +16,43 @@
 using namespace esphome::dig2analog_ultra;
 
 static const uint32_t FRAME_US = 384u * 1350u / 1000u + 300u;   // the hub's worst bit (700 + 650 ns) + reset
+/* (0.6.8) the bootloader's page pause: README "the host's 2.7 ms pause" after a page's last chunk covers a page program
+ * at HCLK / 2 and the decoder's resync (flash test 1, bench check 6) */
+static const uint32_t BL_PAGE_PAUSE_US = 2700u;
+static int64_t page_margin_min = INT64_MAX;           // the least time a frame after a page pause had to spare (us)
 
-// sends a whole session from the sender; returns its duration on the wire (us)
+// sends a whole session from the sender; returns its duration on the wire (us). (0.6.8) Every page's last chunk asks
+// for the bootloader's pause, and every frame after a pause starts after the board's page program and decoder resync
+// (the model's busy time): stricter than the model, which only loses frames that end before then.
 static uint64_t send_session(const image_t *im, uint8_t session, const UpdateSession::Options &o)
 {
     static uint8_t img[UPD_DESC_BYTES + UPD_APP_BODY_MAX];
     UpdateSession us;
     uint8_t f[UPD_FRAME_BYTES];
-    uint32_t pause = 0, frames = 0;
+    uint32_t pause = 0, frames = 0, late = 0;
+    int after_pause = 0;
     uint64_t t0 = B.now_us;
     memcpy(img, im->desc, UPD_DESC_BYTES);
     memcpy(img + UPD_DESC_BYTES, im->body, im->len);
     CHECK(us.begin(img, UPD_DESC_BYTES + im->len, session, o, FRAME_US), "begin");
     while (us.next(f, (uint32_t) B.now_us, &pause)) {
+        if (after_pause) {
+            const int64_t spare = (int64_t) B.now_us - (int64_t) B.busy_until_us;
+            late += spare < 0;
+            page_margin_min = spare < page_margin_min ? spare : page_margin_min;
+        }
+        const bool last = f[UPD_B_TYPE] == UPD_DATA &&
+                          ((upd_get16(f + UPD_B_INDEX) + 1u) % UPD_CHUNKS_PER_PAGE == 0u ||
+                           (upd_get16(f + UPD_B_INDEX) + 1u) * UPD_CHUNK_BYTES >= im->len);
+        CHECK(!last || pause >= BL_PAGE_PAUSE_US, "a page's last chunk asks the bootloader's pause (%u us)",
+              (unsigned) pause);
         host_frame_bits(f, UPD_FRAME_BYTES, pause + 50u);    // + the extra 50 us of the worst bit time
+        after_pause = pause != 0;
         frames++;
     }
     CHECK(us.done() && frames == us.total_frames() && us.progress() == 1.0f, "sender: %u frames, total %u",
           (unsigned) frames, (unsigned) us.total_frames());
+    CHECK(late == 0, "no frame starts while the board programs a page (%u late)", (unsigned) late);
     return B.now_us - t0;
 }
 
@@ -320,6 +339,8 @@ int main(void)
     test_manifest();
     test_image_cache();
     test_sender_sessions();
+    printf("  the frame after a page pause starts >= %.2f ms after the page program and resync\n",
+           page_margin_min / 1000.0);
     if (img != 0 && *img != 0) {
         FILE *f = fopen(img, "rb");
         static uint8_t buf[UPD_DESC_BYTES + UPD_APP_BODY_MAX];

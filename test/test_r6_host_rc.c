@@ -57,13 +57,17 @@ static void r6_latches(void)
     CHECK(pwrev_latched(&p) == 0, "R6: matching wrapped counts clear the latches");
 }
 
+/* (0.6.8, protocol 0.2.4) the poll ISR's latency from its tick to the line (tools/measure_rc.py: the window's end
+ * ~1.1 us, the burst's HIGH ~0.6 us, behind the current sense's and the 1 ms tick's work and a slew ISR): a bound */
+#define R6_ISR_US 5.0
+
 static void r6_schedule(void)
 {
     uint8_t p[32];
     rc_sched_t s;
     static const double hsi_values[] = { 0.978, 1.0, 1.022 };
-    unsigned slots, rate, back, sign, h, bad = 0;
-    double lo = 1e9, hi = -1e9;
+    unsigned slots, rate, back, sign, h, idx, bad = 0, bad_burst = 0;
+    double lo = 1e9, hi = -1e9, b_lo = 1e9, b_hi = -1e9, g_lo = 1e9;
     /* End phase exhaustive at DIN sample resolution; +/-200 ppm is the existing
      * test_rc.c model's rate-estimation bound. No hardware timings are asserted. */
     for (slots = 1; slots <= 16; slots++) for (rate = 0; rate < 3; rate++) {
@@ -71,17 +75,39 @@ static void r6_schedule(void)
         for (h = 0; h < 3; h++) for (sign = 0; sign < 2; sign++) for (back = 0; back < 1800; back++) {
             const double error = sign ? 1.0002 : 0.9998;
             const double hsi = hsi_values[h];
-            const uint32_t tick = 0xFFFFFFF0u;
-            double end, w = 1000.0 + rc_slot_us((uint8_t)rate) * slots;
-            rc_schedule(&s, tick, (int32_t)back, (uint32_t)(50.0 / hsi * error * 65536.0), p);
+            const uint32_t tick = 0xFFFFFFF0u, rq = (uint32_t)(50.0 / hsi * error * 65536.0);
+            const double pitch = rc_slot_us((uint8_t)rate), bit = rc_brr(rq, (uint8_t)rate) / (144.0 * hsi);
+            double end, w = 1000.0 + pitch * slots;
+            rc_schedule(&s, tick, (int32_t)back, rq, p);
             end = ((double)(uint32_t)(s.end_tick - tick) * 50.0 + back / 36.0) / hsi;
             if (end - w < lo) lo = end - w;
-            if (end - w > hi) hi = end - w;
-            if (end < w || end > w + 64.0) bad++;
+            if (end - w + R6_ISR_US > hi) hi = end - w + R6_ISR_US;
+            if (end < w || end + R6_ISR_US > w + ULTRA_RW_END_US) bad++;
+            /* (0.2.4) each index's burst: HIGH within s_i - EARLY (slot 0: EARLY0) .. s_i + LATE, then the preamble
+             * (RC_PREAMBLE_CYC), the lead byte and the answer, LOW again by s_i + pitch - GUARD */
+            for (idx = 0; idx < slots; idx++) {
+                const double si = 1000.0 + pitch * idx;
+                double x, e;
+                p[RC_P_INDEX] = (uint8_t)idx;
+                rc_schedule(&s, tick, (int32_t)back, rq, p);
+                x = ((double)(uint32_t)(s.tx_tick - tick) * 50.0 + back / 36.0) / hsi - si;
+                e = x + R6_ISR_US + RC_PREAMBLE_CYC / (144.0 * hsi) + (RC_LEAD_BYTES + RC_ANSWER_BYTES) * 10.0 * bit;
+                b_lo = x < b_lo ? x : b_lo;
+                b_hi = x + R6_ISR_US > b_hi ? x + R6_ISR_US : b_hi;
+                g_lo = pitch - ULTRA_RW_GUARD_US - e < g_lo ? pitch - ULTRA_RW_GUARD_US - e : g_lo;
+                if (x < -(double)(idx ? ULTRA_RW_EARLY_US : ULTRA_RW_EARLY0_US) || x + R6_ISR_US > ULTRA_RW_LATE_US ||
+                    e > pitch - ULTRA_RW_GUARD_US) {
+                    bad_burst++;
+                }
+            }
+            p[RC_P_INDEX] = 0xFF;
         }
     }
-    printf("R6 schedule model: end minus W %.6f .. %.6f us, %u violations\n", lo, hi, bad);
-    CHECK(bad == 0, "R6: forward must stay inside revised W..W+64 for every legal R/rate/phase");
+    printf("R6 schedule model: end minus W %.6f .. %.6f us (+%.0f us ISR), %u violations\n", lo, hi, R6_ISR_US, bad);
+    printf("R6 schedule model: burst HIGH minus s_i %.3f .. %.3f us, guard margin %.3f us (lead byte included), %u "
+           "violations\n", b_lo, b_hi, g_lo, bad_burst);
+    CHECK(bad == 0, "R6: forward must stay inside W..W+ULTRA_RW_END_US for every legal R/rate/phase");
+    CHECK(bad_burst == 0, "0.2.4: every burst inside its slot's EARLY / LATE / GUARD (lead byte included)");
     /* Correct low-rate baud rounding must use the full divider, not round at 1 Mbaud. */
     CHECK(rc_brr((uint32_t)(50.0 / 1.002 * 65536.0), 2) == 577u,
           "R6: 250 kbaud divider at +0.2%% HSI must round to 577 (got %u)",

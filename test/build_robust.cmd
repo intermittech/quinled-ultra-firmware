@@ -36,6 +36,11 @@ if "%2"=="nobuild-only" exit /b 0
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\robust_fw.exe" regress
 if %errorlevel% neq 0 exit /b 1
+rem (0.6.8) the bootloader's write protection at the boot (main.c boot_protect), each case its own process
+for %%c in (open protected vdd nodesc rdp fail) do (
+  "%OUT%\robust_fw.exe" wrp %%c
+  if errorlevel 1 exit /b 1
+)
 "%OUT%\robust_tests.exe" all 2000
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\robust_fw.exe" 20
