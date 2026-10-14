@@ -102,11 +102,15 @@ class Emu:
     # ---------------------------------------------------------------------------------------------- run
     def call(self, fn, args=(), max_steps=50_000_000):
         x = [0] * 32
-        x[2] = RAM_BASE + RAM_SIZE - 16
+        stack_args = max(0, len(args) - 8)
+        x[2] = RAM_BASE + RAM_SIZE - max(16, (4 * stack_args + 15) & ~15)
         x[3] = self.gp
         x[1] = RET_MAGIC
         for i, a in enumerate(args):
-            x[10 + i] = a & 0xFFFFFFFF
+            if i < 8:
+                x[10 + i] = a & 0xFFFFFFFF
+            else:
+                self.wr(x[2] + 4 * (i - 8), 4, a & 0xFFFFFFFF)
         pc = self.syms[fn][0] if isinstance(fn, str) else fn
         cnt = {k: 0 for k in COST}
         n = 0

@@ -76,7 +76,7 @@ void frx_frame_end(frx_t *r, uint32_t frame, uint32_t total, const uint8_t *tail
     if (mine && r->have_ws && e->cls == (proto_t)r->ws_proto && e->after == e->cls && !e->ultra_header) {
         e->show_ws = 1;                                  /* the stored protocol is confirmed by this frame */
     }
-    if (e->ultra_header && e->after == PROTO_ULTRA && !(e->flags & ULTRA_HDR_UPD)) {
+    if (e->cls == PROTO_ULTRA && e->ultra_header && e->after == PROTO_ULTRA && !(e->flags & ULTRA_HDR_UPD)) {
         e->ultra_sync = 1;                               /* RW / EXT (not supported): clock and lock, but no slot */
         e->ultra_slot = (uint8_t)(mine && r->have_ultra && !(e->flags & (ULTRA_HDR_RW | ULTRA_HDR_EXT)));
     }

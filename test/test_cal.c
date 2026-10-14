@@ -299,6 +299,29 @@ static void test_dark(void)
     CHECK(send(&U, 101, s) == ULTRA_EV_IDENTIFY && U.identify == ULTRA_IDENT_RELEASE, "RELEASE slot");
 }
 
+/* the ~100 ms average of the board current (`current=` in status, `watch`): on a steady current it must settle on the
+ * measurement itself. 0.6.2's integer step (i_ms - i_avg) / 64 stopped up to 63 mA short (2.00 A read 1.94 A) and
+ * stayed up to 63 mA above zero after the light went out. */
+static void test_isense_average(void)
+{
+    isense_t is;
+    uint32_t t;
+    printf("current sense: the ~100 ms average settles on a steady current\n");
+    isense_init(&is, 1, 10000, 8000);                   /* ISENSE_GAIN_DEFAULT_Q16: 500 counts = 2002 mA */
+    for (t = 0; t < 2000u; t++) {
+        (void)isense_ms(&is, 500u * 20u, 20u, 500u);
+    }
+    CHECK(is.i_avg == is.i_ms, "steady 2 A: the average is the measurement (%d vs %d mA)", (int)is.i_avg, (int)is.i_ms);
+    for (t = 0; t < 2000u; t++) {
+        (void)isense_ms(&is, 0u, 20u, 0u);
+    }
+    CHECK(is.i_avg == 0 && is.i_ms == 0, "back to 0 A: the average follows to 0 (%d mA)", (int)is.i_avg);
+    for (t = 0; t < 2000u; t++) {
+        (void)isense_ms(&is, 1u * 20u, 20u, 1u);        /* 1 count: 4 mA, the smallest step */
+    }
+    CHECK(is.i_avg == is.i_ms && is.i_ms == 4, "4 mA: followed exactly (%d mA)", (int)is.i_avg);
+}
+
 /* WS2805 gamma through ultra_gamma (core/gamma.c) against round(65535 x (in / 255) ^ g): within 1 count (0.5.5: the
  * 33-point tables, no correction list; test_gamma_tables.c compares with the former output too) */
 static void test_gamma_exact(void)

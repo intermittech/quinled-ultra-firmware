@@ -10,28 +10,34 @@
  *    computes the outputs with the light's gamma, min / max power and the power limit.
  *  - WS modes: config frame / console `scene 1` stores the current outputs, `scene 0` clears it.
  *
- * Storage: a log of 16-byte records in SCENE_LOG_PAGES flash pages (hal/board.h SCENE_LOG_ADDR; wear levelling:
- * SCENE_RECS = 80 records per erase cycle of a page, so 10k cycles (datasheet minimum) = 800 k writes).
+ * Storage: 16-byte records in an A/B page pair (hal/board.h SCENE_LOG_ADDR; core/pagepair.h since 0.6.4, the
+ * settings' scheme: the page holding the newest record is never erased; wear levelling: SCENE_RECS = 32 records per
+ * erase cycle of a page, so 10k cycles (datasheet minimum) = 320 k writes).
  * Writes: SCENE_SAVE_MS after the last change, and only with a token from a write budget (SCENE_BUDGET_CAP
  * tokens, one more every SCENE_REFILL_MS): bursts of changes are written at once, the long-term average is capped
- * at 96 writes / day (>= 22 years at 10k cycles). A small change (no channel joins / leaves or turns on / off,
- * none moves more than SCENE_MAJOR_STEP) needs a half-full budget, so it never uses up the reserve of the big ones.
- * The same kind of budget limits the writes of the energy log (core/energy.h) and the power-on effect. */
+ * at 72 writes / day (>= 12 years at 10k cycles with 2 pages, 0.6.4; 24 with 0.6.3's 4). A small change (no channel
+ * joins / leaves or turns on / off, none moves more than SCENE_MAJOR_STEP) needs a half-full budget, so it never uses
+ * up the reserve of the big ones.
+ * The same kind of budget limits the writes of the lifetime record (core/energy.h) and the power-on effect. */
 #ifndef SCENE_H
 #define SCENE_H
 
 #include <stdint.h>
+#include "pagepair.h"
 
 #define SCENE_REC_BYTES   16u
 #define SCENE_PAGE_BYTES  256u
-#define SCENE_LOG_PAGES   5u          /* 0.6.0: 8 -> 5 (the power-on effect and the energy log have the rest) */
+#define SCENE_LOG_PAGES   2u          /* 0.6.0: 8 -> 5 (the power-on effect, the energy log); 0.6.3: 4 (the lifetime
+                                         record's second page); 0.6.4: 2 (the settings' and calibration's B pages; the
+                                         page pair: exactly 2) */
 #define SCENE_RECS_PAGE   (SCENE_PAGE_BYTES / SCENE_REC_BYTES)
 #define SCENE_RECS        (SCENE_LOG_PAGES * SCENE_RECS_PAGE)
 #define SCENE_MARK        0xA5u
 #define SCENE_FADE_DEFAULT 10u        /* 1 s */
 #define SCENE_SAVE_MS     5000u       /* quiet time before a write */
 #define SCENE_BUDGET_CAP  24u         /* write budget: tokens */
-#define SCENE_REFILL_MS   900000u     /* one token per 15 min = 96 writes / day sustained */
+#define SCENE_REFILL_MS   1200000u    /* one token per 20 min = 72 writes / day sustained (0.6.3; was 15 min with 5
+                                         pages) */
 #define SCENE_MAJOR_STEP  8192u       /* 12.5 % of full scale */
 
 typedef struct {
@@ -69,13 +75,14 @@ void    scene_budget_init(scene_budget_t *b, uint32_t now);  /* the scene's: SCE
 void    budget_init(scene_budget_t *b, uint32_t now, uint8_t cap, uint32_t period_ms);
 /* refill, then take a token if at least `need` are there; 1 = taken */
 int     budget_take(scene_budget_t *b, uint32_t now, uint32_t need);
+/* the tokens there now (refilled; none taken) */
+uint32_t budget_avail(scene_budget_t *b, uint32_t now);
 /* write now? changed_ms: last change of the pending scene. Takes the token when it returns 1. */
 int     scene_save_due(scene_budget_t *b, uint32_t now, uint32_t changed_ms, int major);
 
-/* log in a flash image of SCENE_LOG_PAGES pages: newest valid record (index, or -1) */
-int     scene_log_find(const uint8_t *base, scene_t *out, uint16_t *seq);
-/* where the record after `newest` goes; *erase = 1 when its page must be erased first */
-int     scene_log_next(const uint8_t *base, int newest, uint8_t *erase);
+/* the log's page pair (core/pagepair.h): a record valid (mark, CRC-8, mask), the pair's description */
+int     scene_rec_valid(const uint8_t *r);
+extern const pp_desc_t scene_pp;
 void    scene_log_pack(const scene_t *s, uint16_t seq, scene_rec_t *rec);
 
 void    scene_boot(scene_run_t *r, const scene_t *s);

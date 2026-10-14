@@ -118,6 +118,7 @@ static void test_ocled(void)
         memset(&st, 0, sizeof st);
         pwrev_init(&pq, 0);
         st.pw = &pq;                                     /* (the power events' lines follow) */
+        st.en = &test_en;
         settings_default(&cli_set);
         st.version = "test";
         st.steps = 5760;

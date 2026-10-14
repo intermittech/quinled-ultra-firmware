@@ -22,6 +22,9 @@ MEASURED int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nb
     uint32_t nwords = nsamples >> 4, k, b = 0, prev = 0, rise = 0, fall = 0, seen_rise = 0;
     const uint32_t thr = t->thr_one, hmax = t->high_max, gmin = t->gap_min;
 
+    if (nbits == 0u) {
+        return 0;
+    }
     for (k = 0; k < (uint32_t)(nbits + 7u) / 8u; k++) {
         out[k] = 0;
     }

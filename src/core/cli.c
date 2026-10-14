@@ -6,31 +6,55 @@
 #include "ultra_protocol.h"
 #include "presets.h"
 
-typedef struct {
-    const char *key;
-    uint8_t cmd;
-    const char *help;
-} cli_key_t;
+/* The settings keys, one string of records: the command byte, the key and its short help (the values; README / wiki:
+ * Console have the details), each NUL-terminated; a 0 command byte ends it. (A table of pointers held the same
+ * strings in 192 bytes more; key_name / key_help / key_next walk the records.) */
+#define KEY(cmd, name, help) cmd name "\0" help "\0"
+static const char keys[] =
+    KEY("\x01", "protocol",  "0 auto 1 WS2915 2 WS2805 3 Ultra")               /* CMD_PROTOCOL */
+    KEY("\x02", "preset",    "0..14 = 2.2..100 kHz, 8 = 25 kHz")               /* CMD_PWM_PRESET */
+    KEY("\x03", "dither",    "0 on 1 off-low 2 off")                           /* CMD_DITHER_MODE */
+    KEY("\x04", "thresh",    "1..255 x 0.1 %")                                 /* CMD_DITHER_THRESH */
+    KEY("\x05", "feedback",  "0 red 1 all 2 off")                              /* CMD_FEEDBACK_CH */
+    KEY("\x06", "stagger",   "0 off 1 fixed 2 +spread 3 adaptive 4 +spread")   /* CMD_STAGGER */
+    KEY("\x07", "floor",     "0 skip 1 clamp 2 off")                           /* CMD_DIM_FLOOR */
+    KEY("\x0d", "minpulse",  "5..100 x 10 ns")                                 /* CMD_MIN_PULSE */
+    KEY("\x08", "loss",      "0 hold 1 off 2 fade off")                        /* CMD_SIGNAL_LOSS */
+    KEY("\x0b", "smooth",    "0 off 1 WS2805 2 all")                           /* CMD_SMOOTHING */
+    KEY("\x0c", "gamma",     "WS2805: 0 linear 1 2.2 2 2.8")                   /* CMD_GAMMA */
+    KEY("\x0e", "scene",     "power-on: 0 none 1 store now")                   /* CMD_SCENE */
+    KEY("\x0f", "scenefade", "0..255 x 100 ms")                                /* CMD_SCENE_FADE */
+    KEY("\x12", "ilimit",    "x 50 mA, 0 = 8 A")                               /* CMD_ISENSE_LIMIT */
+    KEY("\x13", "ical",      "0 = 25/50/75/100 %, 5..100 = one level")         /* CMD_ISENSE_CAL */
+    KEY("\x14", "softstart", "0 off 1 on");                                    /* CMD_SOFT_START */
+typedef char keys_match_config_h[(CMD_PROTOCOL == 0x01 && CMD_PWM_PRESET == 0x02 && CMD_DITHER_MODE == 0x03 &&
+                                  CMD_DITHER_THRESH == 0x04 && CMD_FEEDBACK_CH == 0x05 && CMD_STAGGER == 0x06 &&
+                                  CMD_DIM_FLOOR == 0x07 && CMD_MIN_PULSE == 0x0d && CMD_SIGNAL_LOSS == 0x08 &&
+                                  CMD_SMOOTHING == 0x0b && CMD_GAMMA == 0x0c && CMD_SCENE == 0x0e &&
+                                  CMD_SCENE_FADE == 0x0f && CMD_ISENSE_LIMIT == 0x12 && CMD_ISENSE_CAL == 0x13 &&
+                                  CMD_SOFT_START == 0x14) ? 1 : -1];
 
-static const cli_key_t keys[] = {        /* short help: the values (README / wiki: Console have the details) */
-    { "protocol", CMD_PROTOCOL,      "0 auto 1 WS2915 2 WS2805 3 Ultra" },
-    { "preset",   CMD_PWM_PRESET,    "0..14 = 2.2..100 kHz, 8 = 25 kHz" },
-    { "dither",   CMD_DITHER_MODE,   "0 on 1 off-low 2 off" },
-    { "thresh",   CMD_DITHER_THRESH, "1..255 x 0.1 %" },
-    { "feedback", CMD_FEEDBACK_CH,   "0 red 1 all 2 off" },
-    { "stagger",  CMD_STAGGER,       "0 off 1 fixed 2 +spread 3 adaptive 4 +spread" },
-    { "floor",    CMD_DIM_FLOOR,     "0 skip 1 clamp 2 off" },
-    { "minpulse", CMD_MIN_PULSE,     "5..100 x 10 ns" },
-    { "loss",     CMD_SIGNAL_LOSS,   "0 hold 1 off 2 fade off" },
-    { "smooth",   CMD_SMOOTHING,     "0 off 1 WS2805 2 all" },
-    { "gamma",    CMD_GAMMA,         "WS2805: 0 linear 1 2.2 2 2.8" },
-    { "scene",    CMD_SCENE,         "power-on: 0 none 1 store now" },
-    { "scenefade", CMD_SCENE_FADE,   "0..255 x 100 ms" },
-    { "ilimit",   CMD_ISENSE_LIMIT,  "x 50 mA, 0 = 8 A" },
-    { "ical",     CMD_ISENSE_CAL,    "0 = 25/50/75/100 %, 5..100 = one level" },
-    { "softstart", CMD_SOFT_START,   "0 off 1 on" },
-};
-#define NKEYS (sizeof(keys) / sizeof(keys[0]))
+/* the string after the terminator of s */
+static const char *skip(const char *s)
+{
+    while (*s++) {
+    }
+    return s;
+}
+
+/* the i-th of the NUL-separated strings in s (the console's name lists) */
+static const char *nth(const char *s, uint32_t i)
+{
+    while (i--) {
+        s = skip(s);
+    }
+    return s;
+}
+
+/* a key record k (at its command byte): its name, its help, the record after it */
+#define key_name(k) ((k) + 1)
+#define key_help(k) skip((k) + 1)
+#define key_next(k) skip(skip((k) + 1))
 
 static int streq(const char *a, const char *b)
 {
@@ -187,13 +211,13 @@ static void cf(cli_t *c, const char *f, ...)
 /* ---------------------------------------------------------------------------------------------------- reports */
 void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
 {
-    static const char *const name[5] = { "R ", "G ", "B ", "W1 ", "W2 " };
+    static const char name[] = "R \0G \0B \0W1 \0W2 ";
     uint32_t i, k;
     cf(c, "test @%u%%: ", pct);
     for (k = 0; k < 2u; k++) {             /* as measured at pct %, then scaled to 100 % */
         for (i = 0; i < 5u; i++) {
             uint32_t v = clamp0(ma[i]);
-            cf(c, "%s%H%s", name[i], k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u),
+            cf(c, "%s%H%s", nth(name, i), k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u),
                i < 4u ? (k == 0u ? " A, " : ", ") : (k == 0u ? " A; est. @100%: " : " A; supply "));
         }
     }
@@ -202,8 +226,7 @@ void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle
 
 void cli_banner(cli_t *c)
 {
-    static const char *const app[] = { "standalone build (no bootloader)",
-                                       "trial (not confirmed yet)", "confirmed" };
+    static const char app[] = "standalone build (no bootloader)\0trial (not confirmed yet)\0confirmed";
     const cli_status_t *s = c->st;
     cf(c, "QuinLED dig2analog-ultra firmware v%s, Copyright (C) 2026 QuinLED, GPL-3.0, source: "
           "github.com/intermittech/quinled-ultra-firmware\r\n", s->version);
@@ -211,7 +234,7 @@ void cli_banner(cli_t *c)
         cf(c, "bootloader rev %u (build %s), hardware %u revision %u, ", s->bl_version, s->bl_build, s->hw_id,
            s->hw_rev);
     }
-    cf(c, "app %s\r\n", app[s->app_state < 3u ? s->app_state : 0]);
+    cf(c, "app %s\r\n", nth(app, s->app_state < 3u ? s->app_state : 0u));
 }
 
 static uint8_t get_key(const cli_t *c, uint8_t cmd)
@@ -262,22 +285,23 @@ static void result(cli_t *c, cfg_result_t r)
 static void status(cli_t *c)
 {
     const cli_status_t *s = c->st;
-    static const char *const proto[] = { "none", "WS2915 32-bit header", "WS2915 26-bit header", "WS2805", "Ultra" };
-    static const char *const mode[] = { "auto", "WS2915", "WS2805", "Ultra" };
-    static const char *const err[] = { "", "no edge", "no gap", "short", "truncated", "pulse" };
-    static const char *const cause[] = { "-", "short", "overload" };
+    static const char proto[] = "none\0WS2915 32-bit header\0WS2915 26-bit header\0WS2805\0Ultra";
+    static const char mode[] = "auto\0WS2915\0WS2805\0Ultra";
+    static const char err[] = "\0no edge\0no gap\0short\0truncated\0pulse";
+    static const char cause[] = "-\0short\0overload";
     uint32_t i;
     cli_banner(c);
     cf(c, "uptime=%t\r\nreset=%s%s%s%s\r\nstack=%u B used\r\nprotocol=%s, active %s%s, stored %s\r\nframes=%u\r\n"
           "fps=%u\r\ndecoded=%u\r\n",
        s->uptime_s, (s->reset_flags & 0x20000000u) ? "watchdog " : "", (s->reset_flags & 0x08000000u) ? "power-on " : "",
        (s->reset_flags & 0x04000000u) ? "pin " : "", (s->reset_flags & 0x10000000u) ? "software " : "", s->stack_max,
-       mode[s->proto_mode < 4u ? s->proto_mode : 0], proto[s->proto_locked < 5u ? s->proto_locked : 0],
-       s->proto_provisional ? " (stored, not confirmed yet)" : "", proto[c->set->last_proto < 5u ? c->set->last_proto : 0],
+       nth(mode, s->proto_mode < 4u ? s->proto_mode : 0u), nth(proto, s->proto_locked < 5u ? s->proto_locked : 0u),
+       s->proto_provisional ? " (stored, not confirmed yet)" : "",
+       nth(proto, c->set->last_proto < 5u ? c->set->last_proto : 0u),
        s->frames, s->fps, s->decoded);
     for (i = 1; i < 6u; i++) {
         if (s->dec_err[i]) {
-            cf(c, "decode_error %s=%u\r\n", err[i], s->dec_err[i]);
+            cf(c, "decode_error %s=%u\r\n", nth(err, i), s->dec_err[i]);
         }
     }
     if (s->ultra_headers || s->ultra_tail_err) {
@@ -290,13 +314,14 @@ static void status(cli_t *c)
            (uint32_t)s->stagger_o2, (uint32_t)s->stagger_o3, s->stagger_moves, (int32_t)s->ripple_ma);
     }
     {
-        static const char *const model[] = { "none", "learned", "calibrated" };
+        static const char model[] = "none\0learned\0calibrated";
         cf(c, "out R/G/B/W1/W2=%P %%\r\ncurrent=%a A\r\ncurrent_peak=%a A\r\ncurrent_zero=%a A\r\ncurrent_limit=%a A\r\n"
               "current_scale=%k %%\r\ncurrent_trips=%u\r\ncurrent_state=%s, last trip %s\r\n"
               "channel R/G/B/W1/W2=%A A (%s)\r\n",
            s->out, s->i_ma, s->i_peak_ma, s->i_zero_ma, (int32_t)s->i_limit_ma, s->i_k_permille, s->i_trips,
            s->i_cal ? "calibrating" : (s->i_tripped ? "tripped, outputs off" : "ok"),
-           cause[s->i_trip_cause < 3u ? s->i_trip_cause : 0], s->i_ch_ma, model[s->i_model < 3u ? s->i_model : 0]);
+           nth(cause, s->i_trip_cause < 3u ? s->i_trip_cause : 0u), s->i_ch_ma,
+           nth(model, s->i_model < 3u ? s->i_model : 0u));
         if (s->cal.levels) {
             static const char ch[5][3] = { "R", "G", "B", "W1", "W2" };
             uint32_t l;
@@ -334,9 +359,8 @@ static void status(cli_t *c)
         c->write("\r\n");
     }
     /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A): mW, shown in W */
-    cf(c, "input=%h W\r\nenergy=%v Wh since boot, %u Wh lifetime\r\ntp8=%v V\r\ntest_mode=%s\r\nboard_limit=",
-       s->vs_supply_mv / 10u * clamp0(s->i_ma) / 100u, s->en_boot_mwh, s->en_total_wh, s->vs_aux_mv,
-       s->test_mode ? "on" : "off");
+    cf(c, "input=%h W\r\nenergy=%v Wh since boot\r\ntp8=%v V\r\ntest_mode=%s\r\nboard_limit=",
+       s->vs_supply_mv / 10u * clamp0(s->i_ma) / 100u, s->en->boot_mwh, s->vs_aux_mv, s->test_mode ? "on" : "off");
     if (s->lim_ma == 0xFFFFu) {
         c->write("none");
     } else {
@@ -353,7 +377,8 @@ static void status(cli_t *c)
         c->write("overcurrent_led=off");
     } else {
         cf(c, s->oc_show == 2u ? "overcurrent_led=trip (%s), since %t (%u s ago), " : "overcurrent_led=limit%s, since %t (%u s ago), ",
-           s->oc_show == 2u ? cause[s->oc_cause < 3u ? s->oc_cause : 0] : "", s->oc_since_s, s->uptime_s - s->oc_since_s);
+           s->oc_show == 2u ? nth(cause, s->oc_cause < 3u ? s->oc_cause : 0u) : "", s->oc_since_s,
+           s->uptime_s - s->oc_since_s);
         if (s->oc_show == 2u ? s->oc_tripped : s->oc_limiting) {
             c->write(s->oc_show == 2u ? "outputs off" : "board limit active");
         } else {
@@ -390,20 +415,20 @@ static void status(cli_t *c)
             c->write("\r\npower_last_trip=none\r\n");
         } else {
             cf(c, "\r\npower_last_trip=%u s ago, %s, %a A\r\n", g->trip_age_s,
-               cause[g->last_cause < 3u ? g->last_cause : 0], (int32_t)g->trip_ma);
+               nth(cause, g->last_cause < 3u ? g->last_cause : 0u), (int32_t)g->trip_ma);
         }
     }
     if (s->hl) {                           /* channel health (core/health.h) */
-        static const char *const cls[4] = { "-", "none", "ok", "FAULT" };
-        static const char *const why[3] = { ":rise", ":high", ":low" };
+        static const char cls[] = "-\0none\0ok\0FAULT";
+        static const char why[] = ":rise\0:high\0:low";
         const health_t *h = s->hl;
         uint32_t k;
         if (h->flags & ULTRA_HE_F_TESTED) {
             c->write("health_test R/G/B/W1/W2=");
             for (i = 0; i < 5u; i++) {
-                c->write(cls[h->cls[i] & 3u]);
+                c->write(nth(cls, h->cls[i] & 3u));
                 for (k = 0; k < 3u; k++) {
-                    c->write((h->cls[i] & (ULTRA_HE_R_NOT_RISING << k)) ? why[k] : "");
+                    c->write((h->cls[i] & (ULTRA_HE_R_NOT_RISING << k)) ? nth(why, k) : "");
                 }
                 c->write(i < 4u ? "/" : ", change ");
             }
@@ -424,6 +449,14 @@ static void status(cli_t *c)
         }
         cf(c, "%k s\r\n", (uint32_t)c->scene->fade);
     }
+    {                                      /* the lifetime record (core/energy.h); trips: short / overload */
+        const life_rec_t *r = &s->en->lt;
+        cf(c, "lifetime=%v kWh, powered %k h, lit %k h, %u power-ups, trips %u / %u, dips %u, max %K C / %k A, wd %u, "
+              "updates %u, %u records\r\n",
+           energy_total_wh(s->en), r->on_s / 360u, r->lit_s / 360u, r->ups, (uint32_t)r->trips[1],
+           (uint32_t)r->trips[0], r->dips, (int32_t)r->peak_t * 5, (uint32_t)r->peak_a, (uint32_t)r->wd,
+           (uint32_t)r->updates, r->writes);
+    }
 }
 
 void cli_watch(cli_t *c)
@@ -439,9 +472,9 @@ void cli_watch(cli_t *c)
 
 void cli_exec(cli_t *c, const char *line)
 {
-    const char *p = line;
+    const char *p = line, *k;
     char word[12];
-    uint32_t n = 0, i;
+    uint32_t n = 0;
 
     while (*p == ' ') {
         p++;
@@ -456,14 +489,15 @@ void cli_exec(cli_t *c, const char *line)
     if (streq(word, "help") || streq(word, "?")) {
         c->write("status | get | set <key> <value> | period <steps> | save | defaults | identify | version | "
                  "watch [ms]\r\n");
-        for (i = 0; i < NKEYS; i++) {
-            cf(c, "  %s: %s\r\n", keys[i].key, keys[i].help);
+        for (k = keys; *k; k = key_next(k)) {
+            cf(c, "  %s: %s\r\n", key_name(k), key_help(k));
         }
     } else if (streq(word, "status")) {
+        if (c->status_begin) c->status_begin();
         status(c);
     } else if (streq(word, "get")) {
-        for (i = 0; i < NKEYS; i++) {
-            cf(c, "%s=%u\r\n", keys[i].key, (uint32_t)get_key(c, keys[i].cmd));
+        for (k = keys; *k; k = key_next(k)) {
+            cf(c, "%s=%u\r\n", key_name(k), (uint32_t)get_key(c, (uint8_t)*k));
         }
         cf(c, "period=%u\r\n", settings_steps(c->set));
     } else if (streq(word, "set")) {
@@ -478,13 +512,13 @@ void cli_exec(cli_t *c, const char *line)
         }
         key[n] = 0;
         v = parse_u(&p);
-        for (i = 0; i < NKEYS && !streq(key, keys[i].key); i++) {
+        for (k = keys; *k && !streq(key, key_name(k)); k = key_next(k)) {
         }
-        if (i == NKEYS || v < 0 || v > 255) {
+        if (*k == 0 || v < 0 || v > 255) {
             c->write("error: set <key> <value>, see help\r\n");
             return;
         }
-        result(c, c->apply(keys[i].cmd, (uint8_t)v));
+        result(c, c->apply((uint8_t)*k, (uint8_t)v));
     } else if (streq(word, "period")) {
         int32_t v = parse_u(&p);
         if (v < (int32_t)PWM_STEPS_MIN || v > (int32_t)PWM_STEPS_MAX) {
@@ -494,8 +528,7 @@ void cli_exec(cli_t *c, const char *line)
         c->apply(CMD_PERIOD_HI, (uint8_t)(v >> 8));
         result(c, c->apply(CMD_PERIOD_LO, (uint8_t)(v & 0xFF)));
     } else if (streq(word, "save")) {
-        c->save_now();
-        c->write("ok\r\n");
+        c->save_now();                     /* (it reports: ok / pending / failed; 0.6.4) */
     } else if (streq(word, "defaults")) {
         result(c, c->apply(CMD_FACTORY_RESET, 0xA5));
     } else if (streq(word, "identify")) {

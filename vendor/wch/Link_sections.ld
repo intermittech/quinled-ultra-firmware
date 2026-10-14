@@ -1,6 +1,13 @@
 /* Output sections shared by Link.ld (standalone image at 0x00000000) and Link_app.ld (the app behind the
  * bootloader at 0x00002100, src/core/ultra_update.h). Included by both; MEMORY comes from the including script. */
 
+PHDRS
+{
+    flash PT_LOAD FLAGS(5);
+    ramcode PT_LOAD FLAGS(5);
+    ramdata PT_LOAD FLAGS(6);
+}
+
 SECTIONS
 {
 
@@ -11,13 +18,13 @@ SECTIONS
 		KEEP(*(SORT_NONE(.init)))
 		. = ALIGN(4);
 		_einit = .;
-	} >FLASH AT>FLASH
+	} >FLASH AT>FLASH :flash
 
   .vector :
   {
       *(.vector);
-	  . = ALIGN(64);
-  } >FLASH AT>FLASH
+	  . = ALIGN(4);		/* QuinLED: was ALIGN(64): only pads the start of .text (mtvec's base needs 4 bytes) */
+  } >FLASH AT>FLASH :flash
 
 	.text :
 	{
@@ -29,13 +36,13 @@ SECTIONS
 		*(.srodata .srodata.*)		/* small constants: flash, as .rodata (not copied into RAM) */
 		*(.gnu.linkonce.t.*)
 		. = ALIGN(4);
-	} >FLASH AT>FLASH 
+	} >FLASH AT>FLASH :flash 
 
 	.fini :
 	{
 		KEEP(*(SORT_NONE(.fini)))
 		. = ALIGN(4);
-	} >FLASH AT>FLASH
+	} >FLASH AT>FLASH :flash
 
 	PROVIDE( _etext = . );
 	PROVIDE( _eitcm = . );	
@@ -45,7 +52,7 @@ SECTIONS
 	  PROVIDE_HIDDEN (__preinit_array_start = .);
 	  KEEP (*(.preinit_array))
 	  PROVIDE_HIDDEN (__preinit_array_end = .);
-	} >FLASH AT>FLASH 
+	} >FLASH AT>FLASH :flash 
 	
 	.init_array     :
 	{
@@ -53,7 +60,7 @@ SECTIONS
 	  KEEP (*(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*)))
 	  KEEP (*(.init_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .ctors))
 	  PROVIDE_HIDDEN (__init_array_end = .);
-	} >FLASH AT>FLASH 
+	} >FLASH AT>FLASH :flash 
 	
 	.fini_array     :
 	{
@@ -61,7 +68,7 @@ SECTIONS
 	  KEEP (*(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*)))
 	  KEEP (*(.fini_array EXCLUDE_FILE (*crtbegin.o *crtbegin?.o *crtend.o *crtend?.o ) .dtors))
 	  PROVIDE_HIDDEN (__fini_array_end = .);
-	} >FLASH AT>FLASH 
+	} >FLASH AT>FLASH :flash 
 	
 	.ctors          :
 	{
@@ -83,7 +90,7 @@ SECTIONS
 	  KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .ctors))
 	  KEEP (*(SORT(.ctors.*)))
 	  KEEP (*(.ctors))
-	} >FLASH AT>FLASH 
+	} >FLASH AT>FLASH :flash 
 	
 	.dtors          :
 	{
@@ -92,19 +99,29 @@ SECTIONS
 	  KEEP (*(EXCLUDE_FILE (*crtend.o *crtend?.o ) .dtors))
 	  KEEP (*(SORT(.dtors.*)))
 	  KEEP (*(.dtors))
-	} >FLASH AT>FLASH 
+	} >FLASH AT>FLASH :flash 
 
 	.dalign :
 	{
 		. = ALIGN(4);
 		PROVIDE(_data_vma = .);
-	} >RAM AT>FLASH	
+	} >RAM AT>FLASH :ramcode	
 
 	.dlalign :
 	{
 		. = ALIGN(4); 
 		PROVIDE(_data_lma = .);
-	} >FLASH AT>FLASH
+	} >FLASH AT>FLASH :flash
+
+    /* Included in startup's existing contiguous _data_lma -> _data_vma copy. */
+    .ramtext :
+    {
+        . = ALIGN(4);
+        __ramtext_start = .;
+        KEEP(*(.ramtext .ramtext.*))
+        . = ALIGN(4);
+        __ramtext_end = .;
+    } >RAM AT>FLASH :ramcode
 
 	.data :
 	{
@@ -121,7 +138,7 @@ SECTIONS
     	*(.gnu.linkonce.s.*)
     	. = ALIGN(4);
 		PROVIDE( _edata = .);
-	} >RAM AT>FLASH
+	} >RAM AT>FLASH :ramdata
 
 	.bss :
 	{
@@ -134,9 +151,10 @@ SECTIONS
 		*(COMMON*)
 		. = ALIGN(4);
 		PROVIDE( _ebss = .);
-	} >RAM AT>FLASH
+	} >RAM AT>FLASH :ramdata
 
 	PROVIDE( _end = _ebss);
+	ASSERT(_ebss <= ORIGIN(RAM) + LENGTH(RAM) - __stack_size, "RAM overlaps reserved stack")
 	PROVIDE( end = . );
 
     .stack ORIGIN(RAM) + LENGTH(RAM) - __stack_size :
@@ -146,6 +164,6 @@ SECTIONS
         PROVIDE(_susrstack = . );
         . = . + __stack_size;
         PROVIDE( _eusrstack = .);
-    } >RAM 
+    } >RAM :ramdata
 
 }

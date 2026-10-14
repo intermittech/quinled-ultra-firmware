@@ -38,6 +38,8 @@ typedef struct {
     uint8_t     crc;           /* CRC-8 over seq + s + ext */
 } store_slot_t;
 
+/* a record with the magic and its CRC (core/pagepair.h's check) */
+int  store_valid(const uint8_t *r);
 /* newest valid record: returns its slot index and fills *out / *seq, or -1 */
 int  store_find(const uint8_t *page, settings_t *out, uint32_t *seq);
 /* same, with the extension */

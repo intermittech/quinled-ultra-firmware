@@ -17,10 +17,12 @@
 
 #include <stdint.h>
 
-#define ACK_MAX_SEG 64u                 /* the longest: the version, 6 + 3 x 12 + 6 = 48 */
+#define ACK_MAX_SEG 66u                 /* the longest: the version 28.28.28-rc, 6 + 3 x 18 + 6 (a part's code is
+                                           at most 9 blinks: 5 long + 4 short, 28 = 29 blinks' worth) */
+#define ACK_UNIT_MS 100u                /* the segment lengths' unit: every pattern's times are multiples of it */
 
 typedef struct {
-    uint16_t ms[ACK_MAX_SEG];   /* segment lengths, levels alternate on / off starting with on */
+    uint8_t  ms[ACK_MAX_SEG];   /* segment lengths in ACK_UNIT_MS, levels alternate on / off starting with on */
     uint8_t  nseg;
     uint8_t  seg;
     uint16_t left;              /* ms left in the current segment */

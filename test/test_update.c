@@ -255,6 +255,20 @@ static void test_update(void)
         CHECK(upd_app_frame(&b.u, f, b.now) == UPD_APP_NONE && b.u.have_half == 0, "a corrupted block is ignored");
     }
 
+    /* A hub restart / 8-bit session wrap may reuse an old session id. */
+    tu_init(&b, TU_V(0, 4, 0, 0xFF), 1, 1);
+    tu_announce(&b, 0x35, d_same, 0, 3);
+    tu_end(&b, 0x35);
+    upd_app_frame_end(&b.u, 1, 0, ++b.now);
+    tu_announce(&b, 0x35, d_new, 0, 3);
+    CHECK(tu_has(&b, UPD_APP_TAKE), "session id reused after normal traffic must evaluate the new image");
+    tu_init(&b, TU_V(0, 4, 0, 0xFF), 1, 1);
+    tu_announce(&b, 0x35, d_same, 0, 3);
+    b.now += UPD_APP_IDLE_MS;
+    (void)upd_app_poll(&b.u, b.now);
+    tu_announce(&b, 0x35, d_new, 0, 3);
+    CHECK(tu_has(&b, UPD_APP_TAKE), "session id reused after timeout must evaluate the new image");
+
     /* PING / confirm */
     tu_init(&b, TU_V(0, 5, 0, 0xFF), 1, 0);
     tu_upd(&b, UPD_PING, 0, 0, 0, 0);

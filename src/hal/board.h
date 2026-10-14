@@ -85,10 +85,13 @@
 #define DIN_COPY_WORDS   1792u      /* copied per frame: up to 796 us (Ultra: 60 us + 320 bits + latency) */
 #define POLL_HZ          20000u     /* poll tick: frame-end detection (core/frame_track.h), ring copy, 1 ms time base */
 
-#define SETTINGS_ADDR    0x0800FF00u   /* last 256-byte page of the 64 KB flash */
-#define SCENE_LOG_ADDR   0x0800F700u   /* power-on scene log: SCENE_LOG_PAGES (5) pages, to 0x0800FBFF */
+#define SETTINGS_ADDR    0x0800FF00u   /* the settings (core/flashrec.h): an A/B page pair (0.6.4), page A the last */
+#define SETTINGS_B_ADDR  0x0800F900u   /* 256-byte page of the 64 KB flash (0.6.0-0.6.3's single page), page B */
+#define SCENE_LOG_ADDR   0x0800F700u   /* power-on scene log: SCENE_LOG_PAGES (2) pages, to 0x0800F8FF */
+#define CAL_B_ADDR       0x0800FA00u   /* the current calibration's page B (page A: CAL_PAGE_ADDR) */
+#define LIFE_PAGE0_ADDR  0x0800FB00u   /* the lifetime record (core/energy.h, 0.6.3): two pages, this one (the scene */
+#define LIFE_PAGE1_ADDR  0x0800FE00u   /* log's 5th until 0.6.2) and the 0.6.0-0.6.2 energy log's */
 #define SCENE_FX_ADDR    0x0800FC00u   /* the power-on effect (0.6.0): two pages */
-#define ENERGY_ADDR      0x0800FE00u   /* the energy log (core/energy.h, 0.6.0): one page */
 #define CAL_PAGE_ADDR    0x0800F600u   /* current calibration (core/calstore.h): the top page of the app slot. The
                                           linker scripts end the code area here (vendor/wch/Link.ld, Link_app.ld); a
                                           firmware update erases only the new app's length, so the page survives */

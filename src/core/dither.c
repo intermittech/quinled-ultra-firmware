@@ -4,11 +4,17 @@
 #include "lto.h"
 #include "scratch.h"
 
-/* spread `count` marks evenly over len slots (Bresenham), starting at `phase`; mark -> hi, else lo */
+/* spread `count` marks evenly over len slots (Bresenham), starting at `phase`; mark -> hi, else lo (both <= 65535).
+ * The destination walks the table from `phase` and wraps once: a pointer stepping by stride, no index multiply. */
 static void spread(uint32_t count, uint32_t len, uint32_t lo, uint32_t hi, uint8_t phase, uint16_t *dst,
                    uint8_t stride)
 {
-    uint32_t i, acc = 0, slot = phase % len;
+    uint32_t i, acc = 0, slot = phase;
+    uint16_t *d, *end = dst + (uint32_t)len * stride;
+    if (slot >= len) {
+        slot %= len;
+    }
+    d = dst + slot * stride;
     for (i = 0; i < len; i++) {
         uint32_t val = lo;
         acc += count;
@@ -16,9 +22,10 @@ static void spread(uint32_t count, uint32_t len, uint32_t lo, uint32_t hi, uint8
             acc -= len;
             val = hi;
         }
-        dst[slot * stride] = (uint16_t)(val > 0xFFFFu ? 0xFFFFu : val);
-        if (++slot == len) {
-            slot = 0;
+        *d = (uint16_t)val;
+        d += stride;
+        if (d == end) {
+            d = dst;
         }
     }
 }
@@ -61,7 +68,7 @@ MEASURED void dither_build(uint16_t v16, uint32_t steps, uint8_t len, const dith
 {
     uint32_t num = (uint32_t)v16 * steps;     /* exact duty * 65535; <= 65535 * 65535 */
     uint32_t floor = o->floor_policy == FLOOR_OFF ? 0u : o->floor;
-    uint32_t q, k = 0, i;
+    uint32_t q, k = 0, lo, hi;
 
     if (len == 0u) {
         return;
@@ -89,17 +96,17 @@ MEASURED void dither_build(uint16_t v16, uint32_t steps, uint8_t len, const dith
             k = 0;
         }
     }
-    spread(k, len, q, q + 1u, phase, dst, stride);
-
-    /* ceiling: the off-time near 100 % must not be shorter than the floor either */
-    if (floor != 0u && steps > floor) {
-        for (i = 0; i < len; i++) {
-            uint32_t v = dst[i * stride];
-            if (v < steps && v > steps - floor) {
-                dst[i * stride] = (uint16_t)(2u * (steps - v) < floor ? steps : steps - floor);
-            }
-        }
+    /* the pattern holds q and q + 1 (as stored: 16 bits); the ceiling, when one of them can be in its band (the
+     * off-time below the floor: levels near 100 %), is applied to the two values once and written in the one pass
+     * (was: a second pass over the table) */
+    lo = q > 0xFFFFu ? 0xFFFFu : q;
+    hi = q + 1u > 0xFFFFu ? 0xFFFFu : q + 1u;
+    if (floor != 0u && steps > floor && hi > steps - floor) {
+        uint32_t lim = steps - floor;                                /* a value in (lim, steps): full on or lim */
+        if (lo < steps && lo > lim) lo = 2u * (steps - lo) < floor ? steps : lim;
+        if (hi < steps && hi > lim) hi = 2u * (steps - hi) < floor ? steps : lim;
     }
+    spread(k, len, lo, hi, phase, dst, stride);
 }
 
 /* ---------------------------------------------------------------------------------------------- spread */

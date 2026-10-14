@@ -56,15 +56,6 @@ static uint32_t pair(const pulses_t *p, const uint32_t *s, int a, int b)
     return p->i[a] * p->i[b] * (ov(s[a], p->w[a], s[b], p->w[b]) >> 6);
 }
 
-/* sum over the channel pairs on different timers */
-static uint32_t cross_cost(const pulses_t *p, uint32_t o2, uint32_t o3)
-{
-    uint32_t s[5];
-    starts(p, o2, o3, s);
-    return pair(p, s, R, B) + pair(p, s, G, B) + pair(p, s, R, W1) + pair(p, s, R, W2) + pair(p, s, G, W1) +
-           pair(p, s, G, W2) + pair(p, s, B, W1) + pair(p, s, B, W2);
-}
-
 /* ---------------------------------------------------------------------------------------------- edge rule */
 typedef struct {
     uint32_t on[2], off[2];
@@ -149,23 +140,31 @@ static uint32_t isqrt64(uint64_t v)
     return (uint32_t)r;
 }
 
-uint32_t stagger_ripple_ma(const uint16_t *duty, const uint16_t *peak_ma, uint16_t o2, uint16_t o3)
+static uint32_t ripple_of(const pulses_t *p, const uint16_t *peak_ma, uint16_t o2, uint16_t o3)
 {
-    pulses_t p;
     uint32_t s[5], j, k;
     uint64_t s1 = 0, s2 = 0, m;
-    setup(duty, peak_ma, &p);
-    starts(&p, o2, o3, s);
+    starts(p, o2, o3, s);
     for (k = 0; k < 5u; k++) {
-        s1 += (uint64_t)peak_ma[k] * p.w[k];                                 /* mA x Q16 */
-        s2 += (uint64_t)peak_ma[k] * peak_ma[k] * p.w[k];                    /* mA^2 x Q16 */
+        s1 += (uint64_t)peak_ma[k] * p->w[k];                                /* mA x Q16 */
+        s2 += (uint64_t)peak_ma[k] * peak_ma[k] * p->w[k];                   /* mA^2 x Q16 */
         for (j = k + 1u; j < 5u; j++) {
-            s2 += 2u * (uint64_t)peak_ma[k] * peak_ma[j] * ov(s[k], p.w[k], s[j], p.w[j]);
+            s2 += 2u * (uint64_t)peak_ma[k] * peak_ma[j] * ov(s[k], p->w[k], s[j], p->w[j]);
         }
     }
     m = s1 >> 8;                                                             /* mA x Q8 */
     m *= m;                                                                  /* mA^2 x Q16 */
-    return s2 > m ? isqrt64((s2 - m) >> 16) : 0u;
+    if (s2 <= m) {
+        return 0;
+    }
+    return isqrt64((s2 - m) >> 16);
+}
+
+uint32_t stagger_ripple_ma(const uint16_t *duty, const uint16_t *peak_ma, uint16_t o2, uint16_t o3)
+{
+    pulses_t p;
+    setup(duty, peak_ma, &p);
+    return ripple_of(&p, peak_ma, o2, o3);
 }
 
 uint16_t stagger_gap_q16(uint32_t steps)
@@ -181,6 +180,46 @@ static uint32_t grid(uint32_t i)
     return ((i % N) * FULL + N / 2u) / N;
 }
 
+#define INVALID 0xFFFFFFFFu                /* a cost: the edge rule broken, or beyond o_max */
+
+/* The cost of a pair of offsets separates into three parts, each a function of one variable (stagger.h): the
+ * TIM1-TIM2 pairs of o2, the TIM1-TIM3 pairs of o3 and the TIM2-TIM3 pairs of o3 - o2 (every overlap depends on
+ * the distance of the two starts only). Each part carries its own edge rule and (parts 0, 1) the o_max limit,
+ * INVALID when they fail. The coarse grid, the fine grid around its best point and the two candidates all use it. */
+typedef struct {
+    pulses_t p;
+    edges_t t[3];
+    uint32_t gap, omax;
+} search_t;
+
+static NOINLINE uint32_t cost_part(const search_t *c, uint32_t part, uint32_t o)
+{
+    static const uint8_t pr[3][4][2] = { { { R, B }, { G, B }, { 0, 0 }, { 0, 0 } },
+                                         { { R, W1 }, { R, W2 }, { G, W1 }, { G, W2 } },
+                                         { { B, W1 }, { B, W2 }, { 0, 0 }, { 0, 0 } } };
+    static const uint8_t np[3] = { 2, 4, 2 }, ea[3] = { 0, 0, 1 }, eb[3] = { 1, 2, 2 };
+    uint32_t s[5], k, sum = 0;
+    if ((part != 2u && o > c->omax) || !apart(&c->t[ea[part]], &c->t[eb[part]], o, c->gap)) {
+        return INVALID;
+    }
+    starts(&c->p, part == 0u ? o : 0u, part == 0u ? 0u : o, s);
+    for (k = 0; k < np[part]; k++) {
+        sum += pair(&c->p, s, pr[part][k][0], pr[part][k][1]);
+    }
+    return sum;
+}
+
+#define cost2(c, o)  cost_part((c), 0u, (o))
+#define cost3(c, o)  cost_part((c), 1u, (o))
+#define cost23(c, d) cost_part((c), 2u, (d))
+
+/* the full cost at (o2, o3): the three parts (each >= 0; their sums fit 32 bits), INVALID when one is */
+static uint32_t cost_at(const search_t *c, uint32_t o2, uint32_t o3)
+{
+    uint32_t a = cost2(c, o2), b = cost3(c, o3), d = cost23(c, (o3 - o2) & 0xFFFFu);
+    return (a == INVALID || b == INVALID || d == INVALID) ? INVALID : a + b + d;
+}
+
 void stagger_choose(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap, uint16_t cur_o2, uint16_t cur_o3,
                     stagger_result_t *r)
 {
@@ -190,46 +229,45 @@ void stagger_choose(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap,
 MEASURED void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap, uint16_t cur_o2,
                         uint16_t cur_o3, uint16_t o_max, stagger_result_t *r)
 {
-    uint32_t omax = o_max ? o_max : 0xFFFFu;
-    /* cost per offset (0xFFFFFFFF = edge rule broken) and the grid offsets: in the main loop's shared scratch */
+    /* cost per offset and the grid offsets: in the main loop's shared scratch */
     uint32_t *c2 = core_scratch, *c3 = core_scratch + N, *c23 = core_scratch + 2u * N, *go = core_scratch + 3u * N;
-    pulses_t p;
-    edges_t t1, t2, t3;
-    uint32_t i, j, best = 0xFFFFFFFFu, bi = 0, bj = 0, b2, b3, s[5];
+    search_t sc;
+    uint32_t i, j, best = INVALID, bi = 0, bj = 0, b2, b3, c, m3 = INVALID, m23 = INVALID;
     int32_t a, b;
 
-    setup(duty, peak_ma, &p);
-    timer_edges(duty, &p, &t1, &t2, &t3);
+    sc.gap = gap;
+    sc.omax = o_max ? o_max : 0xFFFFu;
+    setup(duty, peak_ma, &sc.p);
+    timer_edges(duty, &sc.p, &sc.t[0], &sc.t[1], &sc.t[2]);
 
-    /* one-dimensional tables: TIM1-TIM2 by o2, TIM1-TIM3 by o3, TIM2-TIM3 by o3 - o2 */
+    /* one-dimensional tables: TIM1-TIM2 by o2, TIM1-TIM3 by o3, TIM2-TIM3 by o3 - o2, and their smallest entries */
     for (i = 0; i < N; i++) {
         uint32_t o = grid(i);
         go[i] = o;
-        starts(&p, o, o, s);
-        c2[i] = (o <= omax && apart(&t1, &t2, o, gap)) ? pair(&p, s, R, B) + pair(&p, s, G, B) : 0xFFFFFFFFu;
-        c3[i] = (o <= omax && apart(&t1, &t3, o, gap))
-                    ? pair(&p, s, R, W1) + pair(&p, s, R, W2) + pair(&p, s, G, W1) + pair(&p, s, G, W2)
-                    : 0xFFFFFFFFu;
-        starts(&p, 0, o, s);
-        c23[i] = apart(&t2, &t3, o, gap) ? pair(&p, s, B, W1) + pair(&p, s, B, W2) : 0xFFFFFFFFu;
+        c2[i] = cost2(&sc, o);
+        c3[i] = cost3(&sc, o);
+        c23[i] = cost23(&sc, o);
+        if (c3[i] < m3) m3 = c3[i];
+        if (c23[i] < m23) m23 = c23[i];
     }
-    for (i = 0; i < N; i++) {
+    /* the 2D minimum: additions only. A row i can only win while c2[i] + the smallest c3 + the smallest c23 is
+     * below the best so far (every cost >= 0): the other rows are skipped, the winner and its order are the same */
+    for (i = 0; m3 != INVALID && m23 != INVALID && i < N; i++) {
         uint32_t k = N - i;                /* (j - i) mod N, counted along with j */
-        if (c2[i] == 0xFFFFFFFFu) {
+        if (c2[i] == INVALID || (best != INVALID && c2[i] + m3 + m23 >= best)) {
             continue;
         }
         for (j = 0; j < N; j++, k++) {
-            uint32_t c;
             if (k == N) {
                 k = 0;
             }
-            if (c3[j] == 0xFFFFFFFFu || c23[k] == 0xFFFFFFFFu) {
+            if (c3[j] == INVALID || c23[k] == INVALID) {
                 continue;
             }
             c = c2[i] + c3[j] + c23[k];
             /* c23 is tabled at grid(k), but grid(j) - grid(i) can be 1 count off (65536 / N is not whole): the
              * TIM2-TIM3 edge rule is checked at the exact difference before a point can win (c2, c3 are exact) */
-            if (c < best && apart(&t2, &t3, (go[j] - go[i]) & 0xFFFFu, gap)) {
+            if (c < best && apart(&sc.t[1], &sc.t[2], (go[j] - go[i]) & 0xFFFFu, gap)) {
                 best = c;
                 bi = i;
                 bj = j;
@@ -238,45 +276,55 @@ MEASURED void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, 
     }
     b2 = go[bi];
     b3 = go[bj];
-    /* finer steps around the best grid point (T / (4 N)) */
-    if (best != 0xFFFFFFFFu) {
-        uint32_t c0 = b2, c1 = b3;
+    /* finer steps around the best grid point (T / (4 N)): on this grid o3 - o2 = (c1 - c0) + (b - a) x step depends on
+     * b - a alone, so the parts are tabled once more (7 + 7 + 13 points, over the coarse tables, which are done) and the
+     * 48 points are additions: the same costs in the same order as evaluating each point */
+    if (best != INVALID) {
+        uint32_t c0 = b2, c1 = b3, *f2 = c2, *f3 = c3, *f23 = c23;
+        for (a = -3; a <= 3; a++) {
+            uint32_t d = (uint32_t)(a * (int32_t)(FULL / (4u * N)));
+            f2[a + 3] = cost2(&sc, (c0 + d) & 0xFFFFu);
+            f3[a + 3] = cost3(&sc, (c1 + d) & 0xFFFFu);
+        }
+        for (a = -6; a <= 6; a++) {
+            f23[a + 6] = cost23(&sc, (c1 - c0 + (uint32_t)(a * (int32_t)(FULL / (4u * N)))) & 0xFFFFu);
+        }
         for (a = -3; a <= 3; a++) {
             for (b = -3; b <= 3; b++) {
-                uint32_t o2 = (c0 + (uint32_t)(a * (int32_t)(FULL / (4u * N)))) & 0xFFFFu;
-                uint32_t o3 = (c1 + (uint32_t)(b * (int32_t)(FULL / (4u * N)))) & 0xFFFFu;
-                uint32_t c;
-                if ((a == 0 && b == 0) || o2 > omax || o3 > omax || !valid3(&t1, &t2, &t3, o2, o3, gap)) {
+                if ((a == 0 && b == 0) || f2[a + 3] == INVALID || f3[b + 3] == INVALID || f23[b - a + 6] == INVALID) {
                     continue;
                 }
-                c = cross_cost(&p, o2, o3);
+                c = f2[a + 3] + f3[b + 3] + f23[b - a + 6];
                 if (c < best) {
                     best = c;
-                    b2 = o2;
-                    b3 = o3;
+                    b2 = (c0 + (uint32_t)(a * (int32_t)(FULL / (4u * N)))) & 0xFFFFu;
+                    b3 = (c1 + (uint32_t)(b * (int32_t)(FULL / (4u * N)))) & 0xFFFFu;
                 }
             }
         }
     }
-    /* the fixed stagger and the current offsets are candidates too */
-    if (valid3(&t1, &t2, &t3, STAGGER_FIXED_O2, STAGGER_FIXED_O3, gap) &&
-        cross_cost(&p, STAGGER_FIXED_O2, STAGGER_FIXED_O3) < best) {
-        best = cross_cost(&p, STAGGER_FIXED_O2, STAGGER_FIXED_O3);
+    /* the fixed stagger (not subject to o_max) and the current offsets are candidates too */
+    sc.omax = 0xFFFFu;
+    c = cost_at(&sc, STAGGER_FIXED_O2, STAGGER_FIXED_O3);
+    if (c != INVALID && c < best) {
+        best = c;
         b2 = STAGGER_FIXED_O2;
         b3 = STAGGER_FIXED_O3;
     }
-    r->valid_now = (uint8_t)(cur_o2 <= omax && cur_o3 <= omax && valid3(&t1, &t2, &t3, cur_o2, cur_o3, gap));
-    if (r->valid_now && cross_cost(&p, cur_o2, cur_o3) <= best) {
-        best = cross_cost(&p, cur_o2, cur_o3);
+    sc.omax = o_max ? o_max : 0xFFFFu;
+    c = cost_at(&sc, cur_o2, cur_o3);
+    r->valid_now = (uint8_t)(c != INVALID);
+    if (c != INVALID && c <= best) {
+        best = c;
         b2 = cur_o2;
         b3 = cur_o3;
     }
     r->o2 = (uint16_t)b2;
     r->o3 = (uint16_t)b3;
-    r->ripple_now = stagger_ripple_ma(duty, peak_ma, cur_o2, cur_o3);
-    r->ripple_best = best == 0xFFFFFFFFu ? r->ripple_now : stagger_ripple_ma(duty, peak_ma, (uint16_t)b2, (uint16_t)b3);
+    r->ripple_now = ripple_of(&sc.p, peak_ma, cur_o2, cur_o3);
+    r->ripple_best = best == INVALID ? r->ripple_now : ripple_of(&sc.p, peak_ma, (uint16_t)b2, (uint16_t)b3);
     r->move = 0;
-    if (best == 0xFFFFFFFFu || (b2 == cur_o2 && b3 == cur_o3)) {
+    if (best == INVALID || (b2 == cur_o2 && b3 == cur_o3)) {
         return;
     }
     if (r->ripple_now > r->ripple_best + 300u && r->ripple_best * 100u < r->ripple_now * 85u) {
@@ -335,7 +383,11 @@ MEASURED int32_t stagger_slew(uint32_t cur, uint32_t tgt, int32_t pending, uint3
                      int allow_longer)
 {
     int32_t s = (int32_t)steps, e, rem;
-    e = (int32_t)(((tgt % steps) + steps - (cur % steps)) % steps);   /* 0..steps-1: wrap this much later */
+    uint32_t u = tgt + steps - cur;        /* 1..2 steps - 1 (cur, tgt < steps) */
+    /* e = (tgt - cur) mod steps, 0..steps-1: wrap this much later. The sum above is in 1..2 steps - 1, so one
+     * conditional subtraction is the remainder (was: three divisions, 51 of the slew interrupt's ~150 cycles) */
+    if (u >= steps) u -= steps;
+    e = (int32_t)u;
     if (e <= DEADBAND || e >= s - DEADBAND) {
         e = 0;
     } else if (!allow_longer || e > s / 2) {

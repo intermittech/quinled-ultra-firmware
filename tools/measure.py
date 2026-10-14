@@ -156,12 +156,14 @@ def measure_ultra(emu, scratch, copy):
         n = emu.call("ultra_render", [ul, tick, scratch + 300])
         return n, emu.cycles()
 
-    def scenario(name, cmds, ticks):
+    def scenario(name, cmds, ticks, warm=False):
         emu.call("ultra_init", [ul, 1])
         t = 1000
         hdr(t, 50_000_000)
         for s in cmds:
             slot(s, t)
+        if warm:                                        # the render of the ms before (a light that is already shown)
+            render(t + ticks[0] - 1)
         worst = (0, 0)
         for dt in ticks:
             n, c = render(t + dt)
@@ -182,6 +184,8 @@ def measure_ultra(emu, scratch, copy):
     rgbww = [R, G, B, CW, WW]
     scenario("idle (no light defined)", [], [5])
     scenario("RGBWW light, steady", [u_def(0, 1, rgbww), u_set(0, 2, 40000, [65535, 30000, 1000, 20000, 50000], 0)], [100])
+    scenario("RGBWW light, steady, every ms after the first", [u_def(0, 1, rgbww),
+             u_set(0, 2, 40000, [65535, 30000, 1000, 20000, 50000], 0)], [100], warm=True)
     scenario("RGBWW light, smooth transition", [u_def(0, 1, rgbww), u_set(0, 2, 40000, [65535, 30000, 1000, 20000, 50000], 2000)], mid)
     scenario("RGBWW light, via-off transition", [u_def(0, 1, rgbww), u_set(0, 2, 40000, [65535, 30000, 1000, 20000, 50000], 0),
                                                  u_set(0, 3, 50000, [1000, 30000, 65535, 0, 0], 2000, 3)], mid)
@@ -264,10 +268,13 @@ def measure_monitor(emu, scratch):
     dip += [("vdip_ms", [vd, t, 0, 2604, 1, 2000]) for t in range(410, 414)]
     n, c = worst(dip)
     rows.append(("vdip_ms, a dip: start / its end into the log (worst)", n, c, ""))
-    emu.call("energy_init", [en, 1000, 0])
+    emu.call("energy_init", [en, 0, 0, 0x00060300, 0])                  # (0.6.3: found, now, version, watchdog)
     n, c = worst([(f, a) for t in range(1, 50) for f, a in (("energy_ms", [en, t, 24000, 2000, 1]),
-                                                            ("energy_due", [en, t, 0]))])
+                                                            ("energy_due", [en, t, 0, 1]))])
     rows.append(("energy_ms / energy_due (every 1 ms, worst of the two)", n, c, ""))
+    if "energy_second" in emu.syms:                                     # 0.6.3: the lifetime record, once a second
+        n, c = worst([("energy_second", [en, 1000 * s, s, (s & 1) << 16, 2500 + s, 450 + s]) for s in range(1, 30)])
+        rows.append(("energy_second: lifetime counters and what is due (once a second)", n, c, ""))
     emu.call("ss_init", [ss, 50])
     n, c = worst([("ss_factor", [ss, t, 1, 1]) for t in range(1000, 1400)])
     rows.append(("ss_factor, soft start running (per output update)", n, c, ""))
@@ -311,7 +318,7 @@ def isense_init(emu, src):
 def main():
     rel, emu = emulators()
     meas = emu
-    scratch = emu.addr("din_ring")                     # 4 KB, unused by the functions measured here
+    scratch = (emu.addr("din_ring") + 15) & ~15        # keep artificial output alignment fixed across RAM layouts
     copy = emu.addr("din_copy")
     rows = []
 
@@ -388,7 +395,7 @@ def main():
     emu.mmio[ADC1_STATR] = 0x4                         # JEOC
     for a in range(0x4001243C, 0x4001244C, 4):         # IDATAR1-4
         emu.mmio[a] = 1234
-    sub = [k for k in emu.syms if k.startswith("sub.")]  # poll_isr's static ms divider (GCC numbers it)
+    sub = ["poll_sub"] if "poll_sub" in emu.syms else [k for k in emu.syms if k.startswith("sub.")]  # the ms divider
     assert len(sub) == 1, sub
     emu.wr(sym(sub[0]), 2, 19)
     n, c = isr(0)
@@ -406,6 +413,9 @@ def main():
     n, c = isr(160)
     n, c = isr(160)
     rows.append(("poll ISR, WS frame end (re-arm + tail copy: auto, unlocked)", n, c, ""))
+    # Main consumed both mailboxes before the next independent scenario.
+    emu.wr(sym("cap_ready"), 1, 0)
+    emu.wr(sym("fe_ready"), 1, 0)
     # an Ultra frame (4 boards: 1088 bits) ends: gate re-arm + the 576-word tail copy (the header trailer)
     emu.wr(FT + 3, 1, 1)                               # armed
     emu.mmio[DMA1_CH2_CNTR] = 2048 - 1500
@@ -416,6 +426,10 @@ def main():
     n, c = isr(1088)
     rows.append(("poll ISR, Ultra frame end (re-arm + 576-word tail copy)", n, c, ""))
     # longest Ultra capture (1728 words, full-spec timing with hiccups): ring copy inside the poll ISR
+    emu.wr(sym("cap_ready"), 1, 0)
+    emu.wr(sym("fe_ready"), 1, 0)
+    if "cap_accept" in emu.syms:                      # mailbox ownership (also measure older images)
+        emu.wr(sym("cap_accept"), 1, 1)
     emu.wr(FT + 4, 1, 2)                               # cap_state: copy next tick
     emu.wr(sym("cap_start"), 2, 100)
     emu.mmio[DMA1_CH2_CNTR] = 2048 - (100 + 1728)
@@ -434,9 +448,12 @@ def main():
     emu.wr(sym("cur_stagger"), 1, 2)
     emu.wr(sym("slew_tgt2"), 2, 480)
     emu.wr(sym("slew_tgt3"), 2, 960)
-    emu.mmio[0x40012C24] = 700        # TIM1->CNT
-    emu.mmio[0x40000024] = 30         # TIM2->CNT just after its wrap
-    emu.mmio[0x40000424] = 30         # TIM3->CNT
+    # (0.6.4) the timers' counts past the ISR's waits for the update's DMA burst (hw.c slew_entry: a burst done before
+    # the interrupt; the wait for a burst in progress is the DMA's time, a bench item): the ISR's own work. The phases
+    # as before (TIM1 670 counts ahead)
+    emu.mmio[0x40012C24] = 1070       # TIM1->CNT
+    emu.mmio[0x40000024] = 400        # TIM2->CNT
+    emu.mmio[0x40000424] = 400        # TIM3->CNT
     emu.mmio[0x40020034] = 60         # DMA1 ch3 CNTR (TIM3 table position)
     n = emu.call("slew2_isr")
     rows.append(("slew ISR TIM2 (per PWM period while moving)", n, emu.cycles(), ""))

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
+#include <stddef.h>
 #include "config.h"
 #include "presets.h"
 #include "ultra_protocol.h"
@@ -7,6 +8,11 @@
 uint8_t crc8_smbus(const uint8_t *d, uint32_t n)
 {
     return ultra_crc8(d, n);                          /* the same CRC-8/SMBus */
+}
+
+uint16_t crc16_ccitt(const uint8_t *d, uint32_t n)
+{
+    return ultra_crc16(d, n);
 }
 
 void settings_default(settings_t *s)
@@ -24,6 +30,41 @@ void settings_default(settings_t *s)
     s->smoothing = 1;           /* WS2805 input only: 8-bit fades become smooth 16-bit ramps */
     s->gamma = 0;               /* linear: WLED and most controllers already apply gamma */
     s->last_proto = PROTO_NONE; /* nothing locked yet: the first frames decide */
+}
+
+int settings_sanitize(settings_t *s)
+{
+    /* the byte fields: offset, lowest and highest value (pwm_preset also takes 0xFF: a raw period) */
+    static const uint8_t lim[12][3] = {
+        { offsetof(settings_t, protocol), 0, PMODE_ULTRA },
+        { offsetof(settings_t, pwm_preset), 0, PWM_PRESET_COUNT - 1u },
+        { offsetof(settings_t, dither_mode), 0, 2 },
+        { offsetof(settings_t, dither_thresh), 1, 255 },
+        { offsetof(settings_t, feedback_ch), 0, 2 },
+        { offsetof(settings_t, stagger), 0, STAGGER_MODES - 1u },
+        { offsetof(settings_t, dim_floor), 0, 2 },
+        { offsetof(settings_t, min_pulse), 5, 100 },
+        { offsetof(settings_t, signal_loss), 0, 2 },
+        { offsetof(settings_t, smoothing), 0, 2 },
+        { offsetof(settings_t, gamma), 0, 2 },
+        { offsetof(settings_t, last_proto), 0, PROTO_ULTRA },
+    };
+    settings_t d;
+    uint32_t i;
+    int fixed = 0;
+    settings_default(&d);
+    for (i = 0; i < 12u; i++) {
+        uint8_t *f = (uint8_t *)s + lim[i][0];
+        if ((*f < lim[i][1] || *f > lim[i][2]) && !(i == 1u && *f == 0xFFu)) {
+            *f = ((const uint8_t *)&d)[lim[i][0]];
+            fixed = 1;
+        }
+    }
+    if (s->raw_steps < PWM_STEPS_MIN || s->raw_steps > PWM_STEPS_MAX) {
+        s->raw_steps = d.raw_steps;
+        fixed = 1;
+    }
+    return fixed;
 }
 
 uint32_t settings_steps(const settings_t *s)

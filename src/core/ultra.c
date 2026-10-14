@@ -125,6 +125,51 @@ static uint32_t sin16(uint32_t q)         /* sin(pi/2 * q / 65536) for q 0..6553
     return ultra_sin_tab[idx] + (((uint32_t)(ultra_sin_tab[idx + 1] - ultra_sin_tab[idx]) * r) >> 10);
 }
 
+/* ultra_vals_t copy / compare: on GCC as its six words (4-byte aligned, ULTRA_ALIGN4). A struct copy at -Os is a
+ * memcpy call (67 cycles against ~20 here). */
+#if defined(__GNUC__)
+typedef uint32_t __attribute__((may_alias)) vals_word_t;
+typedef char vals_six_words[sizeof(ultra_vals_t) == 24u ? 1 : -1];
+static NOINLINE void vals_cpy(ultra_vals_t *d, const ultra_vals_t *s)
+{
+    vals_word_t *dw = (vals_word_t *)d;
+    const vals_word_t *sw = (const vals_word_t *)s;
+    uint32_t a = sw[0], b = sw[1], c = sw[2];
+    dw[0] = a;
+    dw[1] = b;
+    dw[2] = c;
+    a = sw[3];
+    b = sw[4];
+    c = sw[5];
+    dw[3] = a;
+    dw[4] = b;
+    dw[5] = c;
+}
+
+static int vals_eq(const ultra_vals_t *x, const ultra_vals_t *y)   /* the 22 bytes of values (little endian) */
+{
+    const vals_word_t *a = (const vals_word_t *)x, *b = (const vals_word_t *)y;
+    return ((a[0] ^ b[0]) | (a[1] ^ b[1]) | (a[2] ^ b[2]) | (a[3] ^ b[3]) | (a[4] ^ b[4]) |
+            ((a[5] ^ b[5]) & 0xFFFFu)) == 0u;
+}
+#else
+static void vals_cpy(ultra_vals_t *d, const ultra_vals_t *s)
+{
+    *d = *s;
+}
+
+static int vals_eq(const ultra_vals_t *x, const ultra_vals_t *y)
+{
+    uint32_t i;
+    for (i = 0; i < 5u; i++) {
+        if (x->a[i] != y->a[i] || x->b[i] != y->b[i]) {
+            return 0;
+        }
+    }
+    return x->m == y->m;
+}
+#endif
+
 /* ================================================================================================ clock */
 /* Before the first header the engine runs on its own clock (the power-on effect without a controller): the same line
  * from ref (tick 0, time 0 at the init) at the nominal rate. ultra_clock_tend moves ref along, so the time stays
@@ -149,9 +194,21 @@ void ultra_clock_tend(ultra_t *u, uint32_t tick)
     }
 }
 
+/* host us / 1000 as 32 bits: one 32-bit division while the host time fits (its first 71.6 min), then the long
+ * division by 1000 in three 16-bit digits (each partial dividend < 1000 x 2^16; the top digit's quotient is a multiple
+ * of 2^32 and drops out), instead of the 64 / 32 division */
 static uint32_t host_ms(const ultra_t *u, uint32_t tick)
 {
-    return (uint32_t)(ultra_host_us(u, tick) / 1000u);
+    uint64_t us = ultra_host_us(u, tick);
+    uint32_t hi = (uint32_t)(us >> 32), lo = (uint32_t)us, r, q;
+    if (hi == 0u) {
+        return lo / 1000u;
+    }
+    r = hi % 1000u;
+    r = (r << 16) | (lo >> 16);
+    q = r / 1000u;
+    r = ((r - q * 1000u) << 16) | (lo & 0xFFFFu);
+    return (q << 16) + r / 1000u;
 }
 
 /* the host clock jumped (first header, host reboot): keep every running ramp / effect where it is */
@@ -248,10 +305,14 @@ static void ramp_eval(const ultra_ramp_t *r, uint32_t now, ultra_vals_t *o)
     int32_t el = (int32_t)(now - r->t0);
     uint32_t p, s, i;
     if (el < 0) {
-        *o = r->from;
+        vals_cpy(o, &r->from);
         return;
     }
     p = r->dur ? frac16((uint32_t)el, r->dur) : 65536u;
+    if (p == 65536u) {                                   /* done (a settled light): exactly `to`, as lerp16 at 1 */
+        vals_cpy(o, &r->to);
+        return;
+    }
     if (!r->via_off) {
         s = r->smooth ? ultra_smoothstep(p) : p;
         o->m = lerp16(r->from.m, r->to.m, s);
@@ -263,11 +324,11 @@ static void ramp_eval(const ultra_ramp_t *r, uint32_t now, ultra_vals_t *o)
     }
     if (p < 32768u) {                                    /* first half: old values down to 0 */
         s = r->smooth ? ultra_smoothstep(p * 2u) : p * 2u;
-        *o = r->from;
+        vals_cpy(o, &r->from);
         o->m = lerp16(r->from.m, 0, s);
     } else {                                             /* second half: new values up from 0 */
         s = r->smooth ? ultra_smoothstep(p * 2u - 65536u) : p * 2u - 65536u;
-        *o = r->to;
+        vals_cpy(o, &r->to);
         o->m = lerp16(0, r->to.m, s);
     }
 }
@@ -277,16 +338,22 @@ static void base_at(const ultra_light_t *L, uint32_t now, ultra_vals_t *o)
     ramp_eval((int32_t)(now - L->cur.t0) < 0 ? &L->prev : &L->cur, now, o);
 }
 
-/* a finished ramp becomes a constant at `now`, so its start time never ages past the int32 range */
+/* a finished ramp becomes a constant at `now`, so its start time never ages past the int32 range. Once settled (every
+ * render after that, until a writer of cur / prev clears `settled`), only the times move: the copies would not change
+ * anything else. */
 static void settle(ultra_light_t *L, uint32_t now)
 {
     int32_t el = (int32_t)(now - L->cur.t0);
     if (el >= 0 && (uint32_t)el >= L->cur.dur) {
-        L->cur.from = L->cur.to;
-        L->cur.dur = 0;
-        L->cur.via_off = 0;
+        if (!L->settled) {
+            vals_cpy(&L->cur.from, &L->cur.to);
+            L->cur.dur = 0;
+            L->cur.via_off = 0;
+            L->prev = L->cur;
+            L->settled = 1;
+        }
         L->cur.t0 = now;
-        L->prev = L->cur;
+        L->prev.t0 = now;
     }
 }
 
@@ -294,22 +361,41 @@ static void start_ramp(ultra_light_t *L, const ultra_vals_t *to, uint32_t t0, ui
 {
     ultra_vals_t from;
     uint32_t i;
+    L->settled = 0;
     base_at(L, t0, &from);
+    if ((int32_t)(t0 - L->cur.t0) >= 0) {
+        L->prev = L->cur;
+    }
+    L->cur.to = *to;
     if (from.m == 0u) {                                  /* dark: colors jump (ESPHome off -> on) */
         for (i = 0; i < 5u; i++) {
             from.a[i] = to->a[i];
             from.b[i] = to->b[i];
         }
-    }
-    if ((int32_t)(t0 - L->cur.t0) >= 0) {
-        L->prev = L->cur;
+    } else if (to->m == 0u) {                            /* on -> off: only M falls, the colours stay (ESPHome) */
+        for (i = 0; i < 5u; i++) {
+            L->cur.to.a[i] = from.a[i];
+            L->cur.to.b[i] = from.b[i];
+        }
     }
     L->cur.from = from;
-    L->cur.to = *to;
     L->cur.t0 = t0;
     L->cur.dur = dur;
     L->cur.smooth = (uint8_t)((flags & ULTRA_SET_SMOOTH) != 0u);
     L->cur.via_off = (uint8_t)((flags & ULTRA_SET_VIA_OFF) != 0u && from.m != 0u);
+}
+
+uint32_t ultra_rising(const ultra_t *u, uint32_t tick)
+{
+    uint32_t i, now = host_ms(u, tick);
+    for (i = 0; i < ULTRA_LIGHTS; i++) {
+        const ultra_light_t *L = &u->light[i];
+        int32_t el = (int32_t)(now - L->cur.t0);
+        if (L->defined && (el < 0 || (uint32_t)el < L->cur.dur) && L->cur.to.m > L->last.m) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void ultra_all_off(ultra_t *u, uint32_t tick, uint32_t dur_ms)
@@ -321,11 +407,23 @@ void ultra_all_off(ultra_t *u, uint32_t tick, uint32_t dur_ms)
         if (!L->defined) {
             continue;
         }
+        if (L->fx != ULTRA_FX_NONE) {
+            /* an effect runs: the fade starts from what it shows, M and colours (0.6.3 started from the state
+             * under it: a breathe at 20 % jumped to 100 %, a colour loop to the state's colour) */
+            L->cur.from = L->cur.to = L->last;
+            L->cur.t0 = now;
+            L->cur.dur = 0;
+            L->cur.via_off = 0;
+            L->prev = L->cur;
+        }
         base_at(L, now, &to);
         to.m = 0;
         L->fx = ULTRA_FX_NONE;
         L->pend = 0;
         start_ramp(L, &to, now, dur_ms, ULTRA_SET_SMOOTH);
+        /* the host's state and effect are gone: its unchanged refresh (same SEQ) must apply again. Only SET and
+         * EFFECT: IDENTIFY (a calibration), LIGHT_DEF and CONFIG stay deduplicated (0.6.4) */
+        u->last_seq[i][ULTRA_SET] = u->last_seq[i][ULTRA_EFFECT] = 0x100u;
     }
 }
 
@@ -441,6 +539,7 @@ MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
         return 0;
     }
     L = &u->light[light];
+    L->out_ok = 0;                                       /* (its head may change: the render cache) */
     switch (type) {
     case ULTRA_LIGHT_OPT:
         L->opt_flags = (uint8_t)(p[0] & ULTRA_OPT_FLAGS);   /* unknown bits: ignored */
@@ -460,13 +559,16 @@ MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
             L->scene_v.b[i] = (uint16_t)ultra_get16(p + 14 + 2 * i);
         }
         return ULTRA_EV_SCENE;
-    case ULTRA_SCENE_EFFECT:                             /* the power-on effect (main.c stores it) */
+    case ULTRA_SCENE_EFFECT: {                           /* the power-on effect (main.c stores it) */
+        uint32_t n;
         L->scene_fx_have = 1;
         L->scene_fx = p[0] < ULTRA_FX_COUNT ? p[0] : ULTRA_FX_NONE;
+        n = ultra_fx_param_bytes(L->scene_fx);
         for (i = 0; i < ULTRA_SCENE_FX_PARAMS; i++) {
-            L->scene_fxp[i] = p[1 + i];
+            L->scene_fxp[i] = i < n ? p[1 + i] : 0u;      /* the spare bytes: ignored (the stored head is the same) */
         }
         return ULTRA_EV_SCENE;
+    }
     case ULTRA_LIGHT_DEF:
         L->defined = 1;
         L->mask = 0;
@@ -494,16 +596,19 @@ MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
         start_ramp(L, &to, u->frame_ms + (uint32_t)(int32_t)(int16_t)ultra_get16(p + 25), ultra_get24(p + 22), flags);
         return ULTRA_EV_LIGHT | ULTRA_EV_STATE;
     }
-    case ULTRA_EFFECT:                                   /* switches at its start time (light_values) */
+    case ULTRA_EFFECT: {                                 /* switches at its start time (light_values) */
+        uint32_t n;
         L->scene_run = 0;                                /* the host's effect replaces the power-on one */
         L->pend = 1;
         L->pend_fx = p[0] < ULTRA_FX_COUNT ? p[0] : ULTRA_FX_NONE;
         L->pend_seq = seq;
         L->pend_t0 = u->frame_ms + ultra_get32(p + 1);
+        n = ultra_fx_param_bytes(L->pend_fx);
         for (i = 0; i < ULTRA_FX_PARAMS; i++) {
-            L->pend_p[i] = p[5 + i];
+            L->pend_p[i] = i < n ? p[5 + i] : 0u;         /* the spare bytes: ignored (the state is the same) */
         }
         return ULTRA_EV_LIGHT | ULTRA_EV_STATE;
+    }
     default:
         break;
     }
@@ -603,7 +708,7 @@ static void fx_pulse(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b
             from = lerp16(from2, from, ultra_smoothstep(frac16(iv, prev_len)));
         }
     }
-    *o = *b;
+    vals_cpy(o, b);
     o->m = lerp16(from, pulse_target(L, k), len ? ultra_smoothstep(frac16(t, len)) : 65536u);
 }
 
@@ -612,7 +717,7 @@ static void fx_strobe(const ultra_light_t *L, uint32_t now, const ultra_vals_t *
     uint32_t c = L->step_count, cycle = strobe_cycle(L), el, i, j, start = 0, s;
     const ultra_step_t *st, *pv;
     if (cycle == 0u) {
-        *o = *b;
+        vals_cpy(o, b);
         return;
     }
     el = (now - L->fx_t0) % cycle;
@@ -633,6 +738,13 @@ static void fx_strobe(const ultra_light_t *L, uint32_t now, const ultra_vals_t *
     }
 }
 
+/* Exact x / 65535 for x <= 65535 * 65535. The complementary weights
+ * below sum to 65535, so their weighted sum always satisfies this bound. */
+static uint32_t blend_div65535(uint32_t x)
+{
+    return (x + 1u + (x >> 16)) >> 16;
+}
+
 /* ESPHome flicker: out = remote x (1 - alpha) + current x alpha + random_cubic x intensity, per interval */
 static void fx_flicker(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *o)
 {
@@ -646,13 +758,13 @@ static void fx_flicker(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ul
         L->fx_next = now;                                /* far behind (start / pause): no catch-up burst */
     }
     while ((int32_t)(now - L->fx_next) >= 0 && n++ < 64u) {
-        c->m = clamp16((int32_t)((b->m * beta + c->m * alpha) / 65535u) + rnd_cubic(L, inten));
+        c->m = clamp16((int32_t)(blend_div65535(b->m * beta + c->m * alpha)) + rnd_cubic(L, inten));
         for (i = 0; i < 5u; i++) {
-            c->a[i] = clamp16((int32_t)((b->a[i] * beta + c->a[i] * alpha) / 65535u) + rnd_cubic(L, inten));
+            c->a[i] = clamp16((int32_t)(blend_div65535(b->a[i] * beta + c->a[i] * alpha)) + rnd_cubic(L, inten));
         }
         L->fx_next += iv;
     }
-    *o = *c;
+    vals_cpy(o, c);
     for (i = 0; i < 5u; i++) {
         o->b[i] = b->b[i];
     }
@@ -716,7 +828,7 @@ static void fx_candle(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ult
         L->fx_next = now + (20u + (rnd16(L) & 31u)) * 100u / speed;
     }
     L->candle_f += (uint32_t)((int32_t)(L->candle_t - L->candle_f) / 16);
-    *o = *b;
+    vals_cpy(o, b);
     o->m = (uint16_t)((b->m * (L->candle_f > 65536u ? 65536u : L->candle_f)) >> 16);
 }
 
@@ -730,7 +842,7 @@ uint32_t ultra_breathe(uint32_t ph)
 static void fx_breathe(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *o)
 {
     uint32_t per = fx_period(L), mn = ultra_get16(L->fxp + 3), mx = ultra_get16(L->fxp + 5);
-    *o = *b;
+    vals_cpy(o, b);
     o->m = lerp16(mn, mx, ultra_breathe(frac16((now - L->fx_t0) % per, per)));
 }
 
@@ -751,7 +863,7 @@ static void fx_color_loop(const ultra_light_t *L, uint32_t now, const ultra_vals
     case 4: rgb[0] = t; rgb[1] = pv; rgb[2] = 65535u; break;
     default: rgb[0] = 65535u; rgb[1] = pv; rgb[2] = q; break;
     }
-    *o = *b;
+    vals_cpy(o, b);
     for (i = 0; i < 5u; i++) {
         if (is_rgb(L->role[i])) {
             o->a[i] = (uint16_t)rgb[L->role[i] - ULTRA_ROLE_RED];
@@ -776,7 +888,7 @@ static int fx_sun(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b, u
     }
     p = frac16(el, d);
     w = rise ? p : 65536u - p;                           /* weight of the light's own state */
-    *o = *b;
+    vals_cpy(o, b);
     o->m = (uint16_t)((b->m * (uint32_t)(((uint64_t)w * w) >> 16)) >> 16);   /* eases in / out (quadratic) */
     for (i = 0; i < 5u; i++) {
         uint8_t r = L->role[i];
@@ -824,6 +936,7 @@ static void light_values(ultra_light_t *L, uint32_t now, ultra_vals_t *v)
         if (L->fx != ULTRA_FX_NONE && L->cur.dur != 0u && d >= -2 && d <= 2) {
             /* a transition that starts as the effect ends (turning off during an effect) starts from what the
              * effect showed, like ESPHome's; the host's two commands may land up to 1 ms apart */
+            L->settled = 0;
             L->cur.from = L->last;
             L->prev.from = L->prev.to = L->last;
             L->prev.t0 = now;
@@ -834,12 +947,17 @@ static void light_values(ultra_light_t *L, uint32_t now, ultra_vals_t *v)
         fx_activate(L, now);
     }
     if (L->fx == ULTRA_FX_NONE) {
-        *v = b;
-        L->last = b;
+        vals_cpy(v, &b);
         return;
     }
     el = now - L->fx_t0;
-    if (el >= FX_REBASE_MS && (per = fx_period(L)) != 0u) {
+    if ((int32_t)el < 0) {
+        /* (0.6.4) the host's clock stepped back by a few ms right after the effect started (the header's phase
+         * correction): hold the effect at its start. 0.6.3 took the wrapped difference for 12 days and rebased: a
+         * lasting phase jump (claude-bugs, gpt-verify vclockback). Within the int32 range: the rebase below keeps
+         * el under 2^31 while the effect runs */
+        now = L->fx_t0;
+    } else if (el >= FX_REBASE_MS && (per = fx_period(L)) != 0u) {
         L->fx_t0 += el - el % per;
         L->fx_k = 1;
     }
@@ -859,6 +977,7 @@ static void light_values(ultra_light_t *L, uint32_t now, ultra_vals_t *v)
     case ULTRA_FX_SUNSET:
         if (fx_sun(L, now, &b, v, 0)) {
             L->fx = ULTRA_FX_NONE;                       /* done: stays off until the next SET */
+            L->settled = 0;
             L->cur.from = L->cur.to = b;
             L->cur.from.m = L->cur.to.m = 0;
             L->cur.t0 = now;
@@ -872,7 +991,6 @@ static void light_values(ultra_light_t *L, uint32_t now, ultra_vals_t *v)
     if (b.m == 0u) {
         v->m = 0;                                        /* a light that is off stays off */
     }
-    L->last = *v;
 }
 
 static uint32_t g16(const ultra_light_t *L, uint32_t v16)
@@ -918,7 +1036,7 @@ static void dim_to_warm(const ultra_light_t *L, uint32_t m, uint32_t cw_ch, uint
     cw_q = (uint64_t)cwm << 16;
     ww_q = (uint64_t)wwm << 16;
     warm_q = (uint64_t)warm << 16;
-    top_q = cw_q + (uint64_t)(wwm - cwm) * (((uint64_t)gww << 16) / sum);   /* the light's own temperature */
+    top_q = cw_q + (uint64_t)(wwm - cwm) * (((uint32_t)gww << 16) / sum);   /* the light's own temperature */
     tgt_q = top_q;
     if (L->opt_flags & ULTRA_OPT_POINTS) {
         uint64_t pq = dtw_points(L, m, top_q);
@@ -926,23 +1044,29 @@ static void dim_to_warm(const ultra_light_t *L, uint32_t m, uint32_t cw_ch, uint
             tgt_q = pq;                                  /* never colder than the light's own temperature */
         }
     } else if (warm_q > top_q) {
-        tgt_q += (warm_q - top_q) * (65535u - m) / 65535u;                  /* linear in mireds, M 1 -> 0 */
+        /* + (warm_q - top_q) x (65535 - m) / 65535, linear in mireds, M 1 -> 0. The difference d is below 2^32
+         * (warm_q < 2^32); with d = a x 65535 + b the product over 65535 is a x w + b x w / 65535 exactly, each in
+         * 32 bits (a <= 65536, b < 65535, w <= 65535): no 64-bit division */
+        uint32_t d = (uint32_t)(warm_q - top_q), w = 65535u - m, a = d / 65535u, b = d - a * 65535u;
+        tgt_q += a * w + (b * w) / 65535u;
     }
+    /* the dividends below fit 32 bits: tgt_q - cw_q <= (wwm - cwm) << 16 and tgt_q - ww_q <= (warm - wwm) << 16
+     * (cw_q <= top_q <= tgt_q <= warm_q), scale <= 65535 and fc, fw <= 65536 */
     if (tgt_q <= ww_q) {
-        fw = (uint32_t)((tgt_q - cw_q) / (wwm - cwm));  /* WW share, Q16 */
+        fw = (uint32_t)(tgt_q - cw_q) / (wwm - cwm);    /* WW share, Q16 */
     } else {
         fw = 65536u;                                     /* warmer than the WW LED: all WW, red assist */
-        t = (uint32_t)((tgt_q - ww_q) / (warm - wwm));
+        t = (uint32_t)(tgt_q - ww_q) / (warm - wwm);
     }
     fc = 65536u - fw;
-    scale = (uint32_t)(((uint64_t)g16(L, m) * mx + 32767u) / 65535u);   /* g(M) x max(gcw, gww) */
+    scale = (g16(L, m) * mx + 32767u) / 65535u;          /* g(M) x max(gcw, gww) */
     if (L->flags & ULTRA_DEF_CONSTANT_BRIGHTNESS) {
-        y[cw_ch] = (uint32_t)(((uint64_t)scale * fc + 32768u) >> 16);   /* CW + WW = g(M) x max */
-        y[ww_ch] = (uint32_t)(((uint64_t)scale * fw + 32768u) >> 16);
+        y[cw_ch] = (scale * fc + 32768u) >> 16;          /* CW + WW = g(M) x max */
+        y[ww_ch] = (scale * fw + 32768u) >> 16;
     } else {
         uint32_t fmax = fw > fc ? fw : fc;               /* the brighter channel stays at g(M) x max */
-        y[cw_ch] = (uint32_t)(((uint64_t)scale * fc + fmax / 2u) / fmax);
-        y[ww_ch] = (uint32_t)(((uint64_t)scale * fw + fmax / 2u) / fmax);
+        y[cw_ch] = (scale * fc + fmax / 2u) / fmax;
+        y[ww_ch] = (scale * fw + fmax / 2u) / fmax;
     }
     on[cw_ch] = (uint8_t)(scale != 0u && fc != 0u);
     on[ww_ch] = (uint8_t)(scale != 0u && fw != 0u);
@@ -955,7 +1079,7 @@ static void dim_to_warm(const ultra_light_t *L, uint32_t m, uint32_t cw_ch, uint
         if (is_rgb(L->role[ch]) && on[ch]) rgb_on = 1;
     }
     if (r_ch < 5u && !rgb_on) {                          /* red assist: only while the light's RGB part is off */
-        uint32_t r = (uint32_t)(((((uint64_t)y[ww_ch] * t) >> 16) * L->opt_assist + 32767u) / 65535u);
+        uint32_t r = (((y[ww_ch] * t) >> 16) * L->opt_assist + 32767u) / 65535u;   /* (y, t <= 65536: fits) */
         y[r_ch] = r;
         on[r_ch] = (uint8_t)(r != 0u);
         if (g_ch < 5u) {
@@ -968,14 +1092,14 @@ static void dim_to_warm(const ultra_light_t *L, uint32_t m, uint32_t cw_ch, uint
 /* outputs of one light's channels (res[ch] for the channels with a role) for values v */
 static void light_out(const ultra_light_t *L, const ultra_vals_t *vp, uint32_t *res)
 {
-    const ultra_vals_t v = *vp;
+    const ultra_vals_t *v = vp;
     const uint32_t cb = (L->flags & ULTRA_DEF_CONSTANT_BRIGHTNESS) != 0u, dtw = (L->opt_flags & ULTRA_OPT_DIM_TO_WARM) != 0u;
     uint32_t gcw = 0, gww = 0, cw_ch = 5, ww_ch = 5, ch, y[5];
     uint8_t on[5];
     if (cb || dtw) {
         for (ch = 0; ch < 5u; ch++) {
-            if (L->role[ch] == ULTRA_ROLE_COLD_WHITE) { cw_ch = ch; gcw = ultra_gamma(q32_of(v.a[ch], v.b[ch]), L->g_q16); }
-            if (L->role[ch] == ULTRA_ROLE_WARM_WHITE) { ww_ch = ch; gww = ultra_gamma(q32_of(v.a[ch], v.b[ch]), L->g_q16); }
+            if (L->role[ch] == ULTRA_ROLE_COLD_WHITE) { cw_ch = ch; gcw = ultra_gamma(q32_of(v->a[ch], v->b[ch]), L->g_q16); }
+            if (L->role[ch] == ULTRA_ROLE_WARM_WHITE) { ww_ch = ch; gww = ultra_gamma(q32_of(v->a[ch], v->b[ch]), L->g_q16); }
         }
     }
     for (ch = 0; ch < 5u; ch++) {
@@ -986,18 +1110,19 @@ static void light_out(const ultra_light_t *L, const ultra_vals_t *vp, uint32_t *
             continue;
         }
         if (cb && (ch == cw_ch || ch == ww_ch)) {
-            /* ESPHome constant_brightness: g(M) x max(gcw, gww) x g(this) / (gcw + gww) */
+            /* ESPHome constant_brightness: g(M) x max(gcw, gww) x g(this) / (gcw + gww); every factor and partial
+             * product is at most 65535 x 65535 (mine <= sum): 32 bits */
             uint32_t sum = gcw + gww, mxg = gcw > gww ? gcw : gww, mine = ch == cw_ch ? gcw : gww;
-            y[ch] = sum ? (uint32_t)((uint64_t)g16(L, v.m) * mxg / 65535u * mine / sum) : 0u;
-            x = (uint32_t)v.m * mine;
+            y[ch] = sum ? (g16(L, v->m) * mxg / 65535u) * mine / sum : 0u;
+            x = (uint32_t)v->m * mine;
         } else {
-            x = L->role[ch] == ULTRA_ROLE_BRIGHTNESS ? q32_of(v.m, 65535u) : q32_of3(v.m, v.a[ch], v.b[ch]);
+            x = L->role[ch] == ULTRA_ROLE_BRIGHTNESS ? q32_of(v->m, 65535u) : q32_of3(v->m, v->a[ch], v->b[ch]);
             y[ch] = ultra_gamma(x, L->g_q16);
         }
         on[ch] = (uint8_t)(x != 0u);
     }
     if (dtw && cw_ch < 5u && ww_ch < 5u) {
-        dim_to_warm(L, v.m, cw_ch, ww_ch, gcw, gww, y, on);
+        dim_to_warm(L, v->m, cw_ch, ww_ch, gcw, gww, y, on);
     }
     for (ch = 0; ch < 5u; ch++) {
         uint32_t yc = y[ch];
@@ -1008,8 +1133,10 @@ static void light_out(const ultra_light_t *L, const ultra_vals_t *vp, uint32_t *
             yc = 1;                                      /* on stays on (like ESPHome's gamma table) */
         }
         if (yc != 0u || !(L->flags & ULTRA_DEF_ZERO_MEANS_ZERO)) {
+            /* min / max power: yc <= 65535 here (the gamma, the constant-brightness share, dim to warm's values and
+             * the red assist all are), so yc x (mx - mn) + 32767 fits 32 bits: a division by a constant, no 64-bit one */
             uint32_t mn = L->min_p[ch], mx = L->max_p[ch];
-            yc = mn + (uint32_t)(((uint64_t)yc * (mx >= mn ? mx - mn : 0u) + 32767u) / 65535u);
+            yc = mn + (yc * (mx >= mn ? mx - mn : 0u) + 32767u) / 65535u;
         }
         res[ch] = yc > 65535u ? 65535u : yc;
     }
@@ -1036,17 +1163,35 @@ static uint8_t power_limit(const ultra_t *u, uint32_t *res)
 
 MEASURED uint8_t ultra_render(ultra_t *u, uint32_t tick, uint16_t *out)
 {
-    uint32_t now = host_ms(u, tick), res[5] = { 0, 0, 0, 0, 0 }, l, ch;
+    uint32_t now = host_ms(u, tick), res[5] = { 0, 0, 0, 0, 0 }, l, ch, act = 0;
     uint8_t changed = 0;
 
-    for (l = 0; l < ULTRA_LIGHTS; l++) {
+    for (l = 0; l < ULTRA_LIGHTS; l++) {                 /* the lights to render (defined, or the power-on effect) */
+        if (u->light[l].defined | u->light[l].scene_run) {
+            act |= 1u << l;
+        }
+    }
+    for (l = 0; act != 0u; l++, act >>= 1) {
         ultra_light_t *L = &u->light[l];
         ultra_vals_t v;
-        if (!L->defined && !L->scene_run) {
+        if (!(act & 1u)) {
             continue;
         }
         light_values(L, now, &v);
-        light_out(L, &v, res);
+        if (!L->out_ok || !vals_eq(&v, &L->last)) {
+            vals_cpy(&L->last, &v);
+            light_out(L, &v, res);
+            for (ch = 0; ch < 5u; ch++) {
+                L->out_y[ch] = (uint16_t)res[ch];        /* (the light's channels: <= 65535) */
+            }
+            L->out_ok = 1;
+        } else {
+            for (ch = 0; ch < 5u; ch++) {
+                if (L->mask & (1u << ch)) {
+                    res[ch] = L->out_y[ch];              /* the same values as last time: the same outputs */
+                }
+            }
+        }
     }
     u->ch_limited = power_limit(u, res);
 

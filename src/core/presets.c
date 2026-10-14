@@ -3,7 +3,7 @@
 #include "presets.h"
 
 /* index = config ARG. Below 20 kHz: half-bit boundaries; from 20 kHz: round values plus the 12 / 11-bit points. */
-const uint32_t pwm_preset_steps[PWM_PRESET_COUNT] = {
+const uint16_t pwm_preset_steps[PWM_PRESET_COUNT] = {
     65535,  /*  0   2.197 kHz  16.0 bit (65535: 16-bit input maps 1:1, CCR 65535 = 100 %) */
     46341,  /*  1   3.107 kHz  15.5 bit */
     32768,  /*  2   4.395 kHz  15.0 bit */

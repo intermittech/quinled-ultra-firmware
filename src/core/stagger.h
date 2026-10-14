@@ -59,7 +59,8 @@ void stagger_spread_arr(uint32_t steps, uint32_t len, uint16_t *arr);
 uint16_t stagger_gap_q16(uint32_t steps);
 
 /* Phase slew, called once per PWM period of TIM2 / TIM3 (at its update): its wrap is `cur` counts after TIM1's
- * and should be `tgt`; `pending` = length change already written for the period in progress. Returns the length
+ * and should be `tgt` (both offsets within the period: 0..steps-1); `pending` = length change already written for
+ * the period in progress. Returns the length
  * change for the next period (-max_step..max_step); 0 with pending 0 = arrived. allow_longer = 0 when the period
  * cannot be made longer (2.197 kHz: ARR is already 65534), then it only shortens periods, going the long way. */
 int32_t stagger_slew(uint32_t cur, uint32_t tgt, int32_t pending, uint32_t steps, uint32_t max_step,

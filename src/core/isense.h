@@ -91,6 +91,7 @@ typedef struct {
     /* ---- measurement ---- */
     int32_t  i_ms;                    /* last ms: board current, mA (incl. zero) */
     int32_t  i_avg;                   /* ~100 ms average, mA (status / host) */
+    int32_t  i_acc;                   /* ... as it is filtered: i_avg x 64 (6 fraction bits), so it settles on i_ms */
     int32_t  zero_ma;                 /* logic current + amplifier offset, mA */
     uint8_t  zero_valid;
     uint16_t peak_ma;                 /* highest sample of the last ms, mA */
@@ -126,7 +127,7 @@ typedef struct {
     uint8_t  cal_levels;              /* ISENSE_LEVELS (the standard test) or 1 (one level at cal_duty) */
     uint16_t cal_t;                   /* ms in the step */
     uint16_t cal_duty;                /* single level: Q16 */
-    int64_t  cal_sum;
+    int32_t  cal_sum;                 /* <= 30 ms of i_ms (< 2^21 mA even at a gain of 1): 32 bits (fable-flash) */
     uint32_t cal_n;
     int32_t  cal_res[ISENSE_CAL_STEPS_MAX];   /* zero, then each step, mA */
     int16_t  cal_zero;                /* the last test (the stored calibration), mA */
@@ -135,7 +136,7 @@ typedef struct {
     uint8_t  cal_pct1;                /* single level: its duty, % */
 
     /* ---- regression / zero windows ---- */
-    int64_t  win_i;                   /* sum of i_ms over the window */
+    int32_t  win_i;                   /* sum of i_ms over the window (16 ms: < 2^21 mA; fable-flash) */
     uint32_t win_d[ISENSE_CH];        /* sum of the applied duties (Q16) over the window */
     uint8_t  win_n;
     uint8_t  win_dark;                /* every ms of the window had all outputs at 0 */

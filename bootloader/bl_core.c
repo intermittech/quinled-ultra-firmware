@@ -92,6 +92,20 @@ void bl_ho_seal(upd_handover_t *ho)
 }
 
 /* ------------------------------------------------------------------------------------------------ boot decision */
+uint32_t bl_reset_kind(uint32_t f)
+{
+    if (f & (BL_RCC_IWDGRSTF | BL_RCC_WWDGRSTF)) {
+        return BL_RST_WATCHDOG;
+    }
+    if (f & BL_RCC_SFTRSTF) {
+        return BL_RST_SOFT;                                   /* also when PINRSTF came with it */
+    }
+    if (f & (BL_RCC_PORRSTF | BL_RCC_PINRSTF | BL_RCC_LPWRRSTF)) {
+        return BL_RST_POWER;
+    }
+    return BL_RST_SOFT;                                       /* no flag: they were taken already */
+}
+
 bl_action_t bl_decide(const bl_app_t *a, upd_handover_t *ho, uint32_t reset, uint32_t rcc_flags)
 {
     uint32_t req;
@@ -109,9 +123,14 @@ bl_action_t bl_decide(const bl_app_t *a, upd_handover_t *ho, uint32_t reset, uin
         act = BL_ACT_SESSION;
     } else if (!a->desc_ok || ho->wd_resets >= BL_WD_LIMIT) {
         act = BL_ACT_RECOVERY;
+    } else if (req == UPD_REQ_BOOT_ONCE) {
+        act = BL_ACT_JUMP;                                    /* set by this bootloader in this RAM-continuous run,
+                                                                 after the body passed its CRC (the VERIFIED record
+                                                                 may be missing: VDD was low), a trial window or a
+                                                                 skipped session; power-on wipes it */
     } else if (!a->verified) {
         act = BL_ACT_VERIFY;
-    } else if (req == UPD_REQ_BOOT_ONCE || a->confirmed) {
+    } else if (a->confirmed) {
         act = BL_ACT_JUMP;
     } else {
         act = BL_ACT_TRIAL;
@@ -264,6 +283,10 @@ static void evaluate(bl_sess_t *s)
     /* the session id changes only with an accept (accept() sets it after the erase) or a skip: if accept() can't
      * erase now (VDD low), a running session keeps its id and the new session's chunks are not mixed into it */
     if (rc != 0) {
+        if (s->state == BL_S_RECEIVE) {
+            return;                                           /* an image for other hardware while ours streams in:
+                                                                 not ours to answer, no reason to drop the install */
+        }
         s->skip_result = UPD_RES_REJECTED;
     } else if (s->app.desc_ok && v == s->app.version && !s->force) {
         s->skip_result = UPD_RES_SAME;

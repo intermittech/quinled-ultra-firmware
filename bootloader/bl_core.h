@@ -63,6 +63,20 @@ void bl_app_read(bl_app_t *a);
 
 /* ------------------------------------------------------------------------------------------------ boot decision */
 enum { BL_RST_POWER = 1, BL_RST_WATCHDOG = 2, BL_RST_SOFT = 3 };
+/* RCC->RSTSCKR flags (= RCC_*RSTF of ch32v20x.h; bl_main.c checks that they match) */
+#define BL_RCC_PINRSTF       0x04000000u
+#define BL_RCC_PORRSTF       0x08000000u
+#define BL_RCC_SFTRSTF       0x10000000u
+#define BL_RCC_IWDGRSTF      0x20000000u
+#define BL_RCC_WWDGRSTF      0x40000000u
+#define BL_RCC_LPWRRSTF      0x80000000u
+#define BL_RESET_KIND_API    1
+/* BL_RST_* of this reset from the RSTSCKR flags. The specific flags decide first: an internal reset (software,
+ * watchdog) can raise PINRSTF as well, because the reset structure drives the NRST line (so on the STM32F1 this RCC
+ * mirrors; the QFN20 has no NRST pin, so PINRSTF can only come from inside). A power-on classification wipes the
+ * hand-over block, so a software reset must never be taken for one: the app's UPD_REQ_ENTER and the bootloader's
+ * own UPD_REQ_BOOT_ONCE would be lost at every reset. PINRSTF alone still counts as power-like. */
+uint32_t bl_reset_kind(uint32_t rcc_flags);
 typedef enum {
     BL_ACT_JUMP = 0,           /* start the app now (no clock or peripheral touched) */
     BL_ACT_VERIFY,             /* check the body CRC after a commit, then decide again */

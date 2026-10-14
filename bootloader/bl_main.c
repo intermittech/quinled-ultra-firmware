@@ -29,6 +29,11 @@ static bl_sess_t sess __attribute__((section(".noinit")));
 static bl_rx_t rx __attribute__((section(".noinit")));
 static bl_frame_t frame __attribute__((section(".noinit")));
 
+/* bl_reset_kind (bl_core.c, host-tested) reads the RSTSCKR flags by its own names: they must be the chip's */
+typedef char bl_rcc_flags_match[(BL_RCC_PINRSTF == RCC_PINRSTF && BL_RCC_PORRSTF == RCC_PORRSTF &&
+                                 BL_RCC_SFTRSTF == RCC_SFTRSTF && BL_RCC_IWDGRSTF == RCC_IWDGRSTF &&
+                                 BL_RCC_WWDGRSTF == RCC_WWDGRSTF && BL_RCC_LPWRRSTF == RCC_LPWRRSTF) ? 1 : -1];
+
 static void report(const char *what, uint32_t v)
 {
     hw_puts(what);
@@ -44,8 +49,7 @@ int main(void)
     uint32_t flags = hw_reset_flags_take(), reset, rd = 0, last_feed, gate_tick, now;
     uint16_t gate_cnt = 0;
 
-    reset = (flags & (RCC_IWDGRSTF | RCC_WWDGRSTF)) ? BL_RST_WATCHDOG
-          : (flags & (RCC_PORRSTF | RCC_PINRSTF | RCC_LPWRRSTF)) ? BL_RST_POWER : BL_RST_SOFT;
+    reset = bl_reset_kind(flags);             /* software / watchdog first: they may raise PINRSTF as well */
     hw_crc_on();
     bl_app_read(&app);
     act = bl_decide(&app, HO, reset, flags);

@@ -26,28 +26,47 @@ static void sf_program(uint32_t idx, const scene_rec_t *r, uint32_t bytes)
     }
 }
 
-/* the firmware's hw.c logic: position found once at boot, then tracked in RAM */
-typedef struct { uint32_t next; uint8_t erase; uint16_t seq; } slog_t;
+/* the firmware's core/flashrec.c logic (0.6.4: the page pair, core/pagepair.h): position found once at boot, then
+ * tracked in RAM; the erase that is due comes first (scene_store) */
+typedef struct { pp_pos_t pos; uint16_t seq; } slog_t;
+
+static uint32_t sf_index(uint32_t at)
+{
+    return PP_PAGE(at) * SCENE_RECS_PAGE + PP_ENTRY(at);
+}
 
 static int sf_boot(slog_t *l, scene_t *out)
 {
-    int newest = scene_log_find(sflash, out, &l->seq);
-    l->next = (uint32_t)scene_log_next(sflash, newest, &l->erase);
-    return newest;
+    const uint8_t *r = pp_find(&scene_pp, sflash, sflash + SCENE_PAGE_BYTES, &l->pos);
+    if (!r) {
+        l->seq = 0;
+        return -1;
+    }
+    *out = ((const scene_rec_t *)r)->s;
+    l->seq = ((const scene_rec_t *)r)->seq;
+    return (int)((r - sflash) / SCENE_REC_BYTES);
 }
 
-static void sf_store(slog_t *l, const scene_t *sc, uint32_t torn_bytes)
+static void sf_erase_page(slog_t *l)
+{
+    uint32_t p;
+    (void)pp_erase_due(&l->pos, &p);
+    sf_erase(sflash + p * SCENE_PAGE_BYTES, SCENE_PAGE_BYTES);
+    serase[p]++;
+    pp_erased(&l->pos);
+}
+
+static uint32_t sf_store(slog_t *l, const scene_t *sc, uint32_t torn_bytes)
 {
     scene_rec_t rec;
-    uint32_t idx = l->next;
-    if (l->erase) {
-        sf_erase(sflash + (idx / SCENE_RECS_PAGE) * SCENE_PAGE_BYTES, SCENE_PAGE_BYTES);
-        serase[idx / SCENE_RECS_PAGE]++;
+    uint32_t p, at;
+    if (pp_erase_due(&l->pos, &p) == 2u) {
+        sf_erase_page(l);
     }
+    at = pp_plan(&scene_pp, &l->pos);
     scene_log_pack(sc, ++l->seq, &rec);
-    l->next = (idx + 1u) % SCENE_RECS;
-    l->erase = (uint8_t)(l->next % SCENE_RECS_PAGE == 0u);
-    sf_program(idx, &rec, torn_bytes ? torn_bytes : SCENE_REC_BYTES);
+    sf_program(sf_index(at), &rec, torn_bytes ? torn_bytes : SCENE_REC_BYTES);
+    return sf_index(at);
 }
 
 static void scene_rand(scene_t *s)
@@ -62,43 +81,45 @@ static void test_scene_log(int e339)
 {
     slog_t l;
     scene_t a, b, back;
-    uint32_t n, emin = 0xFFFFFFFFu, emax = 0;
+    uint32_t n, p, t, emin = 0xFFFFFFFFu, emax = 0;
     int bad = 0, i;
 
     s_e339 = e339;
     memset(serase, 0, sizeof serase);
-    printf("power-on scene: flash log (wear levelling, 16-bit sequence wrap, torn writes, SRAM shadow), erased = %s\n",
-           e339 ? "0xE339" : "0xFFFF");
+    printf("power-on scene: flash log on the page pair (wear levelling, 16-bit sequence wrap, torn writes, erase ahead, "
+           "SRAM shadow), erased = %s\n", e339 ? "0xE339" : "0xFFFF");
     sf_erase(sflash, sizeof sflash);
-    CHECK(sf_boot(&l, &back) == -1 && l.next == 0 && !l.erase, "empty log");
-    /* 70,000 writes: the sequence wraps; every reboot finds the last one */
+    CHECK(sf_boot(&l, &back) == -1 && l.pos.next == 0 && !l.pos.erase, "empty log");
+    /* 70,000 writes: the sequence wraps; every reboot finds the last one and the same next position */
     for (n = 0; n < 70000u; n++) {
         scene_rand(&a);
         sf_store(&l, &a, 0);
         if (n % 997u == 0u || n > 69990u) {
             slog_t l2;
-            if (sf_boot(&l2, &back) < 0 || !scene_equal(&back, &a) || l2.next != l.next) bad++;
+            if (sf_boot(&l2, &back) < 0 || !scene_equal(&back, &a) || l2.pos.next != l.pos.next ||
+                l2.pos.erase != l.pos.erase) bad++;
         }
     }
     for (i = 0; i < (int)SCENE_LOG_PAGES; i++) {
         emin = serase[i] < emin ? serase[i] : emin;
         emax = serase[i] > emax ? serase[i] : emax;
     }
-    CHECK(bad == 0, "newest record found after every simulated reboot (%d bad)", bad);
+    CHECK(bad == 0, "newest record and next position found after every simulated reboot (%d bad)", bad);
     CHECK(emax - emin <= 1u && emax >= 70000u / SCENE_RECS && emax <= 70000u / SCENE_RECS + 1u,
           "even wear: %u..%u erases per page", emin, emax);
     printf("  70,000 writes: %u-%u erases per page (%u records per erase cycle: 10k cycles = %u writes)\n", emin, emax,
            SCENE_RECS, 10000u * SCENE_RECS);
-    /* a write torn by a power cut: the previous record stays the newest; the next write skips the used slot */
+    /* a write torn by a power cut: the previous record stays the newest; the next write does not reuse the torn slot
+     * (its page counts as full: the other page, erased first unless it reads erased) */
     scene_rand(&a);
     sf_store(&l, &a, 0);
     scene_rand(&b);
-    sf_store(&l, &b, 7);
+    t = sf_store(&l, &b, 7);
     {
         slog_t l2;
         int k = sf_boot(&l2, &back);
         CHECK(k >= 0 && scene_equal(&back, &a), "torn write ignored");
-        CHECK(l2.next != (uint32_t)(k + 1) % SCENE_RECS || l2.erase, "next write skips the torn slot");
+        CHECK(sf_index(l2.pos.next) != t || l2.pos.erase, "next write skips the torn slot (or erases its page)");
         scene_rand(&b);
         sf_store(&l2, &b, 0);
         CHECK(sf_boot(&l2, &back) >= 0 && scene_equal(&back, &b), "written after the torn slot");
@@ -107,11 +128,40 @@ static void test_scene_log(int e339)
     sf_erase(sflash, sizeof sflash);
     sf_boot(&l, &back);
     for (n = 0; n < SCENE_RECS_PAGE; n++) { scene_rand(&a); sf_store(&l, &a, 0); }
-    CHECK(l.erase && l.next == SCENE_RECS_PAGE, "page full: next write erases page 1");
+    CHECK(l.pos.erase && sf_index(l.pos.next) == SCENE_RECS_PAGE, "page full: next write erases page 1");
     {
         slog_t l2;
-        CHECK(sf_boot(&l2, &back) == (int)SCENE_RECS_PAGE - 1 && scene_equal(&back, &a) && l2.next == SCENE_RECS_PAGE &&
-              l2.erase, "boot at a page boundary");
+        /* the next page reads erased (here: never used; on the board: erased ahead in a dark / dim moment), so it needs
+         * no erase; one holding old records does */
+        CHECK(sf_boot(&l2, &back) == (int)SCENE_RECS_PAGE - 1 && scene_equal(&back, &a) &&
+              sf_index(l2.pos.next) == SCENE_RECS_PAGE && !l2.pos.erase,
+              "boot at a page boundary, the next page erased: no erase");
+        sflash[SCENE_RECS_PAGE * SCENE_REC_BYTES + 5u] = 0x12u;   /* an old record's byte */
+        CHECK(sf_boot(&l2, &back) == (int)SCENE_RECS_PAGE - 1 && sf_index(l2.pos.next) == SCENE_RECS_PAGE &&
+              l2.pos.erase, "boot at a page boundary, the next page used: erase it first");
+    }
+    /* erase ahead (main.c, while low): the other page is erased while this one fills; the boundary then needs none,
+     * and the page holding the newest record is never the one erased */
+    {
+        slog_t l4;
+        int ok = 1;
+        sf_boot(&l4, &back);                             /* page 0 full, page 1 dirty: erase due */
+        CHECK(pp_erase_due(&l4.pos, &p) == 2u && p == 1u, "erase due: page 1");
+        for (n = 0; n < 3u * SCENE_RECS; n++) {
+            uint32_t due = pp_erase_due(&l4.pos, &p);
+            if (due == 1u) {
+                if (p == PP_PAGE(l4.pos.next)) ok = 0;   /* never the page being written */
+                sf_erase_page(&l4);
+            }
+            if (PP_ENTRY(l4.pos.next) == 0u && n > 0u && l4.pos.erase) ok = 0;   /* a boundary that needs an erase */
+            scene_rand(&a);
+            sf_store(&l4, &a, 0);
+            if (n % 5u == 0u) {
+                slog_t l5;
+                if (sf_boot(&l5, &back) < 0 || !scene_equal(&back, &a)) ok = 0;
+            }
+        }
+        CHECK(ok, "erase ahead: no write waits for an erase, never the newest record's page, every reboot finds it");
     }
     /* SRAM shadow of the zero-wait flash: the log is read once at boot, the position tracked in RAM after that */
     {

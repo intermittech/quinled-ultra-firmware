@@ -1,20 +1,39 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Input energy: see energy.h. */
+/* Input energy and the lifetime record: see energy.h. */
+#include <stddef.h>
 #include "energy.h"
+#include "config.h"                 /* crc16_ccitt */
 #include "lto.h"
 #include "ultra_protocol.h"
 
-MEASURED void energy_init(energy_t *e, uint32_t stored_wh, uint32_t now)
+#define LIT_FAR 0x40000000u         /* lit_ms is kept at most this far back (2^30 ms) */
+typedef char life_rec_size[(sizeof(life_rec_t) == LIFE_REC_BYTES && LIFE_RECS * LIFE_REC_BYTES <= 256u) ? 1 : -1];
+
+MEASURED void energy_init(energy_t *e, uint32_t found, uint32_t now, uint32_t ver, uint32_t wd)
 {
     uint8_t *b = (uint8_t *)e;
+    life_rec_t *r = &e->lt;
     uint32_t i;
-    for (i = 0; i < sizeof(*e); i++) {
+    for (i = found ? sizeof(*r) : 0u; i < sizeof(*e); i++) {
         b[i] = 0;
     }
-    e->base_wh = e->saved_wh = stored_wh;
-    e->saved_ms = e->lit_ms = now;
-    budget_init(&e->budget, now, ENERGY_BUDGET_CAP, ENERGY_REFILL_MS);
+    r->ups++;
+    if (wd && r->wd != 0xFFu) {
+        r->wd++;
+    }
+    if (ver != 0u && r->ver != ver) {
+        r->updates += (uint16_t)found;                   /* a new board: its first version is no update. Stored with
+                                                            the next write; until then each boot of it counts it again,
+                                                            in RAM: once */
+        r->ver = ver;
+    }
+    r->magic = LIFE_MAGIC;
+    e->ev = 1;
+    e->base_wh = e->saved_wh = r->wh;
+    e->base_on_s = e->saved_on_s = r->on_s;
+    e->lit_ms = now - LIT_FAR;
+    budget_init(&e->budget, now, LIFE_BUDGET_CAP, LIFE_REFILL_MS);
 }
 
 MEASURED void energy_ms(energy_t *e, uint32_t now, uint32_t mv, int32_t ma, uint8_t lit)
@@ -34,43 +53,110 @@ MEASURED void energy_ms(energy_t *e, uint32_t now, uint32_t mv, int32_t ma, uint
 
 uint32_t energy_total_wh(const energy_t *e)
 {
-    return e->base_wh + e->boot_mwh / 1000u;
+    return e->base_wh + (e->boot_mwh - e->mwh_seen) / 1000u;   /* (a difference: across boot_mwh's wrap) */
 }
 
-MEASURED uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips)
+/* a lifetime peak in its unit (rounded): v when higher */
+static NOINLINE void peak(uint8_t *p, int32_t v, int32_t unit)
 {
-    uint32_t why = ENERGY_DUE_NONE;
-    if (dips != e->dips) {
-        e->dips = dips;                                  /* a new supply dip: the power may be going */
-        why = ENERGY_DUE_DIP;
-    } else if ((now - e->saved_ms >= ENERGY_SAVE_MS || now - e->lit_ms >= ENERGY_DARK_MS) && e->lit_new) {
-        why = ENERGY_DUE_ERASE;                          /* lit since the last write: hourly, or dark again */
+    if (v > *p * unit + unit / 2) {
+        v = (v + unit / 2) / unit;
+        *p = (uint8_t)(v > 255 ? 255 : v);
     }
-    if (why == ENERGY_DUE_NONE || energy_total_wh(e) == e->saved_wh || !budget_take(&e->budget, now, 1u)) {
+}
+
+MEASURED void energy_second(energy_t *e, uint32_t now, uint32_t now_s, uint32_t trips, int32_t i_ma,
+                            int32_t temp_c10)
+{
+    life_rec_t *r = &e->lt;
+    uint32_t d = now - e->lit_ms, k, n = (e->boot_mwh - e->mwh_seen) / 1000u, allow, wh;
+    e->base_wh += n;                                     /* whole Wh carried, the remainder kept */
+    e->mwh_seen += n * 1000u;
+    r->on_s = e->base_on_s + now_s;
+    if (d < 1000u) {
+        r->lit_s++;                                      /* an output was on in the last second */
+    } else if (d > LIT_FAR) {
+        e->lit_ms = now - LIT_FAR;
+    }
+    for (k = 0; k < 2u; k++, trips >>= 16) {             /* overload, short: the new ones since the last second */
+        n = (uint16_t)(trips - e->trips_seen[k]);
+        e->trips_seen[k] = (uint16_t)trips;
+        e->ev |= (uint8_t)(n != 0u);
+        n += r->trips[k];
+        r->trips[k] = (uint16_t)(n > 0xFFFFu ? 0xFFFFu : n);
+    }
+    peak(&r->peak_a, i_ma, 100);                         /* mA -> 0.1 A */
+    peak(&r->peak_t, temp_c10, 5);                       /* 0.1 C -> 0.5 C (MCUTEMP_NA is never higher) */
+    n = r->on_s - e->saved_on_s;                         /* powered since the last write, s */
+    wh = energy_total_wh(e) != e->saved_wh;              /* >= 1 Wh new */
+    allow = r->writes < LIFE_RESERVE + r->on_s / LIFE_EARN_S;
+    e->dip_ok = (uint8_t)(allow && (e->ev || wh || n >= LIFE_DIP_S));
+    e->due = (uint8_t)(allow && (e->ev || (wh && e->lit_new) || n >= LIFE_IDLE_S) &&   /* (dark: the logic's own
+                                                                                           Wh wait for a day) */
+                       ((e->lit_new && d >= ENERGY_DARK_MS) || now_s - e->saved_s >= LIFE_SAVE_S));
+}
+
+MEASURED uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips, uint32_t admit)
+{
+    uint32_t why = e->due;                               /* (ENERGY_DUE_SAVE or none) */
+    if (dips != e->dips) {
+        e->lt.dips += (uint16_t)(dips - e->dips);        /* a new supply dip: the power may be going */
+        e->dips = dips;
+        why = e->dip_ok ? ENERGY_DUE_DIP : ENERGY_DUE_NONE;
+    }
+    if (!(why & admit)) {
+        return ENERGY_DUE_NONE;                          /* (none, or not admitted now: it waits, no token used) */
+    }
+    if (!budget_take(&e->budget, now, 1u)) {
+        e->due = 0;                                      /* (energy_second asks again in a second) */
         return ENERGY_DUE_NONE;
     }
     return why;
 }
 
-void energy_saved(energy_t *e, uint32_t now, uint32_t now_s)
+void energy_pack(energy_t *e)
 {
-    e->saved_wh = energy_total_wh(e);
-    e->saved_ms = now;
-    e->saved_s = now_s;
-    e->saved = 1;
-    e->lit_new = 0;
+    life_rec_t *r = &e->lt;
+    r->wh = energy_total_wh(e);
+    r->writes++;
+    r->crc = crc16_ccitt((const uint8_t *)r, 38u);
 }
 
-uint32_t energy_log_find(const uint8_t *page)
+void energy_saved(energy_t *e, uint32_t now_s)
 {
-    uint32_t i, best = 0;
-    for (i = 0; i < ENERGY_RECS; i++) {
-        const uint32_t *r = (const uint32_t *)(page + i * ENERGY_REC_BYTES);
-        if (r[1] == ~r[0] && r[0] > best) {
-            best = r[0];                                 /* (erased or cut short: never value + complement) */
-        }
+    e->saved_wh = e->lt.wh;
+    e->saved_on_s = e->lt.on_s;
+    e->saved_s = now_s;
+    e->saved = 1;
+    e->lit_new = e->ev = e->due = e->dip_ok = 0;
+}
+
+/* the record's page pair (core/pagepair.h, 0.6.4: the 0.6.3 code made generic; the same records, positions and
+ * decisions) */
+static int life_valid(const uint8_t *s)
+{
+    return s[37] == LIFE_MAGIC && ((const life_rec_t *)s)->crc == crc16_ccitt(s, 38u);
+}
+
+static const pp_desc_t life_pp = { LIFE_REC_BYTES, LIFE_RECS, (uint8_t)offsetof(life_rec_t, writes), 0u, life_valid };
+
+uint32_t life_find(const uint8_t *page0, const uint8_t *page1, life_rec_t *r, life_pos_t *pos)
+{
+    const uint8_t *best = pp_find(&life_pp, page0, page1, pos);
+    if (best) {
+        *r = *(const life_rec_t *)best;
     }
-    return best;
+    return best != 0;
+}
+
+uint32_t life_plan(life_pos_t *pos)
+{
+    return pp_plan(&life_pp, pos);
+}
+
+uint32_t life_free(const life_pos_t *pos)
+{
+    return pp_free(&life_pp, pos);
 }
 
 void energy_page(const energy_t *e, uint32_t now_s, uint32_t power_mw, uint8_t out[24])

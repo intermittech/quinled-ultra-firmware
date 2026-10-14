@@ -25,7 +25,11 @@
  *    whose frames are less than 10 ms apart (WS controllers above ~95 fps, a busy Ultra hub) the board arms at the
  *    first frame end instead, so the first frame after power-up is not used.
  *  - FT_EDGE on every tick that saw new edges: the ISR notes the tick and the DIN ring position, so at frame end
- *    it knows when the last bit came (Ultra clock) and where the frame ends in the ring (the Ultra header trailer). */
+ *    it knows when the last bit came (Ultra clock) and where the frame ends in the ring (the Ultra header trailer).
+ *  - The edge counter (TIM4) is 16 bits: a frame of more than 65,535 bits (over 1,638 WS2805 or 818 WS2915 chips on
+ *    the line) wraps it. The tracker counts the wraps (at most ~42 edges per tick, so a lower count is a wrap), and
+ *    at the frame end its length is c + end_wraps x 65,536 (0.6.2 took c alone: no protocol's length, never locked);
+ *    a frame that ends on a multiple of 65,536 (1,638 WS2915 chips) still ends. */
 #ifndef FRAME_TRACK_H
 #define FRAME_TRACK_H
 
@@ -43,7 +47,9 @@ typedef struct {
     uint8_t  cap_state;                /* 0 wait for a frame, 1 frame running, 2 copy next tick, 3 done */
     uint8_t  partial;                  /* the running frame started before the tracker was armed */
     uint8_t  paused;                   /* the frame paused after its WS2915 header (hdr_bits) */
+    uint8_t  wraps;                    /* the 16-bit edge count wrapped this often in the running frame */
     uint16_t cap_bits;                 /* capture complete at this edge count */
+    uint8_t  end_wraps;                /* FT_FRAME_END: the wraps of the frame that ended (its bits: c + 65536 x this) */
 } ftrack_t;
 
 #define FT_CAP_START  0x01u            /* first edges of an armed frame (0-50 us ago): note the ring position */
@@ -66,6 +72,11 @@ static inline uint32_t ftrack_tick(ftrack_t *t, uint16_t c, uint16_t own_bits, u
     }
     if (c != t->last_cnt) {
         ev |= FT_EDGE;
+        if (c < t->last_cnt) {
+            /* the 16-bit count wrapped (a frame over 65,535 bits); saturates: a frame of 2^24 edges (21 s of bits
+             * without a gap, no protocol's length) still ends with wraps != 0 (gpt-verify) */
+            t->wraps = (uint8_t)(t->wraps + (t->wraps != 0xFFu));
+        }
         if (t->last_cnt == 0u) {                         /* first edges of a frame */
             t->partial = (uint8_t)!t->armed;
             t->paused = 0;
@@ -84,8 +95,8 @@ static inline uint32_t ftrack_tick(ftrack_t *t, uint16_t c, uint16_t own_bits, u
         }
         t->last_cnt = c;
         t->idle = 0;
-    } else if (c != 0u) {
-        uint8_t hdr = (uint8_t)(c == 26u || c == 32u);
+    } else if (c != 0u || t->wraps != 0u) {             /* (c 0 after wraps: a frame of k x 65,536 bits) */
+        uint8_t hdr = (uint8_t)((c == 26u || c == 32u) && t->wraps == 0u);
         if (hdr && c == hdr_bits) {
             t->paused = 1;                               /* the boards before us block their bits now */
         }
@@ -103,6 +114,8 @@ static inline uint32_t ftrack_tick(ftrack_t *t, uint16_t c, uint16_t own_bits, u
             t->partial = 0;
             t->last_cnt = 0;
             t->idle = 0;
+            t->end_wraps = t->wraps;
+            t->wraps = 0;
         }
     } else if (!t->armed && ++t->idle >= FT_BOOT_TICKS) {
         t->armed = 1;                                    /* boot: DIN quiet, the next edge is a frame's first */

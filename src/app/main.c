@@ -31,6 +31,7 @@
 #include "../core/gamma.h"
 #include "../core/health.h"
 #include "../core/isense.h"
+#include "../core/lto.h"
 #include "../core/mcutemp.h"
 #include "../core/ocled.h"
 #include "../core/pwrev.h"
@@ -47,7 +48,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.2"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.4"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -56,13 +57,15 @@
 #define LOSS_TIMEOUT_MS  2000u     /* WS modes: signal loss = no valid frame for 2 s */
 #define LOSS_FADE_MS     1000u     /* fade-off duration */
 #define SAVE_DEBOUNCE_MS 2000u     /* settings saved 2 s after the last change */
+static const ws_timing_t ws_tm = WS_TIMING_DEFAULT;   /* the decoder's bit timing (one copy for its three callers) */
 
 /* ------------------------------------------------------------------------------- shared with the poll ISR
  * The ISR writes volatile variables, ft (the main loop only with interrupts off) and the copies din_copy / tail_copy
  * (read after cap_ready / fe_ready, behind a BARRIER). frx and plan_buf are the main loop's; the ISR only reads them,
  * published by the BARRIER before plan_idx. */
 static frx_t frx;                          /* protocol state and per-frame decisions (core/frame_rx.h) */
-static volatile gate_plan_t plan;          /* plan of the frame in progress */
+static gate_plan_t plan;                   /* plan of the frame in progress (the ISR's; the main loop writes it only
+                                              with interrupts off) */
 static gate_plan_t plan_buf[2];            /* next plan, written by the main loop (double buffer) */
 static volatile uint8_t plan_idx;
 static ftrack_t ft;                        /* frame tracking (ISR; the main loop only with interrupts off) */
@@ -70,19 +73,23 @@ static volatile uint8_t rx_ready;          /* main has set up the plans: the ISR
 static volatile uint16_t cap_start;        /* ring word 60 us before the frame's first edge (inside the gap) */
 static volatile uint16_t cap_words;
 static volatile uint8_t cap_ready;
+static uint8_t cap_accept;                 /* ISR: this frame owns the empty capture mailbox */
 static volatile uint16_t cap_bits;         /* bits to decode */
 static volatile uint16_t cap_own;          /* this board's bits under the plan of that frame */
 static volatile uint16_t cap_skip;         /* WS2915: the capture starts after the header pause (hdr bits) */
 static volatile uint8_t cap_proto;
 static volatile uint32_t cap_frame;
 static volatile uint8_t fe_ready;          /* frame end: total bits for the classifier */
-static volatile uint16_t fe_bits;
+static volatile uint32_t fe_bits;
 static volatile uint32_t fe_frame;
 static volatile uint32_t fe_tick;          /* tick of the frame's last edge (0-50 us after it): Ultra clock */
 static volatile uint16_t tail_words;       /* tail_copy holds the frame's end (Ultra lengths only), 0 = none */
 static uint32_t edge_tick;                 /* ISR: tick and ring position of the latest new edges */
 static uint16_t edge_pos;
 static volatile uint32_t ms_now, tick_now; /* 1 ms and 50 us time bases */
+static uint32_t poll_sub;                  /* ticks into the ms (poll_isr, flash_poll_isr; 32 bits: no zero-extension
+                                              every tick) */
+static uint8_t adc_hold;                   /* the next tick's PA7 sample is held (the temperature sequence) */
 static volatile uint32_t frames;
 /* board current sense (core/isense.h): the tick sums the ADC samples and trips; the main loop limits (isense_apply
  * in outputs_update), calibrates and retries */
@@ -91,7 +98,9 @@ static isense_t is;
 #define HINT_WORDS 135u                    /* 60 us at 36 MHz, 16 samples per word */
 #define TAIL_WORDS 576u                    /* 256 us up to the frame's last edge: 64 bits at 1.5 us + hiccups + tick */
 #define TAIL_PAST  4u                      /* words past the ring position of the last-edge tick */
-static uint16_t tail_copy[TAIL_WORDS];     /* the end of the frame, for the Ultra header (ws_decode_last) */
+/* the end of the frame, for the Ultra header (ws_decode_last); 4-byte aligned like din_copy: copy_run writes it in
+ * 32-bit words (an array of uint16_t is only 2-byte aligned: today it lands on a word by the sizes before it) */
+static uint16_t tail_copy[TAIL_WORDS] __attribute__((aligned(4)));
 
 /* k words s -> d, both 4-byte aligned: 32-bit copies, four per step (the poll ISR's longest path); returns the end */
 static uint16_t *copy_run(uint16_t *d, const uint16_t *s, uint32_t k)
@@ -133,46 +142,20 @@ static uint32_t ring_copy(uint16_t *dst, uint32_t start, uint32_t end, uint32_t 
     return n;
 }
 
-void poll_isr(void);                       /* 20 kHz tick, entered via isr.S (HPE + mret) */
-void poll_isr(void)
+/* the tracker's events of a tick but FT_EDGE (a few ticks per frame): out of line, so that the every-tick path of
+ * poll_isr keeps no callee-saved registers (0.6.4: claude-cpu; fable-algo's idle-line test before the whole tracking
+ * gave the idle tick the same and cost the busy ticks 11 cycles) */
+static NOINLINE void poll_events(uint32_t ev, uint16_t c)
 {
-    static uint16_t sub;
-    uint16_t c = DIN_EDGES(), own;
-    uint32_t ev;
-
-    POLL_ACK();
-    tick_now++;
-    if (++sub >= POLL_HZ / 1000u) {
-        sub = 0;
-        ms_now++;
-        hw_adc_ms();                       /* the ADC's injected group: voltage channels / MCU temperature */
-    }
-    if (is.enabled && isense_tick(&is, ISENSE_RAW())) {   /* (enabled: not before isense_setup at boot) */
-        pwm_force_off(1);                  /* a short: all outputs off now, no table rebuild */
-    }
-    if (!rx_ready) {
-        return;
-    }
-    /* a provisional (stored) protocol captures an Ultra slot too: a different protocol locks at once (an update
-     * session's transparent plan: still its whole 384-bit frame) */
-    own = plan.own_bits;
-    if (frx.ps.provisional && own < PROTO_DETECT_BITS) {
-        own = PROTO_DETECT_BITS;
-    }
-    ev = ftrack_tick(&ft, c, own, plan.hdr_bits);
-    if (ev == 0u) {
-        return;
-    }
-    if (ev & FT_EDGE) {                    /* the last edges so far: where the frame ends (in time and ring) */
-        edge_tick = tick_now;
-        edge_pos = (uint16_t)din_ring_pos();
-    }
-    if (ev & FT_CAP_COPY) {                /* one tick after our last bit: the DMA has surely written it */
+    if ((ev & FT_CAP_COPY) && cap_accept) {                /* one tick after our last bit: the DMA has surely written it */
         cap_words = (uint16_t)ring_copy(din_copy, cap_start, din_ring_pos(), DIN_COPY_WORDS);
         cap_bits = ft.cap_bits;
         cap_ready = 1;
     }
-    if (ev & FT_CAP_START) {               /* first edges (0-50 us ago): a ring position inside the reset gap */
+    if ((ev & (FT_CAP_START | FT_CAP_DATA)) == FT_CAP_START) {
+        cap_accept = (uint8_t)!cap_ready;  /* drop a new capture while the old one is being consumed */
+    }
+    if ((ev & FT_CAP_START) && cap_accept) {               /* first edges (0-50 us ago): a ring position inside the reset gap */
         cap_start = (uint16_t)((din_ring_pos() - HINT_WORDS) & (DIN_RING_WORDS - 2u));   /* even */
         if (ev & FT_CAP_DATA) {
             cap_skip = plan.hdr_bits;      /* WS2915 data after the header pause (the gap is >= 100 us) */
@@ -184,27 +167,95 @@ void poll_isr(void)
         }
     }
     if (ev & (FT_FRAME_END | FT_BOOT_ARM)) {
-        gate_plan_t g = plan_buf[plan_idx];
-        if (ev & FT_CAP_SHORT) {           /* frame shorter than the capture: decode what came */
+        const gate_plan_t *g = &plan_buf[plan_idx];   /* (the main loop writes only the other one) */
+        if ((ev & FT_CAP_SHORT) && cap_accept) {           /* frame shorter than the capture: decode what came */
             cap_words = (uint16_t)ring_copy(din_copy, cap_start, din_ring_pos(), DIN_COPY_WORDS);
             cap_bits = ft.cap_bits;
             cap_ready = 1;
         }
-        if ((ev & (FT_FRAME_END | FT_PARTIAL)) == FT_FRAME_END) {
-            fe_bits = c;                   /* the main loop classifies the frame and plans the next ones */
+        if ((ev & (FT_FRAME_END | FT_PARTIAL)) == FT_FRAME_END && !fe_ready) {
+            uint32_t total = c + ((uint32_t)ft.end_wraps << 16);
+            fe_bits = total;                   /* the main loop classifies the frame and plans the next ones */
             fe_frame = frames;
             fe_tick = edge_tick;
             /* the end of a frame of an Ultra length: its last 64 bits are the header (read in the main loop) */
-            tail_words = frx_tail_wanted(&frx, c)
+            tail_words = frx_tail_wanted(&frx, total)
                 ? (uint16_t)ring_copy(tail_copy, (edge_pos + TAIL_PAST - TAIL_WORDS) & (DIN_RING_WORDS - 2u),
                                       edge_pos + TAIL_PAST, TAIL_WORDS)
                 : 0u;
             fe_ready = 1;
         }
-        gate_rearm(&g);                    /* the next frame starts >= 280 us after the last edge */
-        plan = g;
+        gate_rearm(g);                     /* the next frame starts >= 280 us after the last edge */
+        plan.start_open = g->start_open;   /* (field by field: a struct copy is a memcpy call) */
+        plan.t1 = g->t1;
+        plan.t2 = g->t2;
+        plan.own_bits = g->own_bits;
+        plan.hdr_bits = g->hdr_bits;
         if (ev & FT_FRAME_END) {
             frames++;
+        }
+    }
+}
+
+void poll_isr(void);                       /* 20 kHz tick, entered via isr.S (HPE + mret) */
+void poll_isr(void)
+{
+    uint32_t c = DIN_EDGES(), own, ev;
+
+    POLL_ACK();
+    tick_now++;
+    if (is.enabled) {                      /* (not before isense_setup at boot) */
+        if (adc_hold) {
+            /* (0.6.4, gpt-hw H7) the MCU temperature's injected sequence (84 us, started at the last tick) holds
+             * PA7's conversion: this tick would read the value the last one counted, and one high sample would
+             * trip as two. Not counted; the next tick has a new one (84 + 7 us < 100 us). */
+            adc_hold = 0;
+        } else if (isense_tick(&is, ISENSE_RAW())) {
+            PWM_TRIP();                    /* a short: all outputs off now (pwm_force_off(1) inline), no table rebuild */
+        }
+    }
+    if (++poll_sub >= POLL_HZ / 1000u) {
+        poll_sub = 0;
+        ms_now++;
+        adc_hold = (uint8_t)hw_adc_ms();   /* the ADC's injected group: voltage channels / MCU temperature */
+    }
+    /* (fable-algo) an idle line: ftrack_tick would return no event and change nothing (no edges, the count at 0
+     * without wraps, no copy due, armed) */
+    if (!rx_ready || (c == 0u && ft.last_cnt == 0u && ft.wraps == 0u && ft.cap_state != 2u && ft.armed)) {
+        return;
+    }
+    /* a provisional (stored) protocol captures an Ultra slot too: a different protocol locks at once (an update
+     * session's transparent plan: still its whole 384-bit frame) */
+    own = plan.own_bits;
+    if (frx.ps.provisional && own < PROTO_DETECT_BITS) {
+        own = PROTO_DETECT_BITS;
+    }
+    ev = ftrack_tick(&ft, (uint16_t)c, (uint16_t)own, plan.hdr_bits);
+    if (ev & FT_EDGE) {                    /* the last edges so far: where the frame ends (in time and ring) */
+        edge_tick = tick_now;
+        edge_pos = (uint16_t)din_ring_pos();
+    }
+    if (ev & ~FT_EDGE) {
+        poll_events(ev, (uint16_t)c);
+    }
+}
+
+/* The tick during a flash operation (0.6.4, hw.c flash_op: through VTF, from SRAM, the HCLK halved and SysTick's
+ * compare with it): the time bases and the fast trip, as poll_isr (the same state: a high sample before the operation
+ * still counts toward the two), nothing else (no frames: the gate is closed; no injected ADC sequences). */
+RAMCODE void flash_poll_isr(void)
+{
+    POLL_ACK();
+    tick_now++;
+    if (++poll_sub >= POLL_HZ / 1000u) {
+        poll_sub = 0;
+        ms_now++;
+    }
+    if (is.enabled) {
+        if (adc_hold) {
+            adc_hold = 0;
+        } else if (isense_tick(&is, ISENSE_RAW())) {
+            hw_flash_trip();               /* all outputs off (SRAM; pwm_forced as pwm_force_off(1)) */
         }
     }
 }
@@ -228,8 +279,8 @@ static uint8_t len, run_stagger = 0xFF;
 static uint32_t last_data_ms, changed_ms;
 static scene_budget_t set_budget;          /* write budget of the settings page (store.h STORE_BUDGET_*) */
 static uint32_t up_s;                      /* uptime in s: `uptime` and the long ages (ms_now wraps after 49.7 days) */
-static uint16_t out_now[5];                /* output values in use (for the adaptive stagger) */
-static uint16_t built_v[5];                /* value each channel's table holds */
+static uint16_t out_now[5];                /* output values in use, = the value each channel's table holds (0.6.4,
+                                              gpt-opt2: one vector; main loop only, no ISR or build() reads it) */
 static uint8_t built_ok;
 static uint16_t st_o2 = STAGGER_FIXED_O2, st_o3 = STAGGER_FIXED_O3;
 static uint8_t st_force;
@@ -279,34 +330,118 @@ static sstart_t ss;                        /* soft start (core/sstart.h) */
 /* the power-on effect (SCENE_EFFECT): what is stored (lights, their CRC-8), the channels still running it, the
  * engine untouched by a host since boot (it holds the power-on effect), a write pending, its budget */
 static uint8_t fx_mask, fx_crc[ULTRA_LIGHTS], fx_ch, ul_used, fx_pend;
-static uint32_t fx_chk;                    /* mask and CRCs of what is stored, in one value (fx_want) */
 static scene_budget_t fx_budget;
 #define FX_BUDGET_CAP 4u
 #define FX_REFILL_MS  21600000u            /* one write per 6 h sustained: >= 6 years at 10k cycles (2 erases each) */
 static testjig_t tj;                       /* test jig mode (core/testjig.h): TP9 grounded */
 
-static void flash_stall_begin(void);
-static void flash_stall_end(uint32_t us);
+static void flash_stall_begin(uint32_t may);
+static uint32_t flash_stall_end(uint32_t r);
 
-/* every ms: the injected group's voltage pairs of that ms; the supply dips; the energy and its log */
+/* ------------------------------------------------------------------------------- the flash: when (0.6.4)
+ * Quindor's policy (2026-10-14). An erase / program halves HCLK (RM 32.1): the PWM runs at half frequency, the duty
+ * unchanged, and the main loop waits (renders, fades) for as long as it takes; the current trip keeps running (hw.c:
+ * from SRAM). So:
+ *  - low: every output below 15 % of full scale (dark, or really dimmed down: the halved frequency is least visible
+ *    there) for FLASH_LOW_MS, no calibration / test jig pattern / soft start, nothing fading up (a WS ramp's target, an
+ *    Ultra ramp that ends brighter than it shows); and at power-up before the main loop: anything, erases too;
+ *  - brighter: a program into erased flash only (no erase), at most one per FLASH_BRIGHT_MS (pending changes wait:
+ *    the newest values are written); erases wait for a low moment, which also erases each store's next page ahead;
+ *  - at a supply dip: programs into erased flash (the lifetime record's dip write, any store's pending write);
+ *  - the console's `save`: a program at once (a user's command, not housekeeping).
+ * "Below 15 %" is the outputs as the tables hold them (out_now: transitions and effects as they show), which is what
+ * the PWM runs while the main loop waits: nothing can cross the level during an operation. Every regular write also
+ * waits until the console sends nothing (hw.c flash_op: the baud halves with HCLK). */
+#define FLASH_LOW_LEVEL  9830u             /* 15 % of 65535 */
+#define FLASH_LOW_MS     500u              /* every output below it this long: an effect's peaks reset it */
+#define FLASH_BRIGHT_MS  3600000u          /* brighter: one write per hour */
+#define FM_LOW    1u                       /* flash_may: low (or boot): erases too */
+#define FM_PROG   2u                       /* a program into erased flash (a dip, the console's save) */
+#define FM_BRIGHT 3u                       /* ... brighter: with the hour's token */
+static uint32_t flash_hi_ms;               /* the last ms the outputs were not low */
+static scene_budget_t flash_bright;        /* the writes while brighter */
+static uint8_t flash_boot = 1;             /* before the main loop: the outputs are dark */
+static uint8_t fx_clear_pend;              /* a factory reset: the power-on effects' erase is due */
+
+/* may a store write now? need_erase: its next record needs an erase first (only while low); prog: FM_PROG when a
+ * program may run whatever the outputs show (a dip, the console's save). Returns FM_LOW / FM_PROG / FM_BRIGHT
+ * (flash_stall_begin takes the brighter state's token), 0 = not now. */
+static uint32_t flash_may(uint32_t need_erase, uint32_t prog)
+{
+    if (prog != FM_PROG && uart_busy()) {
+        return 0;                                        /* (the console first: hw.c flash_op) */
+    }
+    if (flash_boot || (ms_now - flash_hi_ms >= FLASH_LOW_MS && !vdip.in_dip)) {
+        return FM_LOW;
+    }
+    if (need_erase) {
+        return 0;
+    }
+    if (prog == FM_PROG || vdip.in_dip) {
+        return FM_PROG;
+    }
+    return budget_avail(&flash_bright, ms_now) ? FM_BRIGHT : 0u;
+}
+
+/* every ms while low (and once at power-up): one erase that is due, so a later write needs none. Not before
+ * LIFE_PREP_S after power-up (a steady supply) except at power-up itself (before the outputs start: 0.6.3's
+ * lifetime erase there keeps wall-switched boards going). */
+static uint32_t (*const erase_due[4][2])(void) = {
+    { life_pending, life_prepare }, { settings_pending, settings_prepare }, { cal_pending, cal_prepare },
+    { scene_pending, scene_prepare } };
+
+static void flash_erase_ahead(void)
+{
+    uint32_t i;
+    if ((!flash_boot && up_s < LIFE_PREP_S) || flash_may(1u, 0u) != FM_LOW) {
+        return;
+    }
+    if (fx_clear_pend) {
+        flash_stall_begin(FM_LOW);                       /* (a factory reset: the power-on effects go) */
+        fx_clear_pend = (uint8_t)!flash_stall_end(scene_fx_store(&ul, 0, fx_crc));
+        return;
+    }
+    for (i = 0; i < 4u; i++) {
+        if (erase_due[i][0]()) {
+            flash_stall_begin(FM_LOW);
+            (void)flash_stall_end(erase_due[i][1]());
+            return;
+        }
+    }
+}
+
+/* the lifetime record's writes (core/energy.h ENERGY_DUE_*): a regular one as any store's, a dip's always (into an
+ * erased entry; none while its next page waits for an erase) */
+static uint32_t life_admit(void)
+{
+    uint32_t m = flash_may(0u, 0u);
+    if (m == FM_BRIGHT && life_room() < 2u) {
+        m = 0;                                           /* brighter: the last erased entry stays for a dip write */
+    }
+    return life_pending() == 2u ? 0u : ENERGY_DUE_DIP | (m != 0u ? ENERGY_DUE_SAVE : 0u);
+}
+
+/* every ms: the injected group's voltage pairs of that ms; the supply dips; the energy and the lifetime record */
 static void vsense_service(void)
 {
-    uint32_t sum2[2], n, i, lit = 0;
+    uint32_t sum2[2], n, i, lit = 0, hi = tj.active || is.cal_step != 0u || ss.state == SS_RUN;
     hw_vsense_take(sum2, &n);
     vsense_add(&vs_sup, sum2[0], n);
     vsense_add(&vs_aux, sum2[1], n);
     vdip_ms(&vdip, ms_now, up_s, sum2[0], n, is.i_ms);
     for (i = 0; i < 5u; i++) {
         lit |= out_now[i];
+        hi |= out_now[i] >= FLASH_LOW_LEVEL || (!ultra_on && sm.dur != 0u && sm.to[i] >= FLASH_LOW_LEVEL);
+    }
+    if (hi || ((ultra_on || fx_ch) && ultra_rising(&ul, tick_now))) {
+        flash_hi_ms = ms_now;                            /* the flash: the outputs are not low (see above) */
     }
     energy_ms(&en, ms_now, vs_sup.mv, is.i_ms, (uint8_t)(lit != 0u));
-    n = energy_due(&en, ms_now, vdip.count);
+    n = energy_due(&en, ms_now, vdip.count, life_admit());
     if (n != ENERGY_DUE_NONE) {
-        flash_stall_begin();
-        i = energy_store(energy_total_wh(&en), (uint8_t)(n == ENERGY_DUE_ERASE));
-        flash_stall_end(i);
-        if (i != 0u) {
-            energy_saved(&en, ms_now, up_s);
+        flash_stall_begin(n == ENERGY_DUE_DIP ? FM_PROG : flash_may(0u, 0u));
+        if (flash_stall_end(life_store(&en))) {
+            energy_saved(&en, up_s);
         }
     }
 }
@@ -405,8 +540,11 @@ static void limit_update(void)
 /* the current sense from scratch (boot, factory reset): the tick is running, so no half-initialised trip level */
 static void isense_setup(void)
 {
+    uint8_t trip;
     __disable_irq();
+    trip = is.tripped;                    /* factory reset: keep a hardware force-off paired with a retry */
     isense_init(&is, 1, ISENSE_FUSE_MA, ISENSE_BOARD_MA);
+    is.tripped = trip;
     isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16 * 100u / ISENSE_AMP_GAIN);   /* board.h: amplifier gain */
     __enable_irq();
 }
@@ -506,6 +644,21 @@ static void build(uint8_t ch, uint16_t v, uint8_t phase)
     }
 }
 
+/* the channels' tables for the values v (all, or only the ones whose value changed): phases spread the extra dither
+ * steps / skipped pulses of the five channels over the pattern */
+static void build_all(const uint16_t *v, uint8_t changed_only)
+{
+    static const uint8_t order[5] = { CH_G, CH_R, CH_B, CH_W2, CH_W1 };
+    uint8_t i;
+    for (i = 0; i < 5u; i++) {
+        uint8_t ch = order[i];
+        if (!changed_only || out_now[ch] != v[ch]) {
+            build(ch, v[ch], (uint8_t)(i * len / 5u));
+        }
+        out_now[ch] = v[ch];
+    }
+}
+
 static void outputs_update(uint8_t ack_on)
 {
     uint16_t v[5];
@@ -528,22 +681,14 @@ static void outputs_update(uint8_t ack_on)
                         : ss_factor(&ss, ms_now, (uint8_t)((v[0] | v[1] | v[2] | v[3] | v[4]) != 0u),
                                     (uint8_t)(sext.opts & STORE_OPT_SOFT_START));
     isense_apply(&is, v, v);               /* board limit (all channels scaled together), or the calibration pattern */
-    for (i = 0; i < 5u; i++) {
-        out_now[i] = v[i];
-    }
-    /* phases spread the extra dither steps / skipped pulses of the five channels over the pattern; only the
-     * channels whose value changed are rebuilt */
-    {
-        static const uint8_t order[5] = { CH_G, CH_R, CH_B, CH_W2, CH_W1 };
-        for (i = 0; i < 5u; i++) {
-            uint8_t ch = order[i];
-            if (!built_ok || built_v[ch] != v[ch]) {
-                build(ch, v[ch], (uint8_t)(i * len / 5u));
-                built_v[ch] = v[ch];
-            }
-        }
-        built_ok = 1;
-    }
+    build_all(v, built_ok);
+    built_ok = 1;
+}
+
+/* pwm_start (hw.h): the tables for the new period / mode, from the values they held, before the timers start */
+void pwm_fill(void)
+{
+    build_all(out_now, 0);
 }
 
 /* what the outputs show now, without an acknowledge pattern */
@@ -645,20 +790,13 @@ static cfg_result_t handle_result(cfg_result_t r)
         if (r.cmd == CMD_FACTORY_RESET) {
             (void)scene_command(CMD_FACTORY_RESET, 0);
             store_ext_clear(&sext);        /* current limit and calibration too (the model relearns) */
-            flash_stall_begin();           /* and the energy log, the power-on effects */
-            flash_stall_end(energy_clear() + scene_fx_store(&ul, 0, fx_crc));
-            energy_init(&en, 0, ms_now);
+            /* and the power-on effects and the stored calibration (never the lifetime record): in the flash's next
+             * low moment (0.6.4: an erase; 0.6.3 at once, the outputs as they were). The acknowledge pattern's final
+             * dark second is usually that moment. */
+            fx_clear_pend = 1;
             fx_mask = 0;
-            fx_chk = 0;
             if (cal_present) {
-                isense_cal_t none;
-                uint8_t *z = (uint8_t *)&none;
-                uint32_t k;
-                for (k = 0; k < sizeof none; k++) {
-                    z[k] = 0;
-                }
-                flash_stall_begin();       /* a cleared record (levels 0) */
-                flash_stall_end(cal_store(&none, &cal_cnt));
+                cal_save_pend = 2;         /* a cleared record (levels 0) */
                 cal_present = 0;
             }
             isense_setup();
@@ -692,63 +830,108 @@ static cfg_result_t cli_apply(uint8_t cmd, uint8_t arg)
     return handle_result(config_apply(&rx, &set, cmd, arg));
 }
 
-/* A flash write stops the CPU with interrupts off (~2-18 ms) and halves the clocks: drop a capture in progress
- * (its samples are not at 36 MHz) and move the time bases along. The gate is closed meanwhile (downstream boards
- * miss a frame or two); the next idle gap or frame end re-arms it. */
-static void flash_stall_begin(void)
+/* A flash operation (flash_may's answer `may`): the frame tracking stops meanwhile (the tick runs from SRAM: no frames,
+ * the gate closed; downstream boards miss a frame or two, the next idle gap or frame end re-arms it), so a capture in
+ * progress is dropped. The time bases run on (0.6.4; 0.6.3 added an estimate). */
+static void flash_stall_begin(uint32_t may)
 {
+    if (may == FM_BRIGHT) {
+        (void)budget_take(&flash_bright, ms_now, 1u);    /* the hour's write while brighter */
+    }
     __disable_irq();
     ftrack_disarm(&ft);
     cap_ready = 0;
     __enable_irq();
 }
 
-static void flash_stall_end(uint32_t us)
+/* ... done with result r (core/flashrec.h): 1 = written */
+static uint32_t flash_stall_end(uint32_t r)
 {
     __disable_irq();
     ftrack_disarm(&ft);
     cap_ready = 0;
-    tick_now += us / ULTRA_TICK_US;
-    ms_now += us / 1000u;
     __enable_irq();
     ultra_clock_gap(&ul);
-    stat.saves++;
+    if (r == FLASH_OK) {
+        stat.saves++;
+    } else if (r != FLASH_NONE) {
+        uart_write("flash: error\r\n");                 /* (the record stays pending; its budget asks again) */
+    }
+    return r == FLASH_OK;
 }
 
+/* the settings record (may: flash_may's answer for it; the store erases the next page first when that is due):
+ * 1 = written */
+static uint32_t settings_write(uint32_t may)
+{
+    flash_stall_begin(may);
+    if (flash_stall_end(settings_store(&set, &sext))) {
+        settings_dirty = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* the console's `save`: at once (a program: a user's command), unless the next page needs its erase while the outputs
+ * are bright: then it is written in the next low moment */
 static void save_now(void)
 {
-    settings_dirty = 0;
-    flash_stall_begin();
-    flash_stall_end(settings_store(&set, &sext));
+    uint32_t t0 = ms_now, may;
+    settings_dirty = 1;
+    changed_ms = ms_now - SAVE_DEBOUNCE_MS;
+    while (uart_busy() && ms_now - t0 < 100u) {          /* (the console's line first: hw.c flash_op) */
+        uart_kick();
+        watchdog_kick();
+    }
+    may = flash_may(settings_pending() == 2u, FM_PROG);
+    uart_write(may == 0u ? "pending\r\n" : settings_write(may) ? "ok\r\n" : "failed\r\n");
 }
 
-static void scene_save_now(void)
+static void scene_save_now(uint32_t may)
 {
-    flash_stall_begin();
-    flash_stall_end(scene_store(&scene_want));
-    scene_stored = scene_want;
+    flash_stall_begin(may);
+    if (flash_stall_end(scene_store(&scene_want))) {
+        scene_stored = scene_want;
+    }
 }
 
-/* the power-on effects to store (of the lights a SCENE_EFFECT reached since the engine's init): their mask, CRC-8s
- * into crc, and both as one value (bit 31: a host sent SCENE_EFFECT at all; with load: the stored ones) */
-static uint32_t fx_want(uint8_t *crc, uint8_t load)
+/* the power-on effects to store (of the lights a SCENE_EFFECT reached since the engine's init): their mask, their
+ * CRC-8s into crc; *any = a host sent SCENE_EFFECT at all */
+static uint8_t fx_want(uint8_t *crc, uint8_t *any)
 {
-    uint32_t chk = 0, i;
+    uint8_t mask = 0;
+    uint32_t i;
+    *any = 0;
     for (i = 0; i < ULTRA_LIGHTS; i++) {
         const ultra_light_t *L = &ul.light[i];
         if (L->scene_fx_have) {
-            chk |= 0x80000000u;
+            *any = 1;
         }
-        if (load ? (fx_mask & (1u << i)) != 0u : (L->scene_fx_have && ultra_scene_fx_ok(L))) {
-            if (!load) {
-                crc[i] = crc8_smbus((const uint8_t *)L, ULTRA_HEAD_BYTES);
-            }
-            chk += (1u << i) + ((uint32_t)crc[i] << (8u + 4u * i));
+        if (L->scene_fx_have && ultra_scene_fx_ok(L)) {
+            crc[i] = crc8_smbus((const uint8_t *)L, ULTRA_HEAD_BYTES);
+            mask |= (uint8_t)(1u << i);
         } else {
             crc[i] = 0;
         }
     }
-    return chk;
+    return mask;
+}
+
+/* what the engine holds is what the store holds (fx_mask, fx_crc)? Compared light by light: a sum of the CRCs
+ * (0.6.2) let two lights' changes cancel each other out (CRC deltas d0 = -16 d1 ...), so that the new effects
+ * were never written */
+static int fx_stored(uint8_t mask, const uint8_t *crc)
+{
+    uint32_t i;
+    if (mask != fx_mask) {
+        return 0;
+    }
+    for (i = 0; i < ULTRA_LIGHTS; i++) {
+        if ((mask & (1u << i)) && crc[i] != fx_crc[i]) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* store the power-on effects (budget permitting): only once a host sent SCENE_EFFECT (a host without it never
@@ -756,13 +939,14 @@ static uint32_t fx_want(uint8_t *crc, uint8_t load)
  * waiting for a token (only the budget is checked meanwhile) */
 static void fx_service(void)
 {
-    uint8_t crc[ULTRA_LIGHTS];
-    uint32_t chk;
-    if (fx_pend == 0u || (fx_pend == 2u && !budget_take(&fx_budget, ms_now, 1u))) {
-        return;
+    uint8_t crc[ULTRA_LIGHTS], mask, any;
+    uint32_t i;
+    if (fx_pend == 0u ||
+        (fx_pend == 2u && (flash_may(1u, 0u) != FM_LOW || !budget_take(&fx_budget, ms_now, 1u)))) {
+        return;                            /* (two erases: only in a low moment, 0.6.4) */
     }
-    chk = fx_want(crc, 0);
-    if (!(chk & 0x80000000u) || (chk & 0x7FFFFFFFu) == fx_chk) {
+    mask = fx_want(crc, &any);
+    if (!any || fx_stored(mask, crc)) {
         fx_pend = 0;                       /* nothing to write */
         return;
     }
@@ -771,10 +955,17 @@ static void fx_service(void)
         return;
     }
     fx_pend = 0;
-    fx_chk = chk & 0x7FFFFFFFu;
-    fx_mask = (uint8_t)(chk & 0x1Fu);
-    flash_stall_begin();
-    flash_stall_end(scene_fx_store(&ul, fx_mask, crc));
+    flash_stall_begin(FM_LOW);
+    if (flash_stall_end(scene_fx_store(&ul, mask, crc))) {
+        fx_mask = mask;
+        for (i = 0; i < ULTRA_LIGHTS; i++) {
+            fx_crc[i] = crc[i];
+        }
+        fx_clear_pend = 0;                 /* (it erased the store anyway) */
+    } else {
+        fx_mask = 0;                       /* failed: nothing valid stored; again with the next token */
+        fx_pend = 2;
+    }
 }
 
 /* every ms while the power-on effect runs: its channels follow the engine until the take-over (then the scene's
@@ -798,6 +989,7 @@ static void fx_follow(void)
  * pattern blinks (except its final dark pause) */
 static void scene_service(void)
 {
+    uint32_t may;
     if (ultra_on && srun.hold && ultra_seen && ms_now - ultra_first_ms >= SCENE_TAKEOVER_MS) {
         scene_takeover(&srun, 0x1Fu, ms_now);     /* the host is there but sends nothing for these channels */
         outputs_dirty = 1;
@@ -812,8 +1004,8 @@ static void scene_service(void)
         scene_changed_ms = scene_check_ms;
     }
     if (!scene_equal(&scene_want, &scene_stored) && (!ack.active || ack.seg + 1u == ack.nseg) &&
-        scene_save_due(&sbudget, ms_now, scene_changed_ms, scene_major_pend)) {
-        scene_save_now();
+        (may = flash_may(scene_pending() == 2u, 0u)) != 0u && scene_save_due(&sbudget, ms_now, scene_changed_ms, scene_major_pend)) {
+        scene_save_now(may);
     }
 }
 
@@ -957,10 +1149,14 @@ static void upd_action(uint32_t a)
     case UPD_APP_CONFIRM:
 #if UPD_APP
     {
-        uint32_t a = UPD_APP_DESC + 2u * (UPD_ST_FIRST + upd.info.st_next);
-        flash_stall_begin();
-        flash_stall_end(hw_flash_half(a, UPD_ST_CONFIRMED));
-        upd_app_confirmed(&upd, *(volatile const uint16_t *)a == UPD_ST_CONFIRMED);   /* else: at the next PING */
+        /* one half-word, as any regular write (0.6.4: the program's status decides, not a read back, which may come
+         * from the copy made at reset; not admitted now: at the next PING) */
+        uint32_t a = UPD_APP_DESC + 2u * (UPD_ST_FIRST + upd.info.st_next), ok = 0, may = flash_may(0u, 0u);
+        if (may != 0u) {
+            flash_stall_begin(may);
+            ok = flash_stall_end(hw_flash_half(a, UPD_ST_CONFIRMED));
+        }
+        upd_app_confirmed(&upd, (int)ok);
     }
 #endif
         break;
@@ -976,18 +1172,18 @@ static void upd_action(uint32_t a)
 }
 
 /* the decoded bits of a capture: this board's slot (process_capture) or a whole update frame (upd_capture), never
- * both at once (each is used up within its call) */
+ * both at once (each is used up within its call). 16-byte aligned (0.6.3): ws_decode_frame clears it with memset,
+ * whose 16-byte path otherwise came and went with the RAM layout (+27 instructions per slot) */
 static union {
     uint8_t slot[PROTO_BITS_BUF];
     uint8_t upd[UPD_FRAME_BYTES + 4];
-} dec;
+} dec __attribute__((aligned(16)));
 
 static void upd_capture(void)
 {
-    static const ws_timing_t tm = WS_TIMING_DEFAULT;
     uint8_t *f = dec.upd;
     if (cap_bits < UPD_FRAME_BITS ||
-        ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)UPD_FRAME_BITS, &tm, f) != (int)UPD_FRAME_BITS) {
+        ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)UPD_FRAME_BITS, &ws_tm, f) != (int)UPD_FRAME_BITS) {
         return;                            /* the session repeats every block (passes) */
     }
     upd_action(upd_app_frame(&upd, f, ms_now));
@@ -1033,7 +1229,23 @@ static void upd_boot(void)
 /* every ms: transparency timeout / pending results / a delayed confirm; the watchdog-loop count */
 static void upd_service(void)
 {
+    uint8_t was_transparent = (uint8_t)upd_app_transparent(&upd);
     upd_action(upd_app_poll(&upd, ms_now));
+    if (was_transparent && !upd_app_transparent(&upd)) {
+        gate_plan_t g = proto_gate_plan(proto_active(&frx.ps));
+        uint8_t i = (uint8_t)(plan_idx ^ 1u);
+        plan_buf[i] = g;
+        BARRIER();
+        plan_idx = i;
+        /* With no more frames there is no frame-end ISR to install the normal plan.
+         * Re-arm only on an armed idle input; an active/partial frame finishes normally. */
+        __disable_irq();
+        if (ft.armed && ft.cap_state == 0u && DIN_EDGES() == 0u) {
+            gate_rearm(&g);
+            plan = g;
+        }
+        __enable_irq();
+    }
 #if UPD_APP
     if (!upd_wd_cleared && up_s >= UPD_WD_CLEAR_S && upd_ho_valid(HO)) {
         HO->wd_resets = 0;                 /* running fine: the bootloader starts counting again */
@@ -1045,7 +1257,6 @@ static void upd_service(void)
 
 static void process_capture(void)
 {
-    static const ws_timing_t tm = WS_TIMING_DEFAULT;
     uint8_t *bits = dec.slot;
     uint32_t skip = cap_skip, want = cap_bits - skip;
     proto_t p = (proto_t)cap_proto;
@@ -1053,42 +1264,55 @@ static void process_capture(void)
     int n;
 
     BARRIER();                             /* din_copy: read after cap_ready (the ISR's copy is complete) */
-    cap_ready = 0;
     if (cap_own == PROTO_UPD_BITS && skip == 0u) {
         upd_capture();                     /* a whole update frame (the transparent plan): not a slot */
+        BARRIER();
+        cap_ready = 0;
         return;
     }
-    n = ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)want, &tm, bits);
+    if (want - 1u >= PROTO_MAX_BITS) {       /* 0 or too many (also cap_bits < cap_skip); 0.6.4: 0 = a WS2915 frame
+                                              that ended at its header (fable-robust: no 0-bit decode, not counted) */
+        BARRIER();
+        cap_ready = 0;
+        return;
+    }
+    n = ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)want, &ws_tm, bits);
     if (n != (int)want) {
+        BARRIER();
+        cap_ready = 0;
         if (n < 0 && -n < 6) {
             stat.dec_err[-n]++;
         }
         return;
     }
     stat.decoded++;
-    if (frx_capture(&frx, cap_frame, p, bits, want, cap_own, skip, &slot) & FRX_SHOW_WS) {
+    n = (int)frx_capture(&frx, cap_frame, p, bits, want, cap_own, skip, &slot);
+    BARRIER();                             /* release only after every sample and metadata read */
+    cap_ready = 0;
+    if ((uint32_t)n & FRX_SHOW_WS) {
         handle_slot(&slot, p);
     }
 }
 
 static void process_frame_end(void)
 {
-    static const ws_timing_t tm = WS_TIMING_DEFAULT;
     uint8_t tail[8], i;
     const uint8_t *t8 = 0;
     frx_end_t e;
+    uint32_t end_tick = fe_tick, total = fe_bits;
     BARRIER();                             /* tail_copy: read after fe_ready */
-    fe_ready = 0;
-    if (tail_words != 0u && ws_decode_last(tail_copy, (uint32_t)tail_words * 16u, &tm, tail) >= (int)ULTRA_HDR_BITS) {
+    if (tail_words != 0u && ws_decode_last(tail_copy, (uint32_t)tail_words * 16u, &ws_tm, tail) >= (int)ULTRA_HDR_BITS) {
         t8 = tail;                         /* the frame's last 64 bits: an Ultra header? */
     }
-    frx_frame_end(&frx, fe_frame, fe_bits, t8, &e);
+    frx_frame_end(&frx, fe_frame, total, t8, &e);
+    BARRIER();
+    fe_ready = 0;
     upd_app_frame_end(&upd, e.ultra_header, e.flags, ms_now);
     if (e.ultra_header && (e.flags & ULTRA_HDR_UPD)) {
         last_data_ms = ms_now;             /* an update session is signal too (lights hold / effects run) */
         signal_lost = 0;
     }
-    if (e.after == PROTO_ULTRA && proto_tail_wanted(fe_bits)) {
+    if (e.after == PROTO_ULTRA && proto_tail_wanted(total)) {
         if (e.ultra_header) {
             stat.ultra_headers++;
         } else {
@@ -1105,7 +1329,7 @@ static void process_frame_end(void)
         protocol_changed(e.before, e.after);
     }
     if (e.ultra_sync) {
-        handle_ultra(e.host_us, fe_tick, e.ultra_slot ? frx.slot : 0);   /* also on the frame that locked Ultra */
+        handle_ultra(e.host_us, end_tick, e.ultra_slot ? frx.slot : 0);   /* also on the frame that locked Ultra */
     }
     if (frx.ps.mode == PMODE_AUTO && frx.ps.locked != PROTO_NONE && !frx.ps.provisional &&
         frx.ps.locked != set.last_proto) {
@@ -1288,11 +1512,9 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
     }
     stat.test_mode = tj.active;
     stat.vs_supply_mv = vs_sup.valid ? vs_sup.mv : 0u;
-    vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
+    /* Extrema are consumed only by status_begin, never by watch or keystrokes. */
     stat.vs_aux_mv = vs_aux.valid ? vs_aux.mv : 0u;
     stat.dip_ref_mv = vsense_mv(&vs_sup, vdip.ref_q12 >> 8, 16u);   /* Q12 as 16 pairs */
-    stat.en_boot_mwh = en.boot_mwh;
-    stat.en_total_wh = energy_total_wh(&en);
     stat.oc_show = ocl.show;
     stat.oc_cause = ocl.last_cause;
     stat.oc_limiting = ocl.limiting;
@@ -1302,15 +1524,22 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
 
 }
 
+static void status_begin(void)
+{
+    vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
+}
+
 int main(void)
 {
-    uint32_t last_ms = 0, fps_ms = ms_now, fps_frames = 0, watch_t = 0;
+    uint32_t last_ms = 0, fps_ms = ms_now, fps_frames = 0, watch_t = 0, may;
     uint8_t ack_on = 0, was_active = 0;
     int ch;
 
     stack_paint();                         /* the high-water mark in `status` */
     if (settings_load(&set, &sext) != 0) {
         settings_default(&set);            /* (the extension is cleared too) */
+    } else {
+        (void)settings_sanitize(&set);     /* a record of another build: out-of-range fields take their defaults */
     }
     if (scene_load(&scene_stored) != 0) {
         scene_clear(&scene_stored);        /* none stored: dark until data comes (as before) */
@@ -1319,7 +1548,6 @@ int main(void)
     scene_boot(&srun, &scene_stored);
     ultra_init(&ul, hw_uid_hash());        /* (a seed per board: the power-on effects' randomness) */
     fx_mask = ultra_fx_load(&ul, (const uint8_t *)SCENE_FX_ADDR, fx_crc);   /* the power-on effects: from here on */
-    fx_chk = fx_want(fx_crc, 1) & 0x7FFFFFFFu;
     ultra_scene_fx_start(&ul, fx_mask, tick_now);
     for (ch = 0; ch < (int)ULTRA_LIGHTS; ch++) {
         if (fx_mask & (1u << ch)) {
@@ -1341,7 +1569,6 @@ int main(void)
     smooth_init(&sm);
     hw_init();
     mcutemp_init(&mt);
-    energy_init(&en, energy_load(), ms_now);
     health_init(&hl);
     ss_init(&ss, hw_uid_hash());
     vsense_init(&vs_sup, VSENSE_SUPPLY_RT, VSENSE_SUPPLY_RB, VSENSE_VREF_MV);
@@ -1363,6 +1590,7 @@ int main(void)
     fw_version = fwver_parse(FW_VERSION);
 #endif
     fwver_format(fw_version, fw_version_text);
+    energy_init(&en, life_load(&en.lt), ms_now, fw_version, stat.reset_flags & RCC_IWDGRSTF);
     stat.version = fw_version != 0u ? fw_version_text : FW_VERSION " (development build)";
     stat.bl_version = upd.info.bl_version;
     stat.hw_id = upd.info.hw_id;
@@ -1381,6 +1609,7 @@ int main(void)
     cli.write = uart_write;
     cli.apply = cli_apply;
     cli.save_now = save_now;
+    cli.status_begin = status_begin;
     cli.set = &set;
     cli.scene = &scene_want;
     cli.st = &stat;
@@ -1388,6 +1617,7 @@ int main(void)
     stat.pw = &pw;
     stat.hl = &hl;
     stat.dip_vs = &vs_sup;
+    stat.en = &en;
     ultra_on = (uint8_t)(proto_active(&frx.ps) == PROTO_ULTRA);
     apply_settings();
     {
@@ -1397,6 +1627,12 @@ int main(void)
         BARRIER();                         /* (as at the frame end) */
         rx_ready = 1;                      /* gate closed until the tracker arms (idle line) or a frame ends */
     }
+    for (ch = 0; ch < 4; ch++) {
+        flash_erase_ahead();               /* the stores' next pages: erased now, the outputs still dark (0.6.3: the
+                                              lifetime record's) */
+    }
+    flash_boot = 0;
+    budget_init(&flash_bright, ms_now, 1u, FLASH_BRIGHT_MS);
     cli_banner(&cli);
     uart_write("type help\r\n");
 
@@ -1415,14 +1651,22 @@ int main(void)
             protocol_changed(ultra_on ? PROTO_ULTRA : PROTO_NONE, proto_active(&frx.ps));   /* console mode change */
         }
         ch = uart_getc();
+        if (ch == -2) {
+            cli.len = 0;                   /* a flash operation dropped received bytes: the line being typed goes */
+            ch = uart_getc();
+        }
         if (ch >= 0 || (cli.watch_ms && ms_now - watch_t >= cli.watch_ms)) {
-            status_snapshot();             /* console input, or `watch`: a line of live values (~120 bytes) */
+            status_snapshot();             /* live values; extrema are consumed only by status_begin */
             if (ch < 0) {
                 watch_t = ms_now;
                 cli_watch(&cli);
             }
             for (; ch >= 0; ch = uart_getc()) {
                 cli_feed(&cli, (char)ch);
+                if (ch == '\r' || ch == '\n') {
+                    break;                 /* one line per pass (0.6.4, gpt-opt2: seven queued `status` lines blocked
+                                              one pass for 0.8 s, past the watchdog; the rest waits in the RX ring) */
+                }
             }
         }
         uart_kick();
@@ -1464,13 +1708,15 @@ int main(void)
                 fps_frames = frames;
                 fps_ms += 1000u;           /* (whole seconds: the uptime) */
                 up_s++;
+                energy_second(&en, ms_now, up_s, (uint32_t)pw.short_trips << 16 | pw.ovl_trips, is.i_avg, temp_peak);
             }
+            flash_erase_ahead();           /* while low: the stores' next pages */
             /* save 2 s after the last change, not while a pattern is blinking (except its final dark pause), with a
-             * token of the settings' write budget: a burst, then one per STORE_REFILL_MS. The newest values wait for
-             * the token, so the last change is never lost (only stored later). */
-            if (settings_dirty && ms_now - changed_ms >= SAVE_DEBOUNCE_MS &&
-                (!ack.active || ack.seg + 1u == ack.nseg) && budget_take(&set_budget, ms_now, 1u)) {
-                save_now();
+             * token of the settings' write budget: a burst, then one per STORE_REFILL_MS (and when the flash admits
+             * it: 0.6.4). The newest values wait, so the last change is never lost (only stored later). */
+            if (settings_dirty && ms_now - changed_ms >= SAVE_DEBOUNCE_MS && (!ack.active || ack.seg + 1u == ack.nseg) &&
+                (may = flash_may(settings_pending() == 2u, 0u)) != 0u && budget_take(&set_budget, ms_now, 1u)) {
+                (void)settings_write(may);
             }
             scene_service();
             if (srun.fading || ss.state == SS_RUN) {
@@ -1481,14 +1727,35 @@ int main(void)
             outputs_dirty = 0;
             outputs_update(ack_on);
         }
-        if (cal_save_pend && budget_take(&cal_budget, ms_now, 1u)) {   /* (a newer test meanwhile: that one) */
+        /* the calibration (a newer test meanwhile: that one; 2 = a cleared record, the factory reset's) */
+        if (cal_save_pend && (may = flash_may(cal_pending() == 2u, 0u)) != 0u && budget_take(&cal_budget, ms_now, 1u)) {
             isense_cal_t c;
-            cal_save_pend = 0;
-            if (isense_cal_get(&is, &c)) {
-                flash_stall_begin();
-                flash_stall_end(cal_store(&c, &cal_cnt));
-                cal_present = 1;
+            uint32_t have = isense_cal_get(&is, &c);
+            if (cal_save_pend == 2u || have) {
+                if (!have) {
+                    uint8_t *z = (uint8_t *)&c;
+                    uint32_t k;
+                    for (k = 0; k < sizeof c; k++) {
+                        z[k] = 0;          /* levels 0: cleared */
+                    }
+                }
+                flash_stall_begin(may);
+                if (flash_stall_end(cal_store(&c, &cal_cnt))) {
+                    cal_present = (uint8_t)have;
+                    cal_save_pend = 0;
+                }
+            } else {
+                cal_save_pend = 0;
             }
+        }
+        /* (claude-cpu, 0.6.4) nothing left to do: the core sleeps until the next interrupt, at the latest the poll tick
+         * (50 us); a flag an interrupt sets after these checks waits for that tick. Only the core stops: DMA, timers,
+         * ADC and the UART run on (RM 2.3.2; AHBPCENR SRAMEN = 1 from reset), and a debugger keeps it awake. Not during
+         * a flash operation (flash_op runs inside this pass), so its SRAM tick is unaffected. ~4 mA less at 3.3 V
+         * (datasheet tables 4-6-1 / 4-7-1: 11.4 -> 7.1 mA at 144 MHz), wake-up 1.4 us. BENCH: the current, the
+         * debugger, the slew interrupt's budget at 100 kHz. */
+        if (!cap_ready && !fe_ready && ms_now == last_ms) {
+            CPU_SLEEP();
         }
     }
 }

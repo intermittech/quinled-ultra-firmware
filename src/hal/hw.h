@@ -12,6 +12,7 @@
 #include "../core/store.h"
 #include "../core/calstore.h"
 #include "../core/energy.h"
+#include "../core/flashrec.h"
 #include "../core/ultra.h"
 #include "board.h"
 
@@ -20,6 +21,15 @@
  * section (the build uses LTO, so a call into another file is no barrier). */
 #ifndef BARRIER                                  /* (the host soak test, test/test_soak.c, has its own) */
 #define BARRIER() __asm volatile("" ::: "memory")
+#endif
+/* code that runs from SRAM (vendor/wch/Link_sections.ld .ramtext, copied by the startup with .data): the current trip
+ * during a flash operation (hw.c flash_op), when nothing may be fetched from the flash */
+#ifndef RAMCODE
+#define RAMCODE __attribute__((section(".ramtext"), noinline))
+#endif
+/* the main loop's idle: the core sleeps until an interrupt (WFI; PFIC_SCTLR SLEEPDEEP = 0: sleep mode) */
+#ifndef CPU_SLEEP
+#define CPU_SLEEP() __asm volatile("wfi" ::: "memory")
 #endif
 
 /* PWM dither tables, written by the main loop, read by DMA once per PWM period (into the CCRs). pwm_table()
@@ -45,6 +55,8 @@ void watchdog_kick(void);
  * third of a period apart, G and W2 right-aligned: R, B, W1 turn on at 0, 1/3, 2/3 of the period, G and W2 turn off
  * at 0 and 2/3 -> no two channels turn on together. */
 void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger);
+/* main.c, for pwm_start: write every channel's table (pwm_table) for the new period / mode before the timers run */
+void pwm_fill(void);
 uint8_t pwm_right_aligned(uint8_t ch);          /* channel uses PWM mode 2 (table holds steps - duty) */
 /* adaptive stagger: move TIM2 / TIM3 to these offsets (Q16 of the period, relative to TIM1), gradually */
 void pwm_set_phase(uint16_t o2, uint16_t o3);
@@ -59,7 +71,9 @@ uint32_t din_ring_pos(void);                    /* words written so far into din
  * by hw_adc_ms() from the poll tick once per ms: the voltage channels (core/vsense.h), or once a second the MCU
  * temperature (core/mcutemp.h). */
 void hw_adc_init(void);
-void hw_adc_ms(void);                           /* poll tick, every 1 ms */
+/* poll tick, every 1 ms: reads the last sequence, starts the next; 1 = the temperature's (84 us without a PA7
+ * conversion: the next tick would read this tick's PA7 again) */
+uint32_t hw_adc_ms(void);
 #define ISENSE_RAW() ((uint32_t)(ADC1->RDATAR & 0xFFFu))
 /* the voltage channels since the last take: sums of pairs of conversions (sum2[0] PA4 supply / bus, sum2[1] PA0
  * spare / V_B), n pairs each */
@@ -71,6 +85,21 @@ uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2);
 /* all five PWM outputs low at once (OCxM = force inactive; ISR-safe), or back to PWM. The tables keep running.
  * Call pwm_force_off(0) with interrupts off (it must not undo a trip the poll tick raised meanwhile). */
 void pwm_force_off(uint8_t off);
+/* the poll tick's fast trip (0.6.4, claude-cpu): pwm_force_off(1) inline, so that the tick keeps no stack frame; also
+ * the SRAM trip (hw_flash_trip). OCxM = 4 (force inactive) of G / R (TIM1 CH1 / CH2), B (TIM2 CH4), W2 / W1 (TIM3 CH3 /
+ * CH4); TIM2 CH3 (B's DMA trigger) and TIM3 CH1 (the DIN capture) stay. The host soak's register model has no PWM
+ * timers: the call there. */
+#if defined(TIM1)
+extern volatile uint8_t pwm_forced;
+#define PWM_TRIP() do {                                                                \
+        pwm_forced = 1u;                                                               \
+        TIM1->CHCTLR1 = (uint16_t)((TIM1->CHCTLR1 & ~0x7070u) | 0x4040u);             \
+        TIM2->CHCTLR2 = (uint16_t)((TIM2->CHCTLR2 & ~0x7000u) | 0x4000u);             \
+        TIM3->CHCTLR2 = (uint16_t)((TIM3->CHCTLR2 & ~0x7070u) | 0x4040u);             \
+    } while (0)
+#else
+#define PWM_TRIP() pwm_force_off(1)
+#endif
 void led_set(uint8_t on);
 /* the test jig's pad (TP9 = PB10, pull-up) reads low: grounded */
 #if BOARD_TESTJIG
@@ -78,30 +107,15 @@ void led_set(uint8_t on);
 #else
 #define TESTJIG_PAD_LOW() ((uint8_t)0u)
 #endif
-/* settings + their extension (store_ext_t: the board current limit) */
-int  settings_load(settings_t *s, store_ext_t *ext);
-/* 1-2 ms (append), +16 ms when the page needs erasing; interrupts are off meanwhile. Returns that time in us
- * (estimate, BENCH: measure), so the caller can move its time base along. */
-uint32_t settings_store(const settings_t *s, const store_ext_t *ext);
-/* power-on scene log (same stall as above, ~1 ms + 16 ms every 16th write) */
-int  scene_load(scene_t *sc);
-uint32_t scene_store(const scene_t *sc);
-uint32_t hw_flash_half(uint32_t addr, uint16_t v);    /* firmware update: one status record (stall in us) */
-/* the energy log (core/energy.h): the newest stored value (Wh, 0 = none); store one (0 = not written: the page is
- * full and may_erase is 0); erase it (factory reset) */
-uint32_t energy_load(void);
-uint32_t energy_store(uint32_t wh, uint8_t may_erase);
-uint32_t energy_clear(void);
-/* the power-on effect store (two pages at SCENE_FX_ADDR, core/ultra.h ULTRA_FX_*; loaded with ultra_fx_load): the
- * lights in mask with their CRC-8s (none: the store is erased), the header last */
-uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS]);
-/* current calibration page (core/calstore.h): the newest record (-1: none, or cleared); store one (levels 0 =
- * clear), ~1 ms + 16 ms every 4th write. *count: calibrations stored on this board */
-int  cal_load(isense_cal_t *c, uint16_t *count);
-uint32_t cal_store(const isense_cal_t *c, uint16_t *count);
+/* the flash: the stores (core/flashrec.h) on hw.c's flash_op. During an operation the tick runs from SRAM: main.c's
+ * flash_poll_isr (the time base and the fast trip), which trips through hw_flash_trip (SRAM) */
+void flash_poll_isr(void);
+void hw_flash_trip(void);
 /* UART: RX by DMA into a ring, TX by DMA from a buffer (non-blocking unless the buffer is full) */
-int  uart_getc(void);                           /* -1 if nothing new */
+int  uart_getc(void);                           /* -1 if nothing new; -2 once after a flash operation dropped
+                                                   received bytes: cancel the line being typed */
 void uart_write(const char *s);
 void uart_kick(void);                           /* start sending what uart_write buffered */
+uint32_t uart_busy(void);                       /* something queued or on the line (flash_op waits for it) */
 
 #endif

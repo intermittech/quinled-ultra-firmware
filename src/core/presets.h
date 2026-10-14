@@ -14,7 +14,7 @@
 #define PWM_STEPS_MAX      65535u      /* 2.197 kHz: CCR = 65535 > ARR = 65534 still gives 100 % on */
 #define SKIP_MIN_HZ        2000u       /* pulse-skipping / dither patterns repeat at >= 2 kHz */
 
-extern const uint32_t pwm_preset_steps[PWM_PRESET_COUNT];
+extern const uint16_t pwm_preset_steps[PWM_PRESET_COUNT];   /* <= 65535: 16 bits */
 
 /* dither pattern length: ceil(65535 / steps) entries resolve every 16-bit level (input range 0..65535) */
 static inline uint8_t dither_len_for(uint32_t steps)

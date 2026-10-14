@@ -63,13 +63,13 @@ jobs:
 
       - name: The released image installs through the bootloader logic
         run: |
-          for img in dist/*-hw*.bin; do BL_TEST_IMAGE="$(cygpath -w "$img")" cmd //c "bootloader\\test\\build_bl_test.cmd"; done
+          for img in dist/quinled-*.bin; do BL_TEST_IMAGE="$(cygpath -w "$img")" cmd //c "bootloader\\test\\build_bl_test.cmd"; done
 
       - name: Channel manifests
         run: |
           git fetch origin channels:channels 2>/dev/null && git worktree add ch channels || {
             git worktree add --detach ch && git -C ch checkout --orphan channels && git -C ch rm -rfq . ; }
-          IMAGES=""; for j in dist/*-hw*.json; do IMAGES="$IMAGES --image $j"; done
+          IMAGES=""; for j in dist/quinled-*.json; do IMAGES="$IMAGES --image $j"; done
           python tools/release/make_manifest.py --channels-dir ch --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" \
             --summary "$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")" $IMAGES | tee changed.txt
 
@@ -89,7 +89,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          FILES="dist/*-hw*.bin dist/*-factory.hex dist/bootloader-rev*.hex"
+          FILES="dist/quinled-*.bin dist/*-factory.hex dist/bootloader-rev*.hex"
           if [ "$STAGE" = stable ]; then
             gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --notes-from-tag $FILES dist/stable.json
           else

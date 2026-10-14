@@ -10,7 +10,7 @@ static uint32_t ver_ms(const ack_t *a)
 {
     uint32_t i, t = 0;
     for (i = 0; i < a->nseg; i++) {
-        t += a->ms[i];
+        t += (a->ms[i] * ACK_UNIT_MS);
     }
     return t;
 }
@@ -22,7 +22,7 @@ static int ver_segs(const ack_t *a, const uint16_t *want, uint32_t n)
         return 0;
     }
     for (i = 0; i < n; i++) {
-        if (a->ms[i] != want[i]) {
+        if ((a->ms[i] * ACK_UNIT_MS) != want[i]) {
             return 0;
         }
     }
@@ -84,7 +84,7 @@ static void test_version(void)
         ack_start_version(&a, 0);
         CHECK(ver_segs(&a, dev, sizeof dev / sizeof dev[0]), "development build: 3 fast + one long flash");
         ack_start_version(&a, fwver_parse("255.255.255-rc.63"));
-        CHECK(a.nseg <= ACK_MAX_SEG && a.ms[a.nseg - 1u] == 1000u && ver_ms(&a) < 40000u,
+        CHECK(a.nseg <= ACK_MAX_SEG && a.ms[a.nseg - 1u] * ACK_UNIT_MS == 1000u && ver_ms(&a) < 40000u,
               "the longest code fits (%u of %u segments, %.1f s)", a.nseg, (unsigned) ACK_MAX_SEG, ver_ms(&a) / 1000.0);
         {
             uint8_t on;
@@ -111,6 +111,7 @@ static void test_version(void)
         c.set = &cli_set;
         c.st = &st;
         st.steps = 5760;                   /* status prints the PWM frequency (144 MHz / steps) */
+        st.en = &test_en;
         st.version = "0.4 (development build)";
         run_cli(&c, "version\r");
         CHECK(strstr(cli_out, "QuinLED dig2analog-ultra firmware v0.4 (development build), Copyright (C) 2026 QuinLED, "

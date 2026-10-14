@@ -17,25 +17,49 @@
  * Scenarios (soak_tests.exe <name>; build_host.cmd runs each in its own process: a fresh boot):
  *   wrap   boot 65 s before the 1 ms counter's wrap, 0.2 s before the 20 kHz tick's, 30 s before the host clock's: a
  *          20 s transition across the ms wrap, a breathe effect across all three, the absolute-deadline control
- *   long   52 days: a 28-day stretch dark (energy), a dark hold (IDENTIFY 3) whose fade must not replay 2^32 ms later,
- *          supply dips (one 100 ms after the ms wrap), 3 days without a host (signal loss holds: the effect runs on),
- *          the tick's 20 wraps, the host's ms wrap; the console's uptime and ages at the end; every flash write
+ *   long   52 days: a 28-day stretch dark (the lifetime record: one write a day, no lit second), a dark hold
+ *          (IDENTIFY 3) whose fade must not replay 2^32 ms later, supply dips (one 100 ms after the ms wrap), 3 days
+ *          without a host (signal loss holds: the effect runs on), the tick's 20 wraps, the host's ms wrap; the
+ *          console's uptime, ages and lifetime line at the end; every flash write
  *   fx     no host ever: the power-on effects (candle, breathe) from the stored effect, 3 days, past the tick's wrap
  *   cfg    an automation: Ultra CONFIG 23 (stored) flipped every second for a day, then every minute for 3 days;
  *          calibrations (IDENTIFY 2) every minute for 2 hours: the settings / calibration write budgets, and that the
- *          last value is the one stored
+ *          last value is the one stored; then a factory reset (console `defaults`): everything cleared but the
+ *          lifetime record (0.6.3), whose pages it never touches
+ *   spec   the scene's 3 s take-over, CONFIG 22's persistence rules, IDENTIFY 3 with argument 0 (60 s), signal
+ *          loss "off" and the host's refresh afterwards (review round 4, fable-spec)
+ *   race   (r4, claude-bugs) a capture the main loop takes late, after the next frame changed its tags: a glitch, then
+ *          a WS2915 header pause (0.6.2: the decoder asked for 65,505 bits, ~8 KB of RAM zeroed on the chip)
+ *   tripreset (r4, claude-bugs) a factory reset (`defaults`) while a short holds the outputs off: they come back with
+ *          the retry (0.6.2: the reset cleared the trip but not the forced-off outputs, dark until a power cycle)
+ *   longws (r4, claude-bugs) WS2805 / WS2915 frames longer than the 16-bit edge counter counts (1,700 / 900 chips):
+ *          auto mode locks and shows them (0.6.2: the count modulo 65,536 fit no protocol, never locked, dark)
+ *   minmax (r4, claude-bugs) `status` typed key by key: its supply min / max cover the time since the last command
+ *          (0.6.2: every key restarted them, a dip before the typing never showed)
+ *   r4rx / r4reset / r4gate (r4, gpt-bugs) the ISR against owned mailboxes; defaults while tripped; an update's
+ *          silent end restores the gate (test_r4_*.c); r4h7 / r4wraps / r4flash (test_r4.c); v* (gpt-verify)
  * Steps are bounded by 2 ms of an effect's slope: the host clock runs 0.6 % fast, so the engine's ms (integer)
  * advances by 2 in one board ms every ~170 ms.
  * Each checks: no stuck or false events (trips, limit events, D9, dips, signal loss), no lost transitions, no flash
- * writes but the expected ones, outputs continuous across every wrap. The negative control (wrap): an absolute
+ * writes but the expected ones, no half-word programmed that wasn't erased, outputs continuous across every wrap.
+ * The negative control (wrap): an absolute
  * deadline `now >= t_end` armed before the ms wrap fires at once, where the firmware's `now - t0 >= d` waits. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "../src/core/ws_decode.h"
+static unsigned v_oversize;
+static int v_decode(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, const ws_timing_t *tm, uint8_t *out)
+{
+    if (nbits > 384u) { v_oversize++; return WS_ERR_TRUNCATED; }
+    return ws_decode_frame(buf, nsamples, nbits, tm, out);
+}
+#define ws_decode_frame v_decode
 #define main fw_main
 #include "../src/app/main.c"
 #undef main
+#undef ws_decode_frame
 #include "../src/core/scratch.h"
 
 /* kernel32 (no windows.h: its macros would meet the firmware's names) */
@@ -63,7 +87,7 @@ static uint64_t sim_ns, sim_ticks;                       /* real time, real tick
 static uint64_t ring_words;                              /* SPI words the DMA wrote */
 static int ring_dirty;                                   /* din_ring holds a frame's samples somewhere */
 static uint32_t edges_total, edges_rearm;                /* DIN falling edges; at the last gate re-arm */
-static uint8_t wf_bits[64];                              /* the frame on the wire (MSB first) */
+static uint8_t wf_bits[16400];                           /* the frame on the wire (MSB first; r4: up to 131,200 bits) */
 static uint32_t wf_nbits, wf_next_fall;
 static uint64_t wf_t0;
 static int wf_on;
@@ -171,7 +195,19 @@ void gate_rearm(const gate_plan_t *g) { (void)g; edges_rearm = edges_total; sim_
 void gate_force_closed(void) {}
 uint32_t din_ring_pos(void) { return (uint32_t)(ring_words % DIN_RING_WORDS); }
 void hw_adc_init(void) {}
-void hw_adc_ms(void) { vs_pending++; }
+/* the temperature's injected sequence (hw_temp_start, then the next ms): 84 us without a PA7 conversion, so the
+ * next tick reads the same RDATAR (sim_tick keeps it); the voltages' sequence (28 us) ends before the next tick */
+static uint8_t soak_temp_req, soak_adc_held;
+uint32_t hw_adc_ms(void)
+{
+    if (soak_temp_req) {
+        soak_temp_req = 0;
+        soak_adc_held = 1;
+        return 1;
+    }
+    vs_pending++;
+    return 0;
+}
 void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
 {
     *n = vs_pending;
@@ -179,7 +215,7 @@ void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
     sum2[1] = vs_pending * 2u * 2048u;
     vs_pending = 0;
 }
-void hw_temp_start(void) {}
+void hw_temp_start(void) { soak_temp_req = 1; }
 uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2) { *ts2 = 2u * 1710u; *vref2 = 2u * 1489u; return 1; }
 void pwm_force_off(uint8_t off) { sim_forced = off; }
 void led_set(uint8_t on) { sim_led_on += on != 0u; }
@@ -198,152 +234,56 @@ void uart_write(const char *s)
 }
 void uart_kick(void) {}
 
-/* ---- flash: the real addresses (VirtualAlloc), the stores as hal/hw.c, writes / erases per page */
-#define FL_BASE 0x08000000u
+/* ---- flash: the real addresses (VirtualAlloc), writes / erases per page. 0.6.4: the stores are core/flashrec.c's
+ * themselves; this is hal/hw.c's flash_op: an erase or a program blocks the main loop for a test duration (erase
+ * 16 ms, a half-word FL_HW_US) while the tick runs as the SRAM path does (flash_poll_isr: time bases, fast trip).
+ * Counted: erases / programs while an output is at or above the flash's "low" level (15 %), and half-words programmed
+ * that were not erased (the chip would refuse them). */
+#define FL_BASE  0x08000000u
+#define FL_HW_US 100u                                    /* a test duration, not a measurement (BENCH) */
 static uint8_t *fl;
-static uint32_t fl_writes[256], fl_erases[256];
+static uint32_t fl_writes[256], fl_erases[256], fl_bad, fl_lit_erases, fl_bright_erases, fl_bright_progs;
+static uint32_t fl_fail;                                 /* a test: the next operations on the settings pages fail */
 static void sim_stall(uint32_t us);
 
-static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
+static uint32_t fl_bright(void)
 {
-    uint32_t i, us = 2000u;
+    uint32_t i, b = 0;
+    for (i = 0; i < 5u; i++) {
+        b |= out_now[i] >= FLASH_LOW_LEVEL;
+    }
+    return b;
+}
+
+uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
+{
+    uint32_t i, us = halfwords * FL_HW_US;
+    if (fl_fail && (((addr | erase_addr) & ~0xFFu) == SETTINGS_ADDR || ((addr | erase_addr) & ~0xFFu) == SETTINGS_B_ADDR)) {
+        fl_fail--;
+        sim_stall(FL_HW_US);
+        return FLASH_ERR_WRP;
+    }
     if (erase_addr != 0u) {
         memset(fl + (erase_addr - FL_BASE), 0xFF, 256u);
         fl_erases[(erase_addr - FL_BASE) / 256u]++;
         us += 16000u;
+        fl_lit_erases += (out_now[0] | out_now[1] | out_now[2] | out_now[3] | out_now[4]) != 0u;
+        fl_bright_erases += fl_bright();
     }
     for (i = 0; i < halfwords; i++) {
+        fl_bad += ((uint16_t *)(uintptr_t)addr)[i] != 0xFFFFu;   /* (the chip would refuse it) */
         ((uint16_t *)(uintptr_t)addr)[i] = src[i];
     }
     if (halfwords) {
         fl_writes[(addr - FL_BASE) / 256u]++;
+        fl_bright_progs += fl_bright();
     }
-    sim_stall(us);                                       /* the CPU stops, real time goes on */
-    return us;
+    sim_stall(us);                                       /* the main loop waits, the tick runs on */
+    return FLASH_OK;
 }
 
-static uint8_t store_free, cal_free_, energy_next_;
-static uint32_t store_seq, cal_seq_;
-static uint16_t cal_cnt_;
-static uint32_t scene_next_;
-static uint8_t scene_erase_;
-static uint16_t scene_seq_;
-
-static uint32_t page_append(uint32_t page, uint8_t *next, uint32_t bytes, uint32_t n, uint32_t may_erase)
-{
-    uint32_t idx = *next, erase = 0;
-    if (idx >= n) {
-        if (!may_erase) {
-            return 0;
-        }
-        erase = page;
-        idx = 0;
-    }
-    *next = (uint8_t)(idx + 1u);
-    return flash_program(page + idx * bytes, (const uint16_t *)core_scratch, bytes / 2u, erase);
-}
-
-int settings_load(settings_t *s, store_ext_t *ext)
-{
-    uint32_t seq;
-    store_free = (uint8_t)store_next_free((const uint8_t *)SETTINGS_ADDR);
-    if (store_find_ext((const uint8_t *)SETTINGS_ADDR, s, ext, &seq) < 0) {
-        store_ext_clear(ext);
-        return -1;
-    }
-    store_seq = seq;
-    return 0;
-}
-
-uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
-{
-    store_pack_ext(s, ext, ++store_seq, (store_slot_t *)core_scratch);
-    return page_append(SETTINGS_ADDR, &store_free, STORE_SLOT_BYTES, STORE_SLOTS, 1u);
-}
-
-int scene_load(scene_t *sc)
-{
-    int newest = scene_log_find((const uint8_t *)SCENE_LOG_ADDR, sc, &scene_seq_);
-    scene_next_ = (uint32_t)scene_log_next((const uint8_t *)SCENE_LOG_ADDR, newest, &scene_erase_);
-    return newest < 0 ? -1 : 0;
-}
-
-uint32_t scene_store(const scene_t *sc)
-{
-    scene_rec_t *rec = (scene_rec_t *)core_scratch;
-    uint32_t idx = scene_next_, erase = 0;
-    if (scene_erase_) {
-        erase = SCENE_LOG_ADDR + (idx / SCENE_RECS_PAGE) * SCENE_PAGE_BYTES;
-    }
-    scene_log_pack(sc, ++scene_seq_, rec);
-    scene_next_ = (idx + 1u) % SCENE_RECS;
-    scene_erase_ = (uint8_t)(scene_next_ % SCENE_RECS_PAGE == 0u);
-    return flash_program(SCENE_LOG_ADDR + idx * SCENE_REC_BYTES, (const uint16_t *)rec, SCENE_REC_BYTES / 2u, erase);
-}
-
-int cal_load(isense_cal_t *c, uint16_t *count)
-{
-    cal_free_ = (uint8_t)cal_next_free((const uint8_t *)CAL_PAGE_ADDR);
-    if (cal_find((const uint8_t *)CAL_PAGE_ADDR, c, &cal_seq_, &cal_cnt_) < 0) {
-        cal_cnt_ = 0;
-        *count = 0;
-        return -1;
-    }
-    *count = cal_cnt_;
-    return c->levels != 0u ? 0 : -1;
-}
-
-uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
-{
-    if (c->levels != 0u) {
-        cal_cnt_++;
-    }
-    cal_pack(c, ++cal_seq_, cal_cnt_, (cal_rec_t *)core_scratch);
-    *count = cal_cnt_;
-    return page_append(CAL_PAGE_ADDR, &cal_free_, CAL_REC_BYTES, CAL_RECS, 1u);
-}
-
-uint32_t energy_load(void)
-{
-    energy_next_ = (uint8_t)energy_log_next((const uint8_t *)ENERGY_ADDR);
-    return energy_log_find((const uint8_t *)ENERGY_ADDR);
-}
-
-uint32_t energy_store(uint32_t wh, uint8_t may_erase)
-{
-    core_scratch[0] = wh;
-    core_scratch[1] = ~wh;
-    return page_append(ENERGY_ADDR, &energy_next_, ENERGY_REC_BYTES, ENERGY_RECS, may_erase);
-}
-
-uint32_t energy_clear(void)
-{
-    energy_next_ = 0;
-    return flash_program(ENERGY_ADDR, 0, 0u, ENERGY_ADDR);
-}
-
-uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
-{
-    uint8_t *h = (uint8_t *)core_scratch;
-    uint32_t i, us = flash_program(SCENE_FX_ADDR, 0, 0u, SCENE_FX_ADDR);
-    if (mask == 0u) {
-        return us;
-    }
-    us += flash_program(SCENE_FX_ADDR + 256u, 0, 0u, SCENE_FX_ADDR + 256u);
-    core_scratch[2] = 0u;
-    for (i = 0; i < ULTRA_LIGHTS; i++) {
-        if (mask & (1u << i)) {
-            us += flash_program(SCENE_FX_ADDR + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES, (const uint16_t *)&u->light[i],
-                                ULTRA_HEAD_BYTES / 2u, 0u);
-        }
-        h[5u + i] = crc[i];
-    }
-    core_scratch[0] = ULTRA_FX_MAGIC;
-    h[4] = mask;
-    return us + flash_program(SCENE_FX_ADDR, (const uint16_t *)h, ULTRA_FX_HDR / 2u, 0u);
-}
-
-uint32_t hw_flash_half(uint32_t addr, uint16_t v) { return flash_program(addr, &v, 1u, 0u); }
+uint32_t uart_busy(void) { return 0; }
+void hw_flash_trip(void) { pwm_force_off(1); }
 
 static uint32_t page_of(uint32_t addr) { return (addr - FL_BASE) / 256u; }
 static uint32_t writes_in(uint32_t addr, uint32_t pages)
@@ -354,11 +294,11 @@ static uint32_t writes_in(uint32_t addr, uint32_t pages)
     }
     return n;
 }
-#define W_SETTINGS() writes_in(SETTINGS_ADDR, 1u)
+#define W_SETTINGS() (writes_in(SETTINGS_ADDR, 1u) + writes_in(SETTINGS_B_ADDR, 1u))
 #define W_SCENE()    writes_in(SCENE_LOG_ADDR, SCENE_LOG_PAGES)
 #define W_FX()       writes_in(SCENE_FX_ADDR, 2u)
-#define W_ENERGY()   writes_in(ENERGY_ADDR, 1u)
-#define W_CAL()      writes_in(CAL_PAGE_ADDR, 1u)
+#define W_LIFE()     (writes_in(LIFE_PAGE0_ADDR, 1u) + writes_in(LIFE_PAGE1_ADDR, 1u))
+#define W_CAL()      (writes_in(CAL_PAGE_ADDR, 1u) + writes_in(CAL_B_ADDR, 1u))
 
 /* ================================================================================================ the host (hub) */
 static int host_on;
@@ -538,7 +478,11 @@ static void sim_tick(void)
     sim_ticks++;
     wave_to(sim_ns);
     soak_tim4.CNT = (uint16_t)(edges_total - edges_rearm);
-    soak_adc1.RDATAR = load_raw();
+    if (soak_adc_held) {
+        soak_adc_held = 0;                               /* (hw_adc_ms: the temperature's sequence holds PA7) */
+    } else {
+        soak_adc1.RDATAR = load_raw();
+    }
     poll_isr();
     if (host_on && sim_ticks >= host_next && !wf_on) {
         host_frame();
@@ -549,9 +493,17 @@ static void sim_tick(void)
 static void sim_stall(uint32_t us)
 {
     sim_stalls++;
-    sim_ns += (uint64_t)us * 1000u;
-    sim_ticks += us / 50u;
-    wave_to(sim_ns);
+    for (; us >= 50u; us -= 50u) {                     /* (0.6.4: the tick runs from SRAM meanwhile) */
+        sim_ns += 50000u;
+        sim_ticks++;
+        wave_to(sim_ns);
+        if (soak_adc_held) {
+            soak_adc_held = 0;
+        } else {
+            soak_adc1.RDATAR = load_raw();
+        }
+        flash_poll_isr();
+    }
 }
 
 static void run_ticks(uint64_t n)
@@ -752,7 +704,7 @@ static void sc_wrap(void)
 static void sc_long(void)
 {
     win_t w, ref, d1;
-    uint32_t e0, e_dark, dips = 0, base_writes, d, steady = 1;
+    uint32_t e0, e_dark, dips = 0, base_writes, d, steady = 1, lit0;
     uint64_t t_rel;
     printf("soak long: 52 days, bursts of frames every 20 min, sampled every second, windows every ms\n");
     boot(0xFFFF0000u, 0xFFFFF000u, 0xFFFFFFFFull - 30000000ull);
@@ -780,39 +732,44 @@ static void sc_long(void)
     CHECK(!dk.active && out_now[0] != 0u, "long: the hold ran out, back on");
     t_rel = sim_ns;                                      /* the release (+- a few ms) */
     run_sparse(86400u * 3u / 2u, 1200u);                 /* to day 2 */
-    /* dark from day 2 to day 30: energy written once (30 s dark), then nothing; then lit again */
+    /* dark from day 2 to day 30: the lifetime record written 30 s after dark, then once a day (the powered time alone);
+     * no lit second counted (lit_ms passes 2^31 ms back on day 27); then lit again */
     run_ms(180000);                                      /* 3 min every ms: >= 1 Wh not stored yet */
-    e0 = W_ENERGY();
+    e0 = W_LIFE();
     cmd_set(0, 0, 0, 0);
     cmd_set(1, 0, 0, 0);
     cmd_set(2, 0, 0, 0);
     cmd_effect(2, ULTRA_FX_NONE, P_BREATHE, 0);
     host_next = sim_ticks;
     run_ms(40000);                                       /* the write 30 s after dark */
-    CHECK(out_now[0] == 0u && out_now[3] == 0u && out_now[4] == 0u && W_ENERGY() - e0 == 1u, "long: all dark, "
-          "the energy written 30 s later (%u)", W_ENERGY() - e0);
+    CHECK(out_now[0] == 0u && out_now[3] == 0u && out_now[4] == 0u && W_LIFE() - e0 == 1u, "long: all dark, "
+          "the lifetime record written 30 s later (%u)", W_LIFE() - e0);
+    lit0 = en.lt.lit_s;
     run_sparse(28u * 86400u, 1200u);                     /* to day 30 */
-    e_dark = W_ENERGY() - e0;
+    e_dark = W_LIFE() - e0;
     cmd_set(0, 32768, 0, 0);
     cmd_set(1, 32768, 0, 0);
     cmd_set(2, 65535, 0, 0);
     cmd_effect(2, ULTRA_FX_BREATHE, P_BREATHE, 7);
     host_next = sim_ticks;
     run_ms(2000);
-    base_writes = W_ENERGY();
+    base_writes = W_LIFE();
     run_ms(180000);                                      /* 3 min lit, every ms (the energy integrates per ms): 2.7 Wh */
     run_sparse(3600u - 180u, 1200u);
-    printf("  energy writes: %u in the 28 dark days (the write 30 s after dark, if 1 Wh was new), %u in the first lit "
-           "hour after\n", e_dark, W_ENERGY() - base_writes);
-    CHECK(e_dark == 1u, "long: dark for 28 days: %u energy writes (the one 30 s after dark)", e_dark);
-    CHECK(W_ENERGY() - base_writes >= 1u, "long: lit again after 28 days dark: written within the hour (0.6.1: "
-          "not for up to 24.8 days)");
+    CHECK(e_dark >= 28u && e_dark <= 29u, "long: dark for 28 days: %u lifetime writes (30 s after dark, then daily)",
+          e_dark);
+    CHECK(en.lt.lit_s - lit0 >= 3600u - 30u && en.lt.lit_s - lit0 <= 3600u + 30u, "long: no lit second in the 28 dark "
+          "days, the lit hour since (%u s)", en.lt.lit_s - lit0);
     supply_mv = 19000u;                                  /* a 20 ms dip (a relay) */
     run_ms(20);
     supply_mv = 24000u;
     dips++;
     run_ms(2000);
     CHECK(vdip.count == dips, "long: the dip at day 30 (%u)", vdip.count);
+    printf("  lifetime writes: %u in the 28 dark days (30 s after dark, then the daily one), %u in the lit hour after "
+           "and its dip\n", e_dark, W_LIFE() - base_writes);
+    CHECK(W_LIFE() - base_writes >= 1u, "long: lit again after 28 days dark: the new Wh stored at the dip (0.6.1: the "
+          "energy not for up to 24.8 days)");
     run_sparse(10u * 86400u - 3600u - 2u, 1200u);        /* to day 40 */
     SOAK_PROGRESS("day 40: the host goes");
     /* the host goes away for 3.5 days (signal loss: hold, the default): candle (CH4) and breathe (CH5) run on, on the
@@ -917,9 +874,9 @@ static void sc_long(void)
         run_sparse(52u * 86400u - now_s(), 1200u);
     }
     console("status");
-    printf("  after %u s: uptime %d s, %u frames, flash writes: settings %u, scene %u, effects %u, energy %u, "
+    printf("  after %u s: uptime %d s, %u frames, flash writes: settings %u, scene %u, effects %u, lifetime %u, "
            "calibration %u\n", (uint32_t)now_s(), (int)con_uptime(), host_frames, W_SETTINGS(), W_SCENE(), W_FX(),
-           W_ENERGY(), W_CAL());
+           W_LIFE(), W_CAL());
     CHECK(con_uptime() + 300 >= (int64_t)now_s() && con_uptime() <= (int64_t)now_s(), "long: uptime after 52 days "
           "(%d s, sim %u s)", (int)con_uptime(), (uint32_t)now_s());
     CHECK(strstr(con_out, "peak ") && strstr(con_out, "51d ") != NULL, "long: the MCU peak's age in days (51d+)");
@@ -941,7 +898,29 @@ static void sc_long(void)
           events_seen, sim_led_on, is.trips);
     CHECK(W_SETTINGS() == 1u && W_SCENE() == 1u && W_FX() == 0u && W_CAL() == 0u, "long: flash writes settings %u "
           "(1), scene %u (1), effects %u, calibration %u", W_SETTINGS(), W_SCENE(), W_FX(), W_CAL());
-    CHECK(W_ENERGY() <= 24u * 52u + ENERGY_BUDGET_CAP, "long: energy writes within the budget (%u)", W_ENERGY());
+    CHECK(W_LIFE() <= 8u * 52u + LIFE_BUDGET_CAP, "long: lifetime writes within the budget (%u)", W_LIFE());
+    printf("  lifetime erases: %u / %u, %u while lit; the 22 days lit to the end without a dark moment: written only "
+           "at the dips\n", fl_erases[page_of(LIFE_PAGE0_ADDR)], fl_erases[page_of(LIFE_PAGE1_ADDR)], fl_lit_erases);
+    {                                                    /* the lifetime record: RAM and flash agree with the run */
+        life_rec_t r;
+        life_pos_t p;
+        const char *lt = strstr(con_out, "lifetime=");
+        uint32_t found = life_find((const uint8_t *)LIFE_PAGE0_ADDR, (const uint8_t *)LIFE_PAGE1_ADDR, &r, &p);
+        char line[200];
+        uint32_t n = 0;
+        while (lt && lt[n] && lt[n] != '\r' && n + 1u < sizeof line) {
+            line[n] = lt[n];
+            n++;
+        }
+        line[n] = 0;
+        printf("  console: %s\n", lt ? line : "(no lifetime line)");
+        CHECK(found && r.writes == en.lt.writes && r.ups == 1u && en.lt.on_s == up_s && r.on_s + 3u * 86400u >=
+              up_s && r.dips == dips && en.lt.dips == dips, "long: the stored record, from the last dip (writes %u / "
+              "%u, %u s of %u, dips %u)", r.writes, en.lt.writes, r.on_s, up_s, r.dips);
+        CHECK(en.lt.lit_s > 23u * 86400u && en.lt.lit_s < 25u * 86400u, "long: lit about 24 of the 52 days (%u s)",
+              en.lt.lit_s);
+        CHECK(lt && strstr(lt, ", 1 power-ups, trips 0 / 0, dips 2, ") != NULL, "long: the lifetime line");
+    }
 }
 
 /* fx: the power-on effects without any host, 3 days */
@@ -994,8 +973,8 @@ static void sc_fx(void)
     CHECK(w.maxstep[3] <= ref.maxstep[3] + 2u && w.chg[3] * 20u >= ref.chg[3] * 65u / 2u, "fx: breathe continuous");
     run_sparse(86400u / 2u, 0);
     CHECK(events_seen == 0u && sim_led_on == 0u && W_SETTINGS() + W_SCENE() + W_FX() + W_CAL() == 0u &&
-          W_ENERGY() <= 3u * 24u + ENERGY_BUDGET_CAP, "fx: no false events, no flash writes but the energy (%u, %u)",
-          W_SETTINGS() + W_SCENE() + W_FX() + W_CAL(), W_ENERGY());
+          W_LIFE() <= 3u * 8u + LIFE_BUDGET_CAP, "fx: no false events, no flash writes but the lifetime record (%u, "
+          "%u)", W_SETTINGS() + W_SCENE() + W_FX() + W_CAL(), W_LIFE());
 }
 
 /* cfg: an automation flipping a stored setting; calibrations on a schedule */
@@ -1003,14 +982,16 @@ static void sc_cfg(void)
 {
     settings_t s2;
     store_ext_t e2;
-    uint32_t k, w0, w1, last = 0, c0, lost;
+    uint32_t k, w0, w1, last = 0, c0, lost, l0, s0;
     printf("soak cfg: CONFIG 23 every second for a day, then every minute for 3 days; calibrations every minute\n");
     boot(0xFFFF0000u, 0xFFFFF000u, 0xFFFFFFFFull - 30000000ull);
     host_on = 1;
     cmd_def(0, 0, 3, 2800);
-    cmd_set(0, 0, 0, 0);                                 /* dark: no energy writes (their stall drops a frame) */
+    cmd_set(0, 0, 0, 0);                                 /* dark: no lifetime writes (their stall drops a frame) */
     run_ms(3000);
     w0 = W_SETTINGS();                                   /* (the sticky protocol at the lock) */
+    l0 = W_LIFE();
+    s0 = sim_stalls;
     host_on = 0;
     for (k = 0, lost = 0; k < 86400u; k++) {             /* every second: one frame with the command */
         last = k & 1u;
@@ -1022,10 +1003,12 @@ static void sc_cfg(void)
         jump_ms(998);
     }
     w1 = W_SETTINGS() - w0;
-    CHECK(w1 == 0u && lost == 0u, "cfg: flipped every second for a day: %u writes (the 2 s debounce never ran out), "
-          "%u frames lost", w1, lost);
+    CHECK(w1 <= lost && lost <= sim_stalls - s0 && lost <= 2u, "cfg: flipped every second for a day: %u writes (the "
+          "2 s debounce never ran out but where a frame was lost), %u frames lost (only in the day's flash operations: "
+          "%u, the lifetime record's daily write %u and an erase ahead in a dark moment)", w1, lost, sim_stalls - s0,
+          W_LIFE() - l0);
     run_sparse(10u, 0);
-    CHECK(W_SETTINGS() - w0 == 1u, "cfg: ... the last value written 2 s after the end (%u)", W_SETTINGS() - w0);
+    CHECK(W_SETTINGS() - w0 == w1 + 1u, "cfg: ... the last value written 2 s after the end (%u)", W_SETTINGS() - w0);
     w0 = W_SETTINGS();
     for (k = 0; k < 3u * 1440u; k++) {                   /* every minute for 3 days */
         last = (k & 1u) ^ 1u;
@@ -1065,13 +1048,331 @@ static void sc_cfg(void)
               "cfg: the newest test stored when the token came (%u, levels %u)", W_CAL() - c0, c.levels);
     }
     CHECK((events_seen & ~0x18u) == 0u, "cfg: no false events (%X)", events_seen);
+    /* a factory reset (console `defaults`, as a config frame or TP9's gesture): settings, scene, effects, calibration
+     * cleared; the lifetime record kept, its pages untouched */
+    {
+        uint32_t e0p, e1p, wl = W_LIFE();
+        uint32_t ups = en.lt.ups, on = en.lt.on_s, wh, wr, found;
+        life_rec_t r;
+        life_pos_t p;
+        cmd_set(0, 65535, 0, 0);                         /* lit 10 min: something to store */
+        host_next = sim_ticks;
+        run_ms(600000);
+        cmd_set(0, 0, 0, 0);
+        host_next = sim_ticks;
+        run_ms(40000);                                   /* written 30 s after dark */
+        wh = energy_total_wh(&en);
+        wr = en.lt.writes;
+        CHECK(W_LIFE() >= wl + 1u && wh > 0u && cal_present, "cfg: lit, then dark: stored (%u Wh), a calibration "
+              "stored", wh);
+        wl = W_LIFE();
+        e0p = fl_erases[page_of(LIFE_PAGE0_ADDR)];
+        e1p = fl_erases[page_of(LIFE_PAGE1_ADDR)];
+        console("defaults");
+        run_sparse(30u, 0);
+        found = life_find((const uint8_t *)LIFE_PAGE0_ADDR, (const uint8_t *)LIFE_PAGE1_ADDR, &r, &p);
+        printf("  factory reset: lifetime %u Wh, %u power-ups, %u writes, pages erased %u / %u times before, %u / %u "
+               "after\n", energy_total_wh(&en), en.lt.ups, en.lt.writes, e0p, e1p, fl_erases[page_of(LIFE_PAGE0_ADDR)],
+               fl_erases[page_of(LIFE_PAGE1_ADDR)]);
+        CHECK(strstr(con_out, "ok") && !cal_present && fx_mask == 0u && sext.ilimit50 == 0xFFu && scene_want.mask == 0u,
+              "cfg: factory reset: calibration, effects, limit, scene cleared");
+        CHECK(fl_erases[page_of(LIFE_PAGE0_ADDR)] == e0p && fl_erases[page_of(LIFE_PAGE1_ADDR)] == e1p &&
+              W_LIFE() == wl, "cfg: factory reset: the lifetime pages untouched");
+        CHECK(en.lt.ups == ups && en.lt.on_s >= on && energy_total_wh(&en) - wh <= 1u && en.lt.writes == wr && found &&
+              r.writes == wr && wh - r.wh <= 1u && r.ups == ups, "cfg: factory reset: the lifetime record kept (RAM %u Wh, "
+              "flash %u Wh, %u writes)", energy_total_wh(&en), r.wh, r.writes);
+    }
+}
+
+#include "test_verify.c"
+#include "test_r4.c"
+#include "test_r4_rx.c"                         /* (gpt-bugs: its own regressions, besides gpt-verify's) */
+#include "test_r4_reset.c"
+#include "test_r4_gate.c"
+
+/* spec (review round 4): main.c behaviours of README / ULTRA_PROTOCOL.md that had no test. The power-on scene's
+ * take-over 3 s after the first Ultra header without a light command (SCENE_TAKEOVER_MS); CONFIG 22 written only when
+ * it differs from the stored value, auto / Ultra applied at once, WS2805 stored only; IDENTIFY 3 with argument 0 =
+ * 60 s; signal loss "off" (CONFIG 8 = 1), then the host back without a reboot repeating its state with the SEQ it
+ * already sent: the light must come back (0.6.2: it stays off until the next change). */
+static void sc_spec(void)
+{
+    scene_t sc;
+    scene_rec_t rec;
+    uint8_t s[32];
+    uint16_t a[5] = { 65535, 65535, 65535, 65535, 65535 }, b[5] = { 65535, 65535, 65535, 65535, 65535 };
+    uint32_t w0;
+    printf("soak spec: the scene's 3 s take-over, CONFIG 22 persistence, IDENTIFY 3 = 60 s, signal loss off + refresh\n");
+    scene_clear(&sc);
+    sc.mask = 0x01u;                                     /* a stored scene: CH1 at 46 %, a 1 s cross-fade */
+    sc.v[0] = 30000u;
+    scene_log_pack(&sc, 1, &rec);
+    memcpy(fl + (SCENE_LOG_ADDR - FL_BASE), &rec, sizeof rec);
+    boot(1000u, 20000u, 5000000ull);
+    run_ms(600);                                         /* (the soft start's 0.4 s) */
+    CHECK(out_now[0] == 30000u && srun.hold == 0x01u, "spec: the stored scene shows from power-up (%u)", out_now[0]);
+    host_on = 1;                                         /* an Ultra hub sending NOP frames: no light command */
+    run_ms(2500);
+    CHECK(ultra_on && out_now[0] == 30000u && srun.hold == 0x01u, "spec: the scene holds 2.5 s after the first "
+          "header (%u)", out_now[0]);
+    run_ms(1000);
+    CHECK(srun.hold == 0u && out_now[0] < 30000u, "spec: the take-over 3 s after the first header (%u)", out_now[0]);
+    run_ms(1500);
+    CHECK(out_now[0] == 0u && !srun.fading, "spec: faded to dark (no light defined) over the scene's 1 s (%u)",
+          out_now[0]);
+    /* CONFIG 22: persisted only when it differs; auto / Ultra at once, a WS protocol from the next power-up */
+    w0 = W_SETTINGS();
+    cmd_config(ULTRA_CFG_BOOT_PROTOCOL, PMODE_AUTO);
+    run_ms(3000);
+    CHECK(W_SETTINGS() == w0 && frx.ps.mode == PMODE_AUTO, "spec: CONFIG 22 = the stored value: no write (%u)",
+          W_SETTINGS() - w0);
+    cmd_config(ULTRA_CFG_BOOT_PROTOCOL, PMODE_ULTRA);
+    run_ms(3000);
+    CHECK(W_SETTINGS() == w0 + 1u && frx.ps.mode == PMODE_ULTRA && set.protocol == PMODE_ULTRA && ultra_on,
+          "spec: CONFIG 22 = 3: forced Ultra at once, one write (%u)", W_SETTINGS() - w0);
+    cmd_config(ULTRA_CFG_BOOT_PROTOCOL, PMODE_AUTO);
+    run_ms(3000);
+    CHECK(W_SETTINGS() == w0 + 2u && frx.ps.mode == PMODE_AUTO && proto_active(&frx.ps) == PROTO_ULTRA && ultra_on,
+          "spec: CONFIG 22 = 0: auto at once, the lock kept, one write (%u)", W_SETTINGS() - w0);
+    cmd_config(ULTRA_CFG_BOOT_PROTOCOL, PMODE_WS2805);
+    run_ms(3000);
+    CHECK(W_SETTINGS() == w0 + 3u && set.protocol == PMODE_WS2805 && frx.ps.mode == PMODE_AUTO && ultra_on,
+          "spec: CONFIG 22 = 2: stored only, Ultra keeps running (%u)", W_SETTINGS() - w0);
+    cmd_config(ULTRA_CFG_BOOT_PROTOCOL, PMODE_AUTO);
+    run_ms(3000);
+    CHECK(W_SETTINGS() == w0 + 4u && set.protocol == PMODE_AUTO, "spec: CONFIG 22 = 0 again: one write (%u)",
+          W_SETTINGS() - w0);
+    /* IDENTIFY 3 with argument 0: dark for 60 s, then back by itself */
+    cmd_def(0, 0, 3, 1000);                              /* RGB on CH1-3, gamma 1: out = M */
+    cmd_set(0, 65535, 0, 0);
+    run_ms(2000);
+    CHECK(out_now[0] == 65535u, "spec: the light on (%u)", out_now[0]);
+    cmd_identify(ULTRA_IDENT_DARK, 0);
+    run_ms(1000);
+    CHECK(dk.active && out_now[0] == 0u, "spec: IDENTIFY 3, argument 0: dark (%u)", out_now[0]);
+    run_ms(58000);
+    CHECK(dk.active && out_now[0] == 0u, "spec: still dark 59 s in (%u)", out_now[0]);
+    run_ms(2500);
+    CHECK(!dk.active && out_now[0] == 65535u, "spec: back by itself after 60 s (%u)", out_now[0]);
+    /* signal loss "off": the host away for > 3 s, then back without a reboot (its clock ran on), repeating the state */
+    cmd_config(ULTRA_CFG_LOSS, 1);
+    ultra_slot_set(s, 0, 200, 0, 32768, a, b, 0, 0);     /* the host's state, SEQ 200 */
+    host_send(s);
+    run_ms(2000);
+    CHECK(out_now[0] == 32768u && !signal_lost, "spec: the host's state (%u)", out_now[0]);
+    host_on = 0;
+    run_ms(4000);
+    CHECK(signal_lost && out_now[0] == 0u, "spec: signal loss, CONFIG 8 = 1: off (%u, lost %u)", out_now[0],
+          signal_lost);
+    host_on = 1;
+    host_next = sim_ticks;
+    host_send(s);                                        /* the refresh: the same command, the same SEQ */
+    run_ms(2000);
+    CHECK(!signal_lost && out_now[0] == 32768u, "spec: the host's refresh after a signal-loss off brings the light "
+          "back (%u; 0.6.2: it stays off until the next change)", out_now[0]);
+    CHECK(events_seen == 0u && is.trips == 0u, "spec: no false events (%X)", events_seen);
+}
+
+/* race (r4): a capture the main loop takes late, after the next frame's start changed the capture's tags. A WS2915
+ * board behind another one (the header passes, then a pause while the boards before it block their bits) gets a
+ * glitch (one edge: a capture of 1 bit), and the main loop is busy (the stagger search, ~0.5 ms) until the next frame
+ * has passed its header pause: the poll ISR has set cap_skip = 32 for that frame while cap_bits is still the glitch's.
+ * 0.6.2: want = 1 - 32 wraps, the decoder zeroes ~8 KB from dec.slot (the settings, the frame tracker, the
+ * console's state ...). */
+static const uint8_t WS15_HDR[4] = { 0xFF, 0xFF, 0xFF, 0x80 };    /* gains 31, check bits 0 */
+
+/* the header, a pause (the boards before this one block their bits), then `data_bits` of the 80 data bits; with
+ * isr_only the main loop does not run meanwhile */
+static void ws2915_frame(const uint8_t data[10], uint32_t data_bits, int isr_only)
+{
+    uint64_t t0 = sim_ns + 7000u, t1 = t0 + 32u * 1250u + 200000u;   /* a 200 us pause after the header */
+    wire_frame(WS15_HDR, 32u, t0);
+    while (sim_ns < t1) {
+        sim_tick();
+        if (!isr_only) {
+            pass();
+        }
+    }
+    t1 = sim_ns + 7000u;                                 /* (the ring is sampled up to now: the data starts after) */
+    wire_frame(data, data_bits, t1);
+    while (sim_ns < t1 + (uint64_t)data_bits * 1250u + (isr_only ? 0u : 400000u)) {
+        sim_tick();
+        if (!isr_only) {
+            pass();
+        }
+    }
+}
+
+static void sc_race(void)
+{
+    static const uint8_t data[10] = { 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x24, 0x68 };
+    static const uint8_t glitch[1] = { 0x80 };
+    uint32_t i, k;
+    uint8_t min_pulse;
+    printf("soak race: a glitch, then a WS2915 frame's header pause, while the main loop is late\n");
+    boot(0, 0, 0);
+    console("set protocol 1");                           /* forced WS2915 (32-bit header) */
+    for (k = 0; k < 4u; k++) {
+        ws2915_frame(data, 80u, 0);
+        run_ms(20);
+    }
+    CHECK(proto_active(&frx.ps) == PROTO_WS2915_32 && plan.hdr_bits == 32u && sm.to[0] == 0x1234u &&
+          sm.to[4] == 0x2468u, "race: WS2915 frames with a header pause shown (%u, hdr %u, %04X %04X)",
+          (uint32_t)proto_active(&frx.ps), (uint32_t)plan.hdr_bits, sm.to[0], sm.to[4]);
+    min_pulse = set.min_pulse;
+    for (k = 0; k < 20u; k++) {
+        wire_frame(glitch, 1u, sim_ns + 7000u);          /* one edge: a frame of 1 bit, its capture 1 bit */
+        for (i = 0; i < 10u; i++) {
+            sim_tick();                                  /* the poll ISR alone: the main loop is busy */
+        }
+        ws2915_frame(data, 4u + k, 1);                   /* the next frame: past its header pause (cap_skip 32) */
+        pass();                                          /* the main loop takes the glitch's capture now */
+        ws2915_frame(data, 80u, 0);
+        run_ms(20);
+    }
+    printf("  20 late captures: %u decoder calls past the buffer\n", v_oversize);
+    CHECK(v_oversize == 0u, "race: no decode past dec.slot (%u calls; 0.6.2: ~8 KB of RAM zeroed on the chip)",
+          v_oversize);
+    CHECK(sm.to[0] == 0x1234u && set.min_pulse == min_pulse && stat.version != 0, "race: still showing the frames, "
+          "settings and console state intact");
+}
+
+/* tripreset (r4): a factory reset while a trip holds the outputs off (a short; the retry 1 s later). The reset sets the
+ * current sense up again (isense_setup): 0.6.2 cleared the trip there, but the outputs stayed forced off (only the
+ * retry releases them, and there was no trip left to retry): the board stayed dark, `status` said ok, until a power
+ * cycle. */
+static void sc_tripreset(void)
+{
+    uint32_t k;
+    printf("soak tripreset: `defaults` while a short's trip holds the outputs off\n");
+    boot(0, 0, 0);
+    run_ms(500);
+    for (k = 0; k < 2u; k++) {
+        short_ticks = 3;                                 /* a short: the fast trip forces the outputs off */
+        expect_trips = k + 1u;
+        run_ms(k == 0u ? 300u : 20u);
+        CHECK(sim_forced && is.tripped != ISENSE_TRIP_NONE, "tripreset: tripped, outputs forced off (%u, %u)",
+              sim_forced, (uint32_t)is.tripped);
+        if (k == 0u) {
+            console("defaults");                         /* the factory reset, during the retry wait */
+            run_ms(3000);                                /* the retry (1 s), the soft start */
+            printf("  after the reset and 3 s: outputs forced %u, tripped %u, status says %s\n", sim_forced,
+                   (uint32_t)is.tripped, is.tripped ? "tripped" : "ok");
+            CHECK(!sim_forced && is.tripped == ISENSE_TRIP_NONE, "tripreset: the outputs come back after the reset "
+                  "(forced %u, tripped %u)", sim_forced, (uint32_t)is.tripped);
+        }
+    }
+    run_ms(3000);
+    CHECK(!sim_forced && is.tripped == ISENSE_TRIP_NONE, "tripreset: a later trip retries as before (forced %u)",
+          sim_forced);
+}
+
+/* longws (r4): WS frames longer than the 16-bit edge counter (TIM4) counts. A WS2805 line of 1,700 chips (68,000 bits,
+ * 85 ms a frame), then a WS2915 line of 900 chips (32 + 72,000 bits); auto mode, nothing stored, this board first on
+ * the line. 0.6.2: the frame end took the count modulo 65,536 (2,464 / 6,496 bits: no protocol's length), so auto
+ * mode never locked and the board stayed dark. */
+static uint8_t long_bits[16400];
+
+static void long_frame(uint32_t nbits)
+{
+    wire_frame(long_bits, nbits, sim_ns + 7000u);
+    run_ms((uint64_t)nbits * 1250u / 1000000u + 30u);    /* the frame, then a 30 ms gap */
+}
+
+static void sc_longws(void)
+{
+    static const uint8_t c805[5] = { 0x40, 0x80, 0xC0, 0x20, 0x10 };
+    uint8_t c915[14] = { 0xFF, 0xFF, 0xFF, 0x80, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x24, 0x68 };
+    uint32_t i, k;
+    printf("soak longws: WS2805 / WS2915 frames of 68,000 / 72,032 bits (the edge counter wraps at 65,536)\n");
+    for (i = 0; i < sizeof long_bits; i++) {
+        long_bits[i] = (uint8_t)(i * 37u + 11u);         /* the chips after this board: anything */
+    }
+    memcpy(long_bits, c805, sizeof c805);
+    boot(0, 0, 0);
+    for (k = 0; k < 6u; k++) {
+        long_frame(1700u * 40u);
+    }
+    printf("  WS2805, 68,000 bits: active %u, frames %u, out %04X %04X\n", (uint32_t)proto_active(&frx.ps), frames,
+           sm.to[0], sm.to[4]);
+    CHECK(proto_active(&frx.ps) == PROTO_WS2805 && sm.to[0] == 0x4040u && sm.to[4] == 0x1010u, "longws: WS2805 "
+          "locked and shown (active %u, %04X %04X)", (uint32_t)proto_active(&frx.ps), sm.to[0], sm.to[4]);
+    memcpy(long_bits, c915, sizeof c915);
+    for (k = 0; k < 6u; k++) {
+        long_frame(32u + 900u * 80u);
+    }
+    printf("  WS2915, 72,032 bits: active %u, frames %u, out %04X %04X\n", (uint32_t)proto_active(&frx.ps), frames,
+           sm.to[0], sm.to[4]);
+    CHECK(proto_active(&frx.ps) == PROTO_WS2915_32 && sm.to[0] == 0x1234u && sm.to[4] == 0x2468u, "longws: WS2915 "
+          "locked and shown (active %u, %04X %04X)", (uint32_t)proto_active(&frx.ps), sm.to[0], sm.to[4]);
+    c915[4] = 0x43;                                      /* 1,638 chips: 131,072 bits, the count ends on 0 */
+    c915[13] = 0x21;
+    memcpy(long_bits, c915, sizeof c915);
+    k = frames;
+    long_frame(32u + 1638u * 80u);
+    long_frame(32u + 1638u * 80u);
+    printf("  WS2915, 131,072 bits: %u frames ended of 2, out %04X %04X\n", frames - k, sm.to[0], sm.to[4]);
+    CHECK(frames - k == 2u && sm.to[0] == 0x4334u && sm.to[4] == 0x2421u, "longws: a frame of 2 x 65,536 bits ends and "
+          "is shown (%u frame ends, %04X %04X)", frames - k, sm.to[0], sm.to[4]);
+    CHECK(set.last_proto == PROTO_WS2915_32 && sim_led_on == 0u && events_seen == 0u, "longws: the sticky protocol "
+          "follows, no false events");
+}
+
+/* minmax (r4): the console's `supply=... (min, max)` covers the time since the last command (the console's snapshot is
+ * taken at a command's line end). Typed key by key (a person, ~150 ms a key), 0.6.2 restarted the min / max at every
+ * key (the snapshot on any byte), so a dip before the typing never showed. */
+static void console_typed(const char *cmd, uint32_t ms_per_key)
+{
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = 0;
+    for (; *cmd; cmd++) {
+        con_in[con_in_w++] = *cmd;
+        run_ms(ms_per_key);
+    }
+    con_in[con_in_w++] = '\r';
+    run_ms(50);
+}
+
+/* the min / max of the `supply=` line, mV (-1: not found) */
+static void con_supply_minmax(int32_t *mn, int32_t *mx)
+{
+    const char *p = strstr(con_out, "supply=");
+    unsigned a, b, c, d;
+    *mn = *mx = -1;
+    if (p && sscanf(p, "supply=%*u.%*u V (min %u.%u V, max %u.%u V)", &a, &b, &c, &d) == 4) {
+        *mn = (int32_t)(a * 1000u + b * 10u);
+        *mx = (int32_t)(c * 1000u + d * 10u);
+    }
+}
+
+static void sc_minmax(void)
+{
+    int32_t mn, mx;
+    printf("soak minmax: `status` typed key by key after a sag of the supply\n");
+    boot(0, 0, 0);
+    run_ms(2000);
+    console("status");                                   /* the window starts here */
+    supply_mv = 20000u;                                  /* the supply sags to 20 V for 200 ms */
+    run_ms(200);
+    supply_mv = 24000u;
+    run_ms(2000);
+    console_typed("status", 150u);
+    con_supply_minmax(&mn, &mx);
+    printf("  typed: min %d mV, max %d mV\n", (int)mn, (int)mx);
+    CHECK(mn >= 19900 && mn <= 20100 && mx >= 23900, "minmax: the sag since the last status shows (min %d mV)",
+          (int)mn);
+    console_typed("status", 150u);
+    con_supply_minmax(&mn, &mx);
+    CHECK(mn >= 23900 && mn <= 24100, "minmax: the next status starts again (min %d mV)", (int)mn);
 }
 
 int main(int argc, char **argv)
 {
     const char *sc = argc > 1 ? argv[1] : "wrap";
     flash_init();
-    if (strcmp(sc, "wrap") == 0) {
+    if (verify_scenario(sc) || r4_scenario(sc)) {
+    } else if (strcmp(sc, "wrap") == 0) {
         sc_wrap();
     } else if (strcmp(sc, "long") == 0) {
         sc_long();
@@ -1079,10 +1380,29 @@ int main(int argc, char **argv)
         sc_fx();
     } else if (strcmp(sc, "cfg") == 0) {
         sc_cfg();
+    } else if (strcmp(sc, "spec") == 0) {
+        sc_spec();
+    } else if (strcmp(sc, "r4rx") == 0) {
+        sc_r4rx();
+    } else if (strcmp(sc, "r4reset") == 0) {
+        sc_r4reset();
+    } else if (strcmp(sc, "r4gate") == 0) {
+        sc_r4gate();
+    } else if (strcmp(sc, "race") == 0) {
+        sc_race();
+    } else if (strcmp(sc, "tripreset") == 0) {
+        sc_tripreset();
+    } else if (strcmp(sc, "longws") == 0) {
+        sc_longws();
+    } else if (strcmp(sc, "minmax") == 0) {
+        sc_minmax();
     } else {
         printf("soak: unknown scenario %s\n", sc);
         return 2;
     }
+    CHECK(fl_bad == 0u, "%s: no half-word programmed that wasn't erased (%u)", sc, fl_bad);
+    CHECK(fl_bright_erases == 0u, "%s: erases only while every output is below 15 %% (%u erases while brighter, %u "
+          "while lit)", sc, fl_bright_erases, fl_lit_erases);
     printf("soak %s: %s (%d failures), %u s simulated\n", sc, g_fail ? "FAILED" : "passed", g_fail, (uint32_t)now_s());
     return g_fail ? 1 : 0;
 }

@@ -20,7 +20,7 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, ui
     if (n == 0u) {
         return;
     }
-    x = sum2 / n;
+    x = n == 1u ? sum2 : sum2 / n;                       /* (one pair per ms: no division) */
     if (d->ref_q12 == 0u) {
         if (++d->run > VDIP_HOLDOFF_MS) {
             d->run = 0;

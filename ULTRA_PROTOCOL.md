@@ -343,7 +343,7 @@ stored settings; the board writes them to flash only when the value differs from
 | 5 | dim floor | 0 skip, 1 clamp, 2 off |
 | 6 | minimum pulse | 5..100 × 10 ns |
 | 7 | stagger | 0 off, 1 fixed (thirds of a period), 2 fixed + spread-spectrum PWM (every period ±6 %), 3 adaptive (phases follow the colour mix for the least LED_+ ripple; CONFIG 11-15 are the weights), 4 adaptive + spread spectrum (the default) |
-| 8 | signal loss | 0 hold (effects keep running), 1 off, 2 fade off |
+| 8 | signal loss | 0 hold (effects keep running), 1 off, 2 fade off. After off / fade off, repeated SET and EFFECT refreshes restore the light; other command SEQs remain remembered |
 | 9 | signal loss timeout | × 100 ms (default 30 = 3 s) |
 | 10 | feedback channel | 0 red, 1 all, 2 off |
 | 11-15 | LED current CH1-CH5 at 100 % | mA |

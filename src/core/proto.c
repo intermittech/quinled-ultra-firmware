@@ -92,9 +92,10 @@ void proto_set_mode(proto_state_t *s, proto_mode_t mode)
     s->mode = mode;
     if (mode == PMODE_AUTO && cur != PROTO_NONE) {
         s->locked = cur;
-        s->provisional = 0;
         s->cand_count = 0;
     }
+    s->provisional = 0;                                  /* a forced mode has no stored protocol to confirm either:
+                                                            frx_capture would hold its WS slots to the frame end */
 }
 
 gate_plan_t proto_gate_plan(proto_t p)

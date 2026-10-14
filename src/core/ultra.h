@@ -91,6 +91,11 @@ typedef struct {
     uint32_t rng;
     uint32_t candle_f, candle_t;          /* Q16 factor and target */
     ultra_vals_t last;                    /* values of the last render */
+    /* render cache: light_out's outputs (the light's channels) for `last`, valid while out_ok. light_out depends on
+     * `last` and the head only; every slot to the light, and the init, clears out_ok. */
+    uint16_t out_y[5];
+    uint8_t out_ok;
+    uint8_t settled;                      /* `cur` / `prev` as settle() leaves them (only their t0 moves on) */
     /* strobe steps */
     uint8_t step_count, step_seq, step_have;   /* step_have: bit mask of received steps for step_seq */
     ultra_step_t step[ULTRA_MAX_STEPS];
@@ -136,6 +141,9 @@ uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *slot, uint32_t tick);
 uint8_t  ultra_render(ultra_t *u, uint32_t tick, uint16_t *out);
 /* host time estimate for a local tick */
 uint64_t ultra_host_us(const ultra_t *u, uint32_t tick);
+/* a defined light's ramp (in progress, or set to start) ends at a higher M than the light shows (main.c: the flash
+ * admission's "dim" test waits for it) */
+uint32_t ultra_rising(const ultra_t *u, uint32_t tick);
 /* all lights to off over dur_ms (signal-loss fade) */
 void     ultra_all_off(ultra_t *u, uint32_t tick, uint32_t dur_ms);
 /* the local tick did not run for a while (flash write): the next header restarts the rate measurement, the

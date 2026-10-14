@@ -18,8 +18,20 @@
 #include "../src/core/gamma.h"
 #include "../src/core/store.h"
 #include "../src/core/cli.h"
+#include "../src/core/flashrec.h"
+
+/* core/flashrec.c's flash primitive (hal/hw.c on the chip, test_soak.c a model): the stores aren't used here */
+uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
+{
+    (void)addr;
+    (void)src;
+    (void)halfwords;
+    (void)erase_addr;
+    return FLASH_NONE;
+}
 
 static int g_fail;
+static energy_t test_en;                       /* the console tests' energy / lifetime record (cli_status_t.en) */
 #define CHECK(c, ...) do { if (!(c)) { g_fail++; printf("  FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 /* ------------------------------------------------------------------------------------------------ rng */
@@ -163,6 +175,7 @@ static void test_decoder(void)
 
 #include "test_features.c"
 #include "test_ultra.c"
+#include "test_ultra_all_off.c"
 #include "test_stagger.c"
 #include "test_boot.c"
 #include "test_wire.c"
@@ -184,6 +197,8 @@ static void test_decoder(void)
 #include "test_sstart.c"
 #include "test_scenefx.c"
 #include "test_console060.c"
+#include "test_spec.c"
+#include "test_r4_mutation.c"                    /* (gpt-mutation: regressions from surviving mutants) */
 
 /* ------------------------------------------------------------------------------------------------ proto */
 static void test_proto(void)
@@ -390,7 +405,27 @@ static void test_ack(void)
 
 int main(void)
 {
+    test_r4_mutation();
     test_proto();
+    {
+        frx_t r;
+        frx_end_t e;
+        slot_t ws;
+        uint8_t slot[ULTRA_SLOT_BYTES], hdr[ULTRA_HDR_BYTES];
+        const uint32_t lengths[] = {319, 320, 321, 384};
+        uint32_t bits, k;
+        ultra_slot_identify(slot, 1, 1);
+        ultra_build_header(hdr, 100000u);
+        for (k = 0; k < sizeof(lengths) / sizeof(lengths[0]); k++) {
+            bits = lengths[k];
+            frx_init(&r, PMODE_ULTRA, PROTO_NONE);
+            (void)frx_capture(&r, 1, PROTO_ULTRA, slot, 256, 256, 0, &ws);
+            frx_frame_end(&r, 1, bits, hdr, &e);
+            CHECK(e.after == PROTO_ULTRA, "malformed frame must keep the lock");
+            CHECK(e.ultra_sync == (bits == 320) && e.ultra_slot == (bits == 320),
+                  "Ultra length %u: sync=%u slot=%u", bits, e.ultra_sync, e.ultra_slot);
+        }
+    }
     test_ftrack();
     test_sticky_lock();
     test_wire();
@@ -408,12 +443,21 @@ int main(void)
     test_isense_config();
     test_cli();
     test_ultra();
+    test_ultra_all_off();
     test_stagger();
     test_spread();
     test_decoder();
+    {
+        const uint16_t wave[] = { 0, 0x7FFFu, 0xFF00u, 0 };
+        const ws_timing_t tm = WS_TIMING_DEFAULT;
+        uint8_t sentinel = 0x55;
+        int rc = ws_decode_frame(wave, 64, 0, &tm, &sentinel);
+        CHECK(rc == 0 && sentinel == 0x55, "zero-bit decode must not write the output (%d, %u)", rc, sentinel);
+    }
     test_update();
     test_calstore();
     test_isense_curves();
+    test_isense_average();
     test_chain_calibrate();
     test_climit();
     test_div64();
@@ -434,6 +478,7 @@ int main(void)
     test_tj_reset();
     test_scenefx();
     test_cli060();
+    test_spec();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;
 }

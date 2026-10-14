@@ -39,12 +39,17 @@ for l in dis.splitlines():
     m = re.search(r"\t(jal|j|tail|call)\s+(ra,)?[0-9a-f]+ <([^+>]+)>", l)
     if m and m.group(3) != fn and not m.group(3).startswith("__riscv_restore"):
         calls[fn].add(m.group(3))
+    # Flash/RAM calls exceed JAL range: objdump resolves AUIPC+JALR in its comment.
+    far = re.search(r"\tjalr\s.*#\s*[0-9a-f]+ <([^+>]+)>", l)
+    if far:
+        calls[fn].add(far.group(1))
+        continue
     if re.search(r"\tjalr\s+(ra,)?[a-z0-9]+(\)|$|,)", l) or re.search(r"\tjalr\s", l):
         ind[fn] += 1
 # c->write is uart_write everywhere; c->apply / c->save_now only from the command dispatcher (cli_exec, inlined into
 # cli_feed by LTO). Override: STACK_ALL_IND=1 gives every indirect call all three.
 import os
-allt = [f for f in ("uart_write", "cli_apply", "save_now") if f in frame]
+allt = [f for f in ("uart_write", "cli_apply", "save_now", "status_begin") if f in frame]
 for f in frame:
     if ind[f] and f not in ("_start", "memset", "memcpy"):
         disp = f.split(".")[0] in ("cli_exec", "cli_feed") or os.environ.get("STACK_ALL_IND")

@@ -89,7 +89,14 @@ typedef struct {
 } cfg_result_t;
 
 uint8_t      crc8_smbus(const uint8_t *d, uint32_t n);
+uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);    /* = ultra_crc16 (CRC-16/CCITT-FALSE), one copy: the
+                                                             calibration and lifetime records */
 void         settings_default(settings_t *s);
+/* a record read from flash: every field within the range the firmware relies on (the enums; a raw period of
+ * PWM_STEPS_MIN..PWM_STEPS_MAX: pattern_len_for divides by it and sizes the PWM tables with it). A field outside it
+ * (a record of another firmware build, e.g. after a downgrade) takes its default. Returns 1 when a field was changed. */
+int          settings_sanitize(settings_t *s);
+#define      CONFIG_HAS_SANITIZE 1     /* (test/test_robust.c: the host tests know the firmware range-checks records) */
 uint32_t     settings_steps(const settings_t *s);
 void         config_rx_init(config_rx_t *r);
 /* one decoded slot per frame. Returns CFG_NONE for a normal frame (outputs follow it). */

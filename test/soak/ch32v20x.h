@@ -20,11 +20,14 @@ extern soak_gpio_t soak_gpiob;
 #define TIM4    (&soak_tim4)
 #define SysTick (&soak_systick)
 #define ADC1    (&soak_adc1)
+#define RAMCODE                                  /* (hal/hw.h: SRAM code on the chip) */
 #define GPIOB   (&soak_gpiob)
 
 #define __disable_irq() ((void)0)
 #define __enable_irq()  ((void)0)
 #define BARRIER()       ((void)0)
+#define CPU_SLEEP()     ((void)0)
+#define RCC_IWDGRSTF    0x20000000u
 #if !defined(__GNUC__)
 #define __attribute__(x)
 #endif

@@ -248,6 +248,7 @@ static board_t B;
 static bl_app_t BA;
 static bl_sess_t BS;
 static upd_handover_t HO;
+static uint32_t soft_kind = BL_RST_SOFT;      /* what the board makes of its own software resets (test_bl_r4.c) */
 
 static uint32_t ms(void) { return (uint32_t)(B.now_us / 1000u); }
 
@@ -267,7 +268,7 @@ static void board_boot(uint32_t reset)
             if (act == BL_ACT_JUMP) {
                 HO.request = UPD_REQ_BOOT_ONCE;
                 bl_ho_seal(&HO);
-                reset = BL_RST_SOFT;
+                reset = soft_kind;
                 continue;
             }
         }
@@ -307,7 +308,7 @@ static void board_poll(void)
         B.exits++;
         bl_ho_exit(&HO, &BS);
         B.now_us += fl_busy_us;
-        board_boot(BL_RST_SOFT);
+        board_boot(soft_kind);
     } else {
         board_stall(fl_busy_us);
     }
@@ -323,7 +324,7 @@ static void app_model(const uint8_t *tail, uint32_t nbits)
         if (B.app_half == 3 && B.app_takes) {
             HO.request = UPD_REQ_ENTER;
             bl_ho_seal(&HO);
-            board_boot(BL_RST_SOFT);
+            board_boot(soft_kind);
         }
     } else if (tail[UPD_B_TYPE] == UPD_PING && !B.app_confirmed && BA.desc_ok) {
         /* the app appends CONFIRMED at the first free record it found at boot */
@@ -1278,6 +1279,8 @@ static void test_release_image(const char *path)
     CHECK(running(&im_new), "installed and verified (body CRC from Python = CRC unit model)");
 }
 
+#include "test_bl_r4.c"                         /* review round 4: the cases above did not cover */
+
 #ifndef BL_TEST_NO_MAIN
 int main(void)
 {
@@ -1302,6 +1305,7 @@ int main(void)
     test_power_cuts(30548, 7);
     test_decoder();
     test_e2e_waveform();
+    test_r4_all();
     printf("\n%d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

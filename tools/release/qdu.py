@@ -102,6 +102,10 @@ def check_image(img):
         raise ValueError("descriptor layout / load address")
     if info["body_len"] != len(body) or crc32_words(body) != info["body_crc"]:
         raise ValueError("body length / CRC")
+    if info["body_len"] % 4 or not 0 < info["body_len"] <= APP_BODY_MAX:
+        # the bootloader's slot runs to 0xF700 (ultra_update.h), 256 bytes past the app's link: an image that long
+        # would erase the calibration page at 0xF600 (src/hal/board.h). mkimage.py never makes one; refuse one here too.
+        raise ValueError(f"body length {info['body_len']}: must be a multiple of 4, 1..{APP_BODY_MAX}")
     return info
 
 

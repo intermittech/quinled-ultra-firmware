@@ -7,10 +7,12 @@
  *   get                 all settings as key=value
  *   set <key> <value>   change a setting (same validation, blink feedback and saving as config frames)
  *   period <steps>      raw PWM period, 1440..65535 timer counts (144 MHz / steps = PWM frequency)
- *   save                store settings now          defaults   factory reset (settings and power-on scene)
+ *   save                store settings now          defaults   factory reset (all but the lifetime record)
  *   identify            blink the feedback channel / D9
  *   version             the firmware / bootloader lines (as at boot and in status), and blink the version
  *   watch [ms]          one line of live values every 1000 ms (100..60000) until any key
+ * status ends with the lifetime record (core/energy.h; kept through factory resets and firmware updates): energy,
+ * powered / lit hours, power-ups, trips, dips, the peaks, watchdog resets, updates, records written.
  * Boards with the input current sense: set ilimit <x 50 mA>, set ical <%> (calibration: 0 = the standard test at
  * 25 / 50 / 75 / 100 %), status shows the current, the calibration and the board limit in effect.
  * Every board: status shows the MCU (die) temperature and the 3.3 V rail from the internal sensor / VREFINT, the
@@ -22,6 +24,7 @@
 
 #include <stdint.h>
 #include "config.h"
+#include "energy.h"
 #include "health.h"
 #include "pwrev.h"
 #include "scene.h"
@@ -77,7 +80,7 @@ typedef struct {
     /* voltage channels (core/vsense.h): PA4 the supply, PA0 the spare input on TP8 */
     uint32_t vs_supply_mv, vs_supply_min_mv, vs_supply_max_mv;   /* min / max: since the last status */
     uint32_t vs_aux_mv;
-    uint32_t en_boot_mwh, en_total_wh;   /* energy (core/energy.h): since boot, lifetime */
+    const energy_t *en;            /* energy and the lifetime record (core/energy.h; always set: no NULL test) */
     const health_t *hl;            /* channel health (core/health.h), NULL = none */
     const vdip_t *dip;             /* supply dips (core/vdip.h), NULL = none */
     const vsense_t *dip_vs;        /* ... their scaling (the supply channel) */
@@ -98,6 +101,7 @@ typedef struct {
     void (*write)(const char *s);
     cfg_result_t (*apply)(uint8_t cmd, uint8_t arg);    /* runs config_apply + the main loop's follow-up */
     void (*save_now)(void);
+    void (*status_begin)(void);    /* snapshot and reset extrema only for an actual status command */
     const settings_t *set;
     const scene_t *scene;          /* power-on scene (stored, or about to be) */
     const cli_status_t *st;

@@ -2,7 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 #include <string.h>
 #include "scene.h"
-#include "store.h"                   /* store_erased */
+#include "store.h"                   /* (config.h: crc8_smbus) */
 #include "ultra.h"                   /* ultra_smoothstep */
 
 void scene_clear(scene_t *s)
@@ -59,7 +59,7 @@ void scene_budget_init(scene_budget_t *b, uint32_t now)
     budget_init(b, now, SCENE_BUDGET_CAP, SCENE_REFILL_MS);
 }
 
-int budget_take(scene_budget_t *b, uint32_t now, uint32_t need)
+uint32_t budget_avail(scene_budget_t *b, uint32_t now)
 {
     while (now - b->refill_ms >= b->period_ms) {
         b->refill_ms += b->period_ms;
@@ -70,7 +70,12 @@ int budget_take(scene_budget_t *b, uint32_t now, uint32_t need)
     if (b->tokens >= b->cap) {
         b->refill_ms = now;                              /* full: the next token comes a whole period after a write */
     }
-    if (b->tokens < need) {
+    return b->tokens;
+}
+
+int budget_take(scene_budget_t *b, uint32_t now, uint32_t need)
+{
+    if (budget_avail(b, now) < need) {
         return 0;
     }
     b->tokens--;
@@ -88,15 +93,15 @@ static uint8_t rec_crc(const scene_rec_t *r)
     return crc8_smbus((const uint8_t *)r, 14u);       /* (config.h: the same CRC-8, one copy in the image) */
 }
 
-static int rec_valid(const scene_rec_t *r)
+int scene_rec_valid(const uint8_t *b)
 {
+    const scene_rec_t *r = (const scene_rec_t *)b;
     return r->mark == SCENE_MARK && r->crc == rec_crc(r) && (r->s.mask & ~0x1Fu) == 0u;
 }
 
-static int rec_blank(const uint8_t *b)
-{
-    return store_erased(b, SCENE_REC_BYTES);
-}
+/* 16 records a page, the u16 seq at offset 0 (0.6.4; before: a ring of its own, the same records) */
+typedef char scene_pair[(SCENE_LOG_PAGES == 2u && SCENE_RECS_PAGE <= 16u && SCENE_REC_BYTES == 16u) ? 1 : -1];
+const pp_desc_t scene_pp = { SCENE_REC_BYTES, SCENE_RECS_PAGE, 0u, 16u, scene_rec_valid };
 
 void scene_log_pack(const scene_t *s, uint16_t seq, scene_rec_t *rec)
 {
@@ -106,43 +111,34 @@ void scene_log_pack(const scene_t *s, uint16_t seq, scene_rec_t *rec)
     rec->crc = rec_crc(rec);
 }
 
-/* newest = the valid record whose seq is ahead of every other (16-bit serial numbers: at most SCENE_RECS live) */
-int scene_log_find(const uint8_t *base, scene_t *out, uint16_t *seq)
+/* a head as this firmware writes it (ultra_apply_slot validated every field): what the engine indexes with is in
+ * range. The CRC-8 alone lets 1 in 256 of any other content through (another layout under the same magic, a damaged
+ * page): roles 8-255 would be output, a mask with bits 5-7 would keep the power-on effect running after the host's
+ * take-over, set points past the 4 kept would be read from the fields after them. */
+static int head_ok(const ultra_light_t *L)
 {
-    int best = -1;
-    uint16_t best_seq = 0;
-    uint32_t i;
-    for (i = 0; i < SCENE_RECS; i++) {
-        const scene_rec_t *r = (const scene_rec_t *)(base + i * SCENE_REC_BYTES);
-        if (rec_valid(r) && (best < 0 || (int16_t)(uint16_t)(r->seq - best_seq) > 0)) {
-            best = (int)i;
-            best_seq = r->seq;
+    uint32_t i, mask = 0;
+    for (i = 0; i < 5u; i++) {
+        if (L->role[i] > ULTRA_ROLE_WARM_WHITE) {
+            return 0;
+        }
+        if (L->role[i] != ULTRA_ROLE_NONE) {
+            mask |= 1u << i;
         }
     }
-    if (best >= 0) {
-        *out = ((const scene_rec_t *)(base + (uint32_t)best * SCENE_REC_BYTES))->s;
-        *seq = best_seq;
-    }
-    return best;
-}
-
-int scene_log_next(const uint8_t *base, int newest, uint8_t *erase)
-{
-    uint32_t i = newest < 0 ? 0u : ((uint32_t)newest + 1u) % SCENE_RECS;
-    *erase = 0;
-    if (newest < 0) {                                    /* nothing stored: start at page 0 */
-        *erase = (uint8_t)!rec_blank(base);
+    if (L->opt_n > ULTRA_OPT_POINTS_MAX) {
         return 0;
     }
-    /* the rest of the current page, if blank (a record lost mid-write leaves a used slot: skip it) */
-    while (i % SCENE_RECS_PAGE != 0u) {
-        if (rec_blank(base + i * SCENE_REC_BYTES)) {
-            return (int)i;
+    for (i = 0; i < L->opt_n; i++) {                     /* as opt_points leaves them: valid, sorted by M, descending,
+                                                            none warmer than the warm end (dim_to_warm divides by
+                                                            warm end - WW LED when a point lies past the WW LED) */
+        if (L->opt_pm[i] == 0u || L->opt_pt[i] == 0u || L->opt_pt[i] > L->opt_warm ||
+            (i > 0u && L->opt_pm[i - 1u] < L->opt_pm[i])) {
+            return 0;
         }
-        i = (i + 1u) % SCENE_RECS;
     }
-    *erase = 1;                                          /* a page boundary: the next page holds the oldest records */
-    return (int)i;
+    return L->mask == mask && (L->flags & ~ULTRA_DEF_FLAGS) == 0u && (L->opt_flags & ~ULTRA_OPT_FLAGS) == 0u &&
+           L->scene_mode <= 1u && L->scene_fx < ULTRA_FX_COUNT && L->g_q16 <= (65535u * 65536u + 500u) / 1000u;
 }
 
 /* the power-on effect store's image (core/ultra.h ULTRA_FX_*, written by hal/hw.c): the valid lights' heads */
@@ -156,7 +152,14 @@ uint8_t ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS])
     for (i = 0; i < ULTRA_LIGHTS; i++) {
         const uint8_t *h = img + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES;
         if ((img[4] & (1u << i)) && crc8_smbus(h, ULTRA_HEAD_BYTES) == img[5u + i]) {
+            uint32_t g0 = u->light[i].g_q16;             /* (the init's value: the head holds g_q16) */
             memcpy(&u->light[i], h, ULTRA_HEAD_BYTES);
+            u->light[i].out_ok = 0;                      /* (a new head: the render cache) */
+            if (!head_ok(&u->light[i])) {
+                memset(&u->light[i], 0, ULTRA_HEAD_BYTES);   /* not this firmware's: as if erased */
+                u->light[i].g_q16 = g0;
+                continue;
+            }
             crc[i] = img[5u + i];
             mask |= (uint8_t)(1u << i);
         }

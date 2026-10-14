@@ -27,3 +27,19 @@ TIM2_IRQHandler:
 TIM3_IRQHandler:
     call    slew3_isr
     mret
+
+    /* 0.6.4: during a flash operation (hw.c flash_op) the tick comes through VTF slot 0, straight to this stub in
+     * SRAM (nothing fetched from the flash); mtvec points to flash_fault meanwhile: an exception or NMI forces the
+     * outputs off and waits for the watchdog. Same convention as above (HPE + mret). */
+    .section .ramtext, "ax", @progbits
+    .align 2
+    .global flash_tick
+flash_tick:
+    call    flash_poll_isr
+    mret
+
+    .align 2
+    .global flash_fault
+flash_fault:
+    call    hw_flash_trip
+1:  j       1b

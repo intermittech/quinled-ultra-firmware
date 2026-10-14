@@ -321,6 +321,8 @@ static void test_cli(void)
     st.version = "test";
     st.steps = 5760;
     st.fps = 42;
+    memset(&test_en, 0, sizeof test_en);
+    st.en = &test_en;
     c.write = cap_write;
     c.apply = cap_apply;
     c.save_now = cap_save;
@@ -383,7 +385,7 @@ static void test_cli(void)
     st.vs_supply_max_mv = 24050;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V)\r\ninput=130.4 W\r\n"
-                          "energy=0.00 Wh since boot, 0 Wh lifetime\r\ntp8=1.65 V\r\ntest_mode=off\r\n") != NULL,
+                          "energy=0.00 Wh since boot\r\ntp8=1.65 V\r\ntest_mode=off\r\n") != NULL,
           "status voltages, input power (24.012 V x 5432 mA)");
     /* uptime h:mm:ss (days beyond 24 h), outputs in %, the stagger offsets in % of the period, ripple in A */
     st.uptime_s = 3723u;

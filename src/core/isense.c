@@ -16,6 +16,14 @@
 
 static uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
 
+/* a x b / c for the Q16 scalings here: the products are below 2^32 whenever the limit, k and the currents are in
+ * their ranges (<= 65535 x 65536), then one 32-bit division; the 64 / 32 one stays for a larger product (same result) */
+static NOINLINE uint32_t mul_div(uint32_t a, uint32_t b, uint32_t c)   /* (out of line: six uses) */
+{
+    uint64_t p = (uint64_t)a * b;
+    return (uint32_t)(p >> 32) != 0u ? (uint32_t)(p / c) : (uint32_t)p / c;
+}
+
 static const uint16_t LVL_DUTY[ISENSE_LEVELS] = { 16384u, 32768u, 49152u, 65535u };
 static const uint8_t LVL_PCT[ISENSE_LEVELS] = { 25u, 50u, 75u, 100u };
 
@@ -41,7 +49,11 @@ static uint32_t shape_at(const isense_t *s, uint32_t ch, uint32_t v)
 
 static int32_t raw_to_ma(const isense_t *s, uint64_t sum, uint32_t n)
 {
-    return (int32_t)((sum * s->ma_per_lsb_q16 / n) >> 16);
+    /* (sum x gain / n) >> 16 = ((sum x gain) >> 16) / n (nested floors of positive integers): the shifted product of a
+     * ms of samples fits 32 bits (2^21 at 8 mA per count), so one 32-bit division does it instead of the 64 / 32 one
+     * (which every ms took its long path: the product is above 2^32) */
+    uint64_t p = sum * s->ma_per_lsb_q16;
+    return (int32_t)((uint32_t)(p >> 48) != 0u ? (uint32_t)((p / n) >> 16) : (uint32_t)(p >> 16) / n);
 }
 
 static void set_fast_level(isense_t *s)
@@ -51,7 +63,7 @@ static void set_fast_level(isense_t *s)
     if (ma > fs_ma * 97u / 100u) {
         ma = fs_ma * 97u / 100u;                           /* below the ADC's end of range */
     }
-    raw = (uint32_t)(((uint64_t)ma << 16) / s->ma_per_lsb_q16);
+    raw = mul_div(ma, 65536u, s->ma_per_lsb_q16);
     s->fast_raw = (uint16_t)(s->enabled ? raw : 0xFFFFu);
 }
 
@@ -210,7 +222,7 @@ uint32_t isense_on_ma(const isense_t *s, uint32_t ch, uint32_t v)
     if (v < 16384u) {
         v = 16384u;                                    /* below 25 %: the 25 % point's current while on */
     }
-    return (uint32_t)(((uint64_t)isense_ch_ma(s, ch, v) << 16) / v);
+    return mul_div(isense_ch_ma(s, ch, v), 65536u, v);
 }
 
 uint32_t isense_connected_ma(const isense_t *s)
@@ -285,14 +297,15 @@ static void trip_scale(isense_t *s, uint32_t i_trip_ma)
     if (i_trip_ma <= l) {
         return;
     }
-    kk = (uint32_t)(((uint64_t)s->k_meas * l) / i_trip_ma);
+    kk = mul_div(s->k_meas, l, i_trip_ma);
     s->k_fb = kk < K_MIN ? K_MIN : kk;
 }
 
-/* one 16 ms window done: zero tracking or an NLMS step on the channel currents */
+/* one 16 ms window done (win_n == ISENSE_WIN_MS, the only call: the divisions by it are shifts): zero tracking or
+ * an NLMS step on the channel currents */
 static void window_done(isense_t *s)
 {
-    int32_t mean_i = (int32_t)(s->win_i / s->win_n);
+    int32_t mean_i = s->win_i / (int32_t)ISENSE_WIN_MS;
     uint32_t d[ISENSE_CH], i;
     int64_t norm = 0, pred = 0, e;
     if (s->win_dark) {
@@ -307,7 +320,7 @@ static void window_done(isense_t *s)
         return;
     }
     for (i = 0; i < ISENSE_CH; i++) {
-        d[i] = s->win_d[i] / s->win_n;                 /* mean of the applied duty through the curve, Q16 */
+        d[i] = s->win_d[i] / ISENSE_WIN_MS;            /* mean of the applied duty through the curve, Q16 */
         norm += (int64_t)d[i] * d[i];
         pred += (int64_t)d[i] * s->ch_ma[i];
     }
@@ -327,12 +340,17 @@ static void window_done(isense_t *s)
             s->conf /= 2;
         }
     }
-    for (i = 0; i < ISENSE_CH; i++) {
-        /* dI_k = mu e d_k / sum d^2, mu = 1/4 (1/16 once calibrated) */
-        int64_t num = e * (int64_t)d[i] * (int64_t)Q16;
-        int64_t dk = num / norm / (s->calibrated ? 16 : 4);
-        int32_t v = s->ch_ma[i] + (int32_t)dk;
-        s->ch_ma[i] = v < 0 ? 0 : (v > 20000 ? 20000 : v);
+    {
+        /* dI_k = mu e d_k / sum d^2, mu = 1/4 (1/16 once calibrated): |e| d_k 2^16 / (norm / mu) truncated, with the
+         * sign put back (C's truncation towards zero: the two divisions in one, unsigned, no sign handling in the
+         * 64-bit division) */
+        uint64_t ae = (uint64_t)(e < 0 ? -e : e), dn = (uint64_t)norm * (s->calibrated ? 16u : 4u);
+        for (i = 0; i < ISENSE_CH; i++) {
+            uint64_t q = (ae * d[i] * (uint64_t)Q16) / dn;
+            int32_t dk = e < 0 ? -(int32_t)q : (int32_t)q;
+            int32_t v = s->ch_ma[i] + dk;
+            s->ch_ma[i] = v < 0 ? 0 : (v > 20000 ? 20000 : v);
+        }
     }
 }
 
@@ -351,7 +369,7 @@ static uint32_t cal_ms(isense_t *s)
     if (s->cal_t < settle + meas) {
         return 0;
     }
-    s->cal_res[s->cal_step - 1u] = (int32_t)(s->cal_sum / (int64_t)s->cal_n);
+    s->cal_res[s->cal_step - 1u] = s->cal_sum / (int32_t)s->cal_n;
     s->cal_sum = 0;
     s->cal_n = 0;
     s->cal_t = 0;
@@ -385,7 +403,11 @@ MEASURED uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak
         s->i_ms = raw_to_ma(s, sum, n);
     }
     s->peak_ma = (uint16_t)umin((uint32_t)((peak_raw * (uint64_t)s->ma_per_lsb_q16) >> 16), 65535u);
-    s->i_avg += (s->i_ms - s->i_avg) / 64;
+    /* 1/64 per ms, with 6 fraction bits: the average settles on a steady i_ms exactly. (An integer step of
+     * (i_ms - i_avg) / 64 is 0 for any difference under 64 mA, so 0.6.2's `current=` stayed up to 63 mA short of a
+     * steady load and up to 63 mA above zero after it: 1.94 A for 2.00 A, 0.06 A for 0.00 A.) */
+    s->i_acc += s->i_ms - (s->i_acc >> 6);
+    s->i_avg = s->i_acc >> 6;
     s->k_meas = s->k;                                  /* the k of the ms just measured */
 
     /* ---- tripped: wait, then retry ---- */
@@ -445,14 +467,14 @@ MEASURED uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak
         uint32_t lo = (uint32_t)(((uint64_t)l * RELEASE_BELOW_Q16) >> 16);
         uint32_t kfb = s->k_fb, tgt;
         if (i_led > (int32_t)hi) {
-            tgt = (uint32_t)(((uint64_t)s->k_meas * l) / (uint32_t)i_led);   /* lands at the limit */
+            tgt = mul_div(s->k_meas, l, (uint32_t)i_led);                     /* lands at the limit */
             if (tgt < kfb) {
                 kfb = tgt < K_MIN ? K_MIN : tgt;
             }
         } else if (i_led < (int32_t)lo && kfb < Q16) {
-            uint32_t up = kfb + (uint32_t)(((uint64_t)kfb * ISENSE_RELEASE_Q16) >> 16) + 1u;
+            uint32_t up = kfb + ((kfb * ISENSE_RELEASE_Q16) >> 16) + 1u;   /* kfb < 2^16 here (fable-flash) */
             if (i_led > 0) {
-                uint32_t cap = (uint32_t)(((uint64_t)s->k_meas * l) / (uint32_t)i_led);
+                uint32_t cap = mul_div(s->k_meas, l, (uint32_t)i_led);
                 if (cap < up && cap > kfb) {
                     up = cap;
                 }
@@ -469,7 +491,7 @@ MEASURED uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak
     if (model_usable(s)) {
         uint32_t pred = isense_model_ma(s, s->applied);
         if (pred >= 100u && i_led > 0) {
-            uint32_t gobs = (uint32_t)(((uint64_t)(uint32_t)i_led << 16) / pred);   /* measured / model */
+            uint32_t gobs = mul_div((uint32_t)i_led, 65536u, pred);              /* measured / model */
             if (gobs > s->g + s->g / 20u) {
                 s->g = gobs;                           /* fast: the model under-predicts */
             } else {
@@ -541,7 +563,7 @@ MEASURED void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t 
     if (model_usable(s)) {                             /* feed-forward: the content's predicted current */
         uint32_t a = (uint32_t)(((uint64_t)isense_model_ma(s, req) * s->g) >> 16), l = limit_led(s);
         if (a > l) {
-            k = (uint32_t)(((uint64_t)l << 16) / a);
+            k = mul_div(l, 65536u, a);
         }
     }
     if (s->k_fb < k) {
@@ -552,9 +574,13 @@ MEASURED void isense_apply(isense_t *s, const uint16_t req[ISENSE_CH], uint16_t 
     }
     s->k = k;
     s->limiting = (uint8_t)(k < Q16);
-    k = (uint32_t)(((uint64_t)k * s->k_ss) >> 16);    /* soft start: the outputs only */
+    /* soft start: the outputs only. k_ss <= Q16 (ss_factor, the test jig's 1.0): at 1.0 nothing to do, below it the
+     * product of two values under 2^16 (fable-flash) */
+    if (s->k_ss < Q16) {
+        k = (k * s->k_ss) >> 16;
+    }
     for (i = 0; i < ISENSE_CH; i++) {
-        uint32_t v = k >= Q16 ? req[i] : (uint32_t)(((uint64_t)req[i] * k + 32768u) >> 16);
+        uint32_t v = k >= Q16 ? req[i] : (req[i] * k + 32768u) >> 16;   /* k < 2^16: a 32-bit product */
         if (v == 0u && req[i] != 0u) {
             v = 1u;                                    /* an output that should be on stays on */
         }

@@ -69,22 +69,9 @@ _vector_base:
     .word   TIM2_IRQHandler            /* TIM2 */
     .word   TIM3_IRQHandler            /* TIM3 */
     .word   TIM4_IRQHandler            /* TIM4 */
-    .word   I2C1_EV_IRQHandler         /* I2C1 Event */
-    .word   I2C1_ER_IRQHandler         /* I2C1 Error */
-    .word   I2C2_EV_IRQHandler         /* I2C2 Event */
-    .word   I2C2_ER_IRQHandler         /* I2C2 Error */
-    .word   SPI1_IRQHandler            /* SPI1 */
-    .word   SPI2_IRQHandler            /* SPI2 */
-    .word   USART1_IRQHandler          /* USART1 */
-    .word   USART2_IRQHandler          /* USART2 */
-    .word   USART3_IRQHandler          /* USART3 */
-    .word   EXTI15_10_IRQHandler       /* EXTI Line 15..10 */
-    .word   RTCAlarm_IRQHandler        /* RTC Alarm through EXTI Line */
-    .word   USBWakeUp_IRQHandler       /* USB Wake up from suspend */
-    .word   USBFS_IRQHandler           /* USBFS Break */
-    .word   USBFSWakeUp_IRQHandler     /* USBFS Wake up from suspend */
-    .word   UART4_IRQHandler           /* UART4 */
-    .word   DMA1_Channel8_IRQHandler   /* DMA1 Channel8 */
+    /* QuinLED: the table ends here. The firmware enables SysTick (12), TIM2 (44), TIM3 (45) and TIM4 (46) only
+     * (src/hal/hw.c, src/hal/isr.S); an interrupt that is never enabled never fetches its entry, so the 16 entries
+     * after TIM4 (I2C1 .. DMA1 channel 8, 64 bytes) are not needed. The handler names stay weak below. */
 
     .option rvc;
     .section    .text.vector_handler, "ax", @progbits

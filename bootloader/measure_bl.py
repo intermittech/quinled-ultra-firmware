@@ -55,7 +55,9 @@ def descriptor(body, version=0x000500FF):
     d = bytearray(64)
     d[0:4] = b"QDU5"
     d[4], d[5] = 1, 1
-    struct.pack_into(">HIIIII", d, 6, 0b110, version, len(body), crc32_words(body), 0x08002100, 0x00002100)
+    # revision mask bit 3 = UPD_REV_D2A_R04, the board revision build_bl.sh builds for (BL_HW_REV 3): with another mask
+    # the bootloader rejects the ANNOUNCE and the rows below measure the SKIP path (and no page gets programmed)
+    struct.pack_into(">HIIIII", d, 6, 1 << 3, version, len(body), crc32_words(body), 0x08002100, 0x00002100)
     d[28] = 1
     struct.pack_into(">I", d, 60, crc32_words(bytes(d[:60])))
     return bytes(d)

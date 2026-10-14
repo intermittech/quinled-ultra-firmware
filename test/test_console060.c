@@ -23,6 +23,7 @@ static void test_cli060(void)
     config_rx_init(&cli_rx);
     st.version = "test";
     st.steps = 5760;
+    st.en = &test_en;
     c.write = cap_write;
     c.apply = cap_apply;
     c.save_now = cap_save;
@@ -81,8 +82,18 @@ static void test_cli060(void)
     d.log[0].dur_ms = 40;
     d.log[0].i_ma = 1500;
     st.dip_ref_mv = 24020;
-    st.en_boot_mwh = 12340;
-    st.en_total_wh = 1234;
+    memset(&test_en, 0, sizeof test_en);
+    test_en.boot_mwh = 12340;                             /* the lifetime record: 1,284.3 kWh with this boot's 12 Wh */
+    test_en.base_wh = 1284288u;
+    test_en.lt.on_s = 77040000u;                          /* 21,400 h */
+    test_en.lt.lit_s = 35460000u;                         /* 9,850 h */
+    test_en.lt.ups = 1312u;
+    test_en.lt.trips[1] = 2u;
+    test_en.lt.dips = 14u;
+    test_en.lt.peak_t = 137u;                             /* 68.5 C */
+    test_en.lt.peak_a = 79u;                              /* 7.9 A */
+    test_en.lt.updates = 6u;
+    test_en.lt.writes = 9876u;
     health_init(&h);
     h.flags = ULTRA_HE_F_TESTED | ULTRA_HE_F_ABNORMAL;
     h.cls[0] = ULTRA_HE_NORMAL;
@@ -111,7 +122,9 @@ static void test_cli060(void)
     sprintf(want, "supply_dip 1=0:02:03 ago, %u.%02u V (83 %%), 40 ms, 1.50 A\r\n",
             (vsense_mv(&vs, x20, 1u) + 5u) / 1000u, ((vsense_mv(&vs, x20, 1u) + 5u) / 10u) % 100u);
     CHECK(strstr(cli_out, want) != NULL, "status: %s", want);
-    CHECK(strstr(cli_out, "energy=12.34 Wh since boot, 1234 Wh lifetime\r\n") != NULL, "status: energy");
+    CHECK(strstr(cli_out, "energy=12.34 Wh since boot\r\n") != NULL, "status: energy");
+    CHECK(strstr(cli_out, "lifetime=1284.30 kWh, powered 21400.0 h, lit 9850.0 h, 1312 power-ups, trips 2 / 0, dips 14, "
+                          "max 68.5 C / 7.9 A, wd 0, updates 6, 9876 records\r\n") != NULL, "status: lifetime");
     CHECK(strstr(cli_out, "health_test R/G/B/W1/W2=ok/FAULT:rise/ok/none/FAULT:high:low, change 5/0/-2/-/45 %\r\n")
           != NULL, "status: health_test");
     CHECK(strstr(cli_out, "health_model R/G/B/W1/W2=2/-1/-/-/35 %, dark 0.01 A\r\n") != NULL, "status: health_model");

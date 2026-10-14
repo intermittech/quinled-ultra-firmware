@@ -42,13 +42,19 @@ void store_pack(const settings_t *s, uint32_t seq, store_slot_t *slot)
     store_pack_ext(s, &e, seq, slot);
 }
 
+int store_valid(const uint8_t *r)
+{
+    const store_slot_t *sl = (const store_slot_t *)r;
+    return sl->magic == STORE_MAGIC && sl->crc == slot_crc(sl);
+}
+
 int store_find_ext(const uint8_t *page, settings_t *out, store_ext_t *ext, uint32_t *seq)
 {
     int best = -1;
     uint32_t i, best_seq = 0;
     for (i = 0; i < STORE_SLOTS; i++) {
         const store_slot_t *sl = (const store_slot_t *)(page + i * STORE_SLOT_BYTES);
-        if (sl->magic == STORE_MAGIC && sl->crc == slot_crc(sl) && (best < 0 || sl->seq > best_seq)) {
+        if (store_valid((const uint8_t *)sl) && (best < 0 || sl->seq > best_seq)) {
             best = (int)i;
             best_seq = sl->seq;
         }

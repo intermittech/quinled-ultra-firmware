@@ -5,7 +5,7 @@
  * hardware. */
 #include "ch32v20x.h"
 #include "hw.h"
-#include "../core/store.h"
+#include "../core/flashrec.h"
 #include "../core/stagger.h"
 #include "../core/scratch.h"
 #include "../core/lto.h"
@@ -18,13 +18,13 @@ uint32_t SystemCoreClock = 144000000u;
 uint16_t pwm_tab1[PATTERN_MAX_LEN * 4];
 uint16_t pwm_tab2[PATTERN_MAX_LEN * 6];
 uint16_t pwm_tab3[PATTERN_MAX_LEN * 6];
-uint16_t din_ring[DIN_RING_WORDS] __attribute__((aligned(4)));
-uint16_t din_copy[DIN_COPY_WORDS] __attribute__((aligned(4)));
+uint16_t din_ring[DIN_RING_WORDS] __attribute__((aligned(16)));   /* (16: memset / copies take their fast path, */
+uint16_t din_copy[DIN_COPY_WORDS] __attribute__((aligned(16)));   /* whatever the RAM layout; 0.6.3) */
 
 static uint32_t cur_steps;
 static uint8_t cur_stagger, cur_len, cur_spread;
 static uint16_t spread_arr[PATTERN_MAX_LEN];         /* spread spectrum: period - 1 of each table entry */
-static volatile uint8_t pwm_forced;                  /* isense trip: all PWM outputs forced low */
+volatile uint8_t pwm_forced;                  /* isense trip: all PWM outputs forced low */
 static void pwm_outputs_mode(void);
 
 /* GPIO CFGxR nibbles (STM32F1 style) */
@@ -120,8 +120,14 @@ void pwm_set_phase(uint16_t o2, uint16_t o3)
 /* offset of a timer: TIM1's count at the timer's wrap (read just after the wrap, a few counts of skew) */
 static uint32_t phase_of(uint32_t cnt_x)
 {
-    uint32_t c1 = TIM1->CNT;
-    return (c1 + cur_steps - (cnt_x % cur_steps)) % cur_steps;
+    /* (c1 - cnt_x) mod cur_steps as two conditional additions instead of two divisions (fable-algo: 34 of the
+     * interrupt's ~150 cycles): TIM1 counts below its period (ATRLR = cur_steps - 1; no spread here) and the timer's
+     * count just after its own wrap is below cur_steps + its stretched period's step (< 2 cur_steps even when this
+     * interrupt ran late) */
+    int32_t d = (int32_t)TIM1->CNT - (int32_t)cnt_x;
+    if (d < 0) d += (int32_t)cur_steps;
+    if (d < 0) d += (int32_t)cur_steps;
+    return (uint32_t)d;
 }
 
 /* spread spectrum: TIM1 and the timer run the same period sequence, offsets stay below 85 % of the period, so the
@@ -132,10 +138,34 @@ static uint32_t phase_straight(uint32_t cnt_x)
     return (uint32_t)(d < 0 ? d + (int32_t)cur_steps : d);
 }
 
+/* The table entry the DMA burst of this update wrote for the next period (`words` transfers, requested at the update
+ * / at TIM2's count 2). 0.6.4 (gpt-hw H6): taken once that burst is complete. 0.6.3 read the channel's count when the
+ * interrupt started: a burst still in progress (the usual case: the interrupt comes with the update) gave the entry
+ * before, so the next period got the previous entry's length (and W2 its CCR3), a lasting phase error. The count sits
+ * on an entry boundary before and after a burst: on a boundary at the first read, wait for it to move (an interrupt
+ * entered after the timer's count SLEW_DMA_LATE found the burst done), then for the next boundary. Both waits end
+ * at the timer's count, never unbounded. BENCH: the burst done well before SLEW_DMA_LATE with every DMA channel busy. */
+#define SLEW_DMA_LATE 192u                               /* timer counts: 1.3 us at 144 MHz */
+static inline __attribute__((always_inline)) uint32_t slew_entry(const volatile uint16_t *cnt,
+                                                                 const volatile uint32_t *cntr, uint32_t words)
+{
+    uint32_t n = *cntr;
+    if (n % words == 0u) {
+        while (*cntr == n && *cnt < SLEW_DMA_LATE) {
+        }
+        n = *cntr;
+    }
+    while (n % words != 0u && *cnt < 2u * SLEW_DMA_LATE) {
+        n = *cntr;
+    }
+    n = (words * cur_len - n) / words + cur_len - 1u;   /* the counter: words x cur_len .. 1, so cur_len - 1 .. */
+    return n >= cur_len ? n - cur_len : n;               /* .. 2 cur_len - 1: mod cur_len (fable-algo: no division) */
+}
+
 /* the period change d of the next period; spread spectrum: on top of the table's length for that period, which
- * the DMA burst of this update has just written (entry idx of a `words`-wide table at dma_cntr) */
+ * the DMA burst of this update writes (entry idx of a `words`-wide table, DMA channel count at cntr) */
 static int32_t slew_next(volatile uint16_t *cnt, uint32_t tgt, int32_t pend, const uint16_t *tab, uint32_t words,
-                         uint32_t dma_cntr, volatile uint16_t *atrlr, uint32_t *idx_out)
+                         const volatile uint32_t *cntr, volatile uint16_t *atrlr, uint32_t *idx_out)
 {
     int32_t d;
     if (!cur_spread) {
@@ -147,10 +177,7 @@ static int32_t slew_next(volatile uint16_t *cnt, uint32_t tgt, int32_t pend, con
     {
         uint32_t idx, arr;
         d = stagger_slew_straight(phase_straight(*cnt), tgt, pend, slew_step_max());
-        while (*cnt < 24u) {
-            /* the burst for the next period (at the update / at count 2) is written */
-        }
-        idx = (((uint32_t)words * cur_len - dma_cntr) / words + cur_len - 1u) % cur_len;
+        idx = slew_entry(cnt, cntr, words);
         arr = tab[words * idx];
         if ((int32_t)arr + d > 65535) d = 65535 - (int32_t)arr;
         *atrlr = (uint16_t)((int32_t)arr + d);
@@ -165,7 +192,7 @@ void slew2_isr(void)
     int32_t d;
     uint32_t idx;
     TIM2->INTFR = (uint16_t)~TIM_UIF;
-    d = slew_next(&TIM2->CNT, slew_tgt2, slew_pend2, pwm_tab2, 6u, DMA1_Channel1->CNTR, &TIM2->ATRLR, &idx);
+    d = slew_next(&TIM2->CNT, slew_tgt2, slew_pend2, pwm_tab2, 6u, &DMA1_Channel1->CNTR, &TIM2->ATRLR, &idx);
     slew_pend2 = d;
     if (d == 0) {
         TIM2->DMAINTENR &= (uint16_t)~TIM_UIE;           /* arrived */
@@ -178,14 +205,12 @@ void slew3_isr(void)
     int32_t d;
     uint32_t idx;
     TIM3->INTFR = (uint16_t)~TIM_UIF;
-    d = slew_next(&TIM3->CNT, slew_tgt3, slew_pend3, pwm_tab3, 6u, DMA1_Channel3->CNTR, &TIM3->ATRLR, &idx);
+    d = slew_next(&TIM3->CNT, slew_tgt3, slew_pend3, pwm_tab3, 6u, &DMA1_Channel3->CNTR, &TIM3->ATRLR, &idx);
     if (d != 0 && pwm_right_aligned(CH_W2)) {
         /* the update burst wrote the next period's CCR3 / CCR4 from table entry idx: move W2's start along */
         int32_t ccr;
-        while (TIM3->CNT < 24u) {
-        }
         if (idx == 0xFFFFFFFFu) {
-            idx = ((2u * cur_len - DMA1_Channel3->CNTR) / 2u + cur_len - 1u) % cur_len;
+            idx = slew_entry(&TIM3->CNT, &DMA1_Channel3->CNTR, 2u);
             ccr = (int32_t)pwm_tab3[2u * idx];
         } else {
             ccr = (int32_t)pwm_tab3[6u * idx + 4u];
@@ -232,6 +257,18 @@ uint16_t *pwm_table(uint8_t ch, uint8_t *stride)
     }
 }
 
+/* Restart must never temporarily undo an overcurrent force-off. The poll ISR can
+ * trip between timer writes, so sample pwm_forced and install each mode atomically. */
+static void pwm_config_modes(volatile uint16_t *reg, uint16_t value, uint16_t mask)
+{
+    __disable_irq();
+    if (pwm_forced) {
+        value = (uint16_t)((value & ~mask) | ((OCM_FORCE_LO * 0x1010u) & mask));
+    }
+    *reg = value;
+    __enable_irq();
+}
+
 void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
 {
     uint32_t mg, mw2;
@@ -261,7 +298,8 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     TIM1->PSC = 0;
     TIM1->ATRLR = (uint16_t)(steps - 1u);
     TIM1->RPTCR = 0;
-    TIM1->CHCTLR1 = (uint16_t)((mg << 4) | TIM_OC1PE | (OCM_PWM1 << 12) | TIM_OC2PE);
+    pwm_config_modes(&TIM1->CHCTLR1, (uint16_t)((mg << 4) | TIM_OC1PE | (OCM_PWM1 << 12) | TIM_OC2PE),
+                     (7u << 4) | (7u << 12));
     TIM1->BDTR = TIM_MOE;                                /* no dead time, no break */
     TIM1->CCER = TIM_CC1E | TIM_CC2E;
     if (cur_spread) {
@@ -283,6 +321,11 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
         TIM1->DMACFGR = (uint16_t)((1u << 8) | (TIM_OFS_CH1CVR / 4u));   /* burst of 2: CCR1, CCR2 */
         DMA1_Channel5->CNTR = (uint32_t)len * 2u;
     }
+    /* every channel's table for the new period and mode, from the values the tables held (main.c; at boot 0: off),
+     * while the three DMA channels are off (0.6.4, gpt-hw H2: 0.6.3 started on the old tables until main.c's
+     * rebuild, and at boot on zero tables: G / W2, right-aligned when staggering (PWM mode 2, active while
+     * CNT >= CCR), full on, through the boot's flash erase too) */
+    pwm_fill();
     TIM1->DMAINTENR = TIM_UDE;
     DMA1_Channel5->PADDR = (uint32_t)&TIM1->DMAADR;      /* TIM1_UP = DMA1 channel 5 */
     DMA1_Channel5->MADDR = (uint32_t)pwm_tab1;
@@ -293,7 +336,7 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
      * (preloaded: used from the next period, like the update bursts of TIM1 / TIM3). */
     TIM2->PSC = 0;
     TIM2->ATRLR = (uint16_t)(steps - 1u);
-    TIM2->CHCTLR2 = (uint16_t)((OCM_FROZEN << 4) | (OCM_PWM1 << 12) | TIM_OC4PE);
+    pwm_config_modes(&TIM2->CHCTLR2, (uint16_t)((OCM_FROZEN << 4) | (OCM_PWM1 << 12) | TIM_OC4PE), 7u << 12);
     TIM2->CH3CVR = 2u;
     TIM2->CCER = TIM_CC4E;                               /* only CH4: CC1E / CC2E / CC3E = 0 (board.h invariants) */
     TIM2->DMAINTENR = TIM_CC3DE_;
@@ -312,7 +355,8 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     /* TIM3: CH3 = W2 (PB0), CH4 = W1 (PB1); CH1 = DIN capture, kept. CC2E stays 0 (PA7 is the current sense) */
     TIM3->PSC = 0;
     TIM3->ATRLR = (uint16_t)(steps - 1u);
-    TIM3->CHCTLR2 = (uint16_t)((mw2 << 4) | TIM_OC3PE | (OCM_PWM1 << 12) | TIM_OC4PE);
+    pwm_config_modes(&TIM3->CHCTLR2, (uint16_t)((mw2 << 4) | TIM_OC3PE | (OCM_PWM1 << 12) | TIM_OC4PE),
+                     (7u << 4) | (7u << 12));
     TIM3->CCER = TIM_CC1E | TIM_CC1P | TIM_CC3E | TIM_CC4E;
     if (cur_spread) {
         TIM3->DMACFGR = (uint16_t)((5u << 8) | (TIM_OFS_ATRLR / 4u));   /* burst of 6: ARR .. CCR4 */
@@ -326,6 +370,24 @@ void pwm_start(uint32_t steps, uint8_t len, uint8_t stagger)
     DMA1_Channel3->MADDR = (uint32_t)pwm_tab3;
     DMA1_Channel3->CFGR = DMA_MEM2PER_16_CIRC | DMA_CFGR1_PL_1 | DMA_CFGR1_EN;
 
+    /* the first period's compares (UG makes the preloads active; its burst brings the next period's): entry 0 of
+     * each channel's table (pwm_table: G, R at tab1 [0], [1]; B tab2 [0]; W2, W1 tab3 [0], [1]; spread: +2, +5, +4) */
+    {
+        uint32_t s1 = cur_spread ? 2u : 0u, s3 = cur_spread ? 4u : 0u;
+        int32_t g = pwm_tab1[s1], w2 = pwm_tab3[s3];
+        if (cur_spread) {
+            /* the first period is `steps` long, entry 0's period is spread_arr[0] + 1: a right-aligned compare (the
+             * period - the pulse) moves by the difference (an "off" G / W2 would show the difference as a pulse) */
+            int32_t k = (int32_t)steps - (int32_t)spread_arr[0] - 1;
+            g += mg == OCM_PWM2 ? k : 0;
+            w2 += mw2 == OCM_PWM2 ? k : 0;
+        }
+        TIM1->CH1CVR = (uint16_t)(g < 0 ? 0 : g);
+        TIM1->CH2CVR = pwm_tab1[s1 + 1u];
+        TIM2->CH4CVR = pwm_tab2[cur_spread ? 5u : 0u];
+        TIM3->CH3CVR = (uint16_t)(w2 < 0 ? 0 : w2);
+        TIM3->CH4CVR = pwm_tab3[s3 + 1u];
+    }
     /* load ARR / first bursts, then the phases: a timer started at count steps - x wraps (its R / B / W1 turn-on,
      * its G / W2 turn-off) x counts after TIM1 */
     TIM1->SWEVGR = TIM_UG;
@@ -392,7 +454,8 @@ static volatile uint8_t inj_run;                         /* the sequence running
 static volatile uint8_t temp_req, temp_done;
 static volatile uint32_t temp_ts2, temp_vref2;
 static volatile uint32_t vs_acc[2], vs_n;                /* voltage pairs since the main loop's last take */
-static volatile uint8_t adc_ready;                       /* hw_adc_init done: the poll tick may start sequences */
+static volatile uint8_t adc_ready;                       /* hw_adc_init done: the poll tick may start sequences (0
+                                                            during flash_op too: the SRAM tick does not run them) */
 
 void hw_adc_init(void)
 {
@@ -400,11 +463,11 @@ void hw_adc_init(void)
     RCC->APB2PCENR |= RCC_ADC1EN;
     ADC1->CTLR1 = ADC_SCAN;                              /* independent; scan: the injected group converts in full */
     ADC1->SAMPTR1 = (7u << 18) | (7u << 21);             /* SMP16, SMP17 = 111: 239.5 cycles */
-    ADC1->SAMPTR2 = (6u << 21) | (6u << 15) | 6u;        /* SMP7, SMP5, SMP0 = 110: 71.5 cycles */
+    ADC1->SAMPTR2 = (6u << 21) | (6u << (3u * VSENSE_SUPPLY_CH)) | 6u; /* SMP7, SMP4, SMP0: 71.5 cycles */
     ADC1->RSQR1 = 0;                                     /* L = 0: one regular conversion */
     ADC1->RSQR3 = 7u;                                    /* SQ1 = channel 7 */
     ADC1->ISQR = INJ_VOLT;
-    ADC1->CTLR2 = ADC_ADON | ADC_TSVREFE | ADC_JEXTTRIG | ADC_JEXTSEL;   /* power up; JEXTSEL 111: JSWSTART */
+    ADC1->CTLR2 = ADC_ADON | ADC_JEXTTRIG | ADC_JEXTSEL; /* calibrate with TSVREFE/BUFEN clear (RM 12.3.2) */
     for (i = 0; i < 1000u; i++) {                        /* tSTAB 1 us (and >= 2 ADC clocks before calibration) */
         __asm volatile("nop");
     }
@@ -414,15 +477,16 @@ void hw_adc_init(void)
     ADC1->CTLR2 |= ADC_CAL;
     for (i = 0; i < 100000u && (ADC1->CTLR2 & ADC_CAL); i++) {
     }
+    ADC1->CTLR2 |= ADC_TSVREFE;                          /* enabling it forces the buffer on: only after CAL */
     ADC1->CTLR2 |= ADC_CONT;
     ADC1->CTLR2 |= ADC_ADON;                             /* ADON again: start; CONT: keep converting */
     adc_ready = 1;
 }
 
-void hw_adc_ms(void)
+uint32_t hw_adc_ms(void)
 {
     if (!adc_ready) {
-        return;
+        return 0;
     }
     if (inj_run != 0u && (ADC1->STATR & ADC_JEOC)) {
         uint32_t a = (ADC1->IDATAR1 & 0xFFFu) + (ADC1->IDATAR3 & 0xFFFu);
@@ -447,6 +511,7 @@ void hw_adc_ms(void)
         inj_run = 1;
     }
     ADC1->CTLR2 |= ADC_JSWSTART;
+    return inj_run - 1u;                                 /* 1: the temperature's 84 us (main.c: the next tick) */
 }
 
 void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
@@ -609,22 +674,43 @@ static uint8_t uart_rx[UART_RX_SIZE];
 static uint8_t uart_tx[2][UART_TX_SIZE];
 static uint32_t uart_rx_pos, uart_tx_len;
 static uint8_t uart_tx_fill;
+static uint8_t uart_rx_drop;                             /* flash_op dropped bytes: 1 = tell main.c, 2 = to CR / LF */
+
+static uint32_t uart_rx_w(void)
+{
+    return (UART_RX_SIZE - DMA1_Channel6->CNTR) % UART_RX_SIZE;
+}
 
 int uart_getc(void)
 {
-    uint32_t w = (UART_RX_SIZE - DMA1_Channel6->CNTR) % UART_RX_SIZE;
+    uint32_t w = uart_rx_w();
     int c;
+    if (uart_rx_drop == 1u) {
+        uart_rx_drop = 2;
+        return -2;                                       /* (main.c: the line being typed is cancelled) */
+    }
     if (uart_rx_pos == w) {
         return -1;
     }
     c = uart_rx[uart_rx_pos];
     uart_rx_pos = (uart_rx_pos + 1u) % UART_RX_SIZE;
+    if (uart_rx_drop) {
+        if (c == '\r' || c == '\n') {
+            uart_rx_drop = 0;                            /* the rest of the cut line is gone, the next one counts */
+        }
+        return -1;
+    }
     return c;
 }
 
 static int uart_tx_busy(void)
 {
     return (DMA1_Channel7->CFGR & DMA_CFGR1_EN) && DMA1_Channel7->CNTR != 0u;
+}
+
+uint32_t uart_busy(void)
+{
+    return uart_tx_len != 0u || uart_tx_busy() || !(USART2->STATR & USART_STATR_TC);
 }
 
 void uart_kick(void)
@@ -747,47 +833,87 @@ void hw_init(void)
 }
 
 /* ---------------------------------------------------------------------------------------------------- flash */
-#define FLASH_KEY1   0x45670123u
-#define FLASH_KEY2   0xCDEF89ABu
+/* flash_op (core/flashrec.h; the stores: core/flashrec.c; when main.c writes: flash_may, Quindor's policy). 0.6.4
+ * (review round 4: gpt-hw H4 / H8 / H9; the design: gpt-flashsafe):
+ *  - HCLK / 2 during an erase or program (RM 32.1 note 2, WCH's FLASH example; BENCH / WCH: the datasheet's 60 MHz
+ *    note): the PWM timers count at half rate meanwhile (the duty kept, each period twice as long). PCLK2 stays at
+ *    72 MHz (PPRE2 /1 instead of /2): the ADC (12 MHz, PA7 keeps converting) and the DIN sampler keep their clocks.
+ *    SysTick's compare is rescaled (50 us ticks), its phase kept.
+ *  - The current trip keeps running (0.6.3: interrupts off for the whole operation): interrupts stay on, but only
+ *    SysTick's, through VTF slot 0 to flash_tick in SRAM (main.c flash_poll_isr: the time base and the fast trip);
+ *    every other interrupt is off meanwhile and mtvec points to an SRAM handler (an exception: the outputs off, then
+ *    the watchdog). The SRAM code (.ramtext) is copied by the startup with .data. The erase / program commands stay
+ *    in the zero-wait flash (RM 32.2.1); the BSY wait runs from SRAM. BENCH / WCH: that split; the trip serviced
+ *    throughout BSY.
+ *  - Status (RM 32.4.3, 32.5): EOP / WRPRTERR cleared before and checked after each operation; the result is FLASH_OK
+ *    or FLASH_ERR_*, no longer a duration (the time bases run on meanwhile). A BSY that never ends (~0.1 s): the board
+ *    holds the slow clock with the trip running until the watchdog resets it (144 MHz with the flash busy: unsafe).
+ *  - USART2: a byte on the line is finished first (TC); main.c starts a regular write only while nothing is queued
+ *    (uart_busy). RX keeps running: bytes received meanwhile (at half the baud: garbage) are dropped, and with them the
+ *    line being typed (uart_getc returns -2 once; the rest of that line, up to CR / LF, is dropped too).
+ *  - The gate is closed (the tick does no frame work meanwhile): downstream boards miss a frame or two and hold their
+ *    last values. A phase slew pauses (no period stays stretched), the injected ADC sequences too. */
+#define FLASH_KEY1      0x45670123u
+#define FLASH_KEY2      0xCDEF89ABu
+#define FLASH_BSY_POLLS 2000000u                         /* ~0.1-0.2 s of BSY polls at 72 MHz: the flash is stuck */
+#define FLASH_TC_POLLS  4000u                            /* > one byte at 115200 baud (87 us) */
+#ifndef FLASH_VERIFY
+#define FLASH_VERIFY 0                                   /* 1: read each half-word back (BENCH: a read after programming
+                                                            may come from the copy made at reset) */
+#endif
+extern void flash_tick(void), flash_fault(void);         /* isr.S, .ramtext */
 
-static uint32_t store_seq;
-static uint8_t store_free;                               /* next slot to write, tracked in RAM (see below) */
-
-/* The chip copies the 64 KB zero-wait flash into SRAM at reset; whether a read after programming returns the new
- * data before the next reset is not documented in the reference manual. So the page is only read here,
- * right after reset, and the write position is tracked in RAM from then on. */
-MEASURED int settings_load(settings_t *s, store_ext_t *ext)
+/* the SRAM path's trip: all five outputs forced low (as pwm_force_off(1)); never back to PWM */
+RAMCODE void hw_flash_trip(void)
 {
-    uint32_t seq;
-    store_free = (uint8_t)store_next_free((const uint8_t *)SETTINGS_ADDR);
-    if (store_find_ext((const uint8_t *)SETTINGS_ADDR, s, ext, &seq) < 0) {
-        store_ext_clear(ext);
-        return -1;
-    }
-    store_seq = seq;
-    return 0;
+    PWM_TRIP();
 }
 
-/* Programs `halfwords` half-words at `addr`, erasing the 256-byte page `erase_addr` first (0 = no erase). The
- * flash access clock must stay <= 60 MHz, so HCLK is halved meanwhile (WCH FLASH_Program example); interrupts are
- * off, a phase slew pauses. The gate is closed first: downstream boards just miss a frame or two and hold their
- * last values. Sequences as in WCH's ch32v20x_flash.c; BENCH: verify. Returns the stall estimate in us. */
-#define STORE_PROGRAM_US 2000u                           /* BENCH: measure (datasheet: fast page erase 16 ms) */
-#define STORE_ERASE_US   16000u
-/* the record being programmed: in the main loop's scratch (core/scratch.h), written as its own type and read here as
- * half-words. flash_program's __disable_irq comes first: a compiler barrier, so the record is complete before it is
- * read, inlined or not (LTO) */
-typedef char rec_fits_scratch[(sizeof(cal_rec_t) <= CORE_SCRATCH_WORDS * 4u &&
-                               sizeof(store_slot_t) <= CORE_SCRATCH_WORDS * 4u &&
-                               sizeof(scene_rec_t) <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
-
-static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
+/* the flash's status once it is done (SRAM: nothing is fetched from the flash meanwhile) */
+static RAMCODE uint32_t flash_wait(void)
 {
-    uint32_t i, stall_us = STORE_PROGRAM_US;
-    __disable_irq();                                     /* (the poll tick must not re-arm the gate meanwhile) */
+    uint32_t n = 0, sr;
+    while ((sr = FLASH->STATR) & FLASH_STATR_BSY) {
+        if (++n == FLASH_BSY_POLLS) {
+            for (;;) {
+                /* stuck: no watchdog kick; the tick (SRAM) keeps the trip running until the reset */
+            }
+        }
+    }
+    return (sr & FLASH_STATR_WRPRTERR) ? FLASH_ERR_WRP : (sr & FLASH_STATR_EOP) ? FLASH_OK : FLASH_ERR_EOP;
+}
+
+/* the clocks of a flash operation (slow: HCLK / 2, PCLK2 72 MHz) or back: SysTick (HCLK) rescaled with its phase, a
+ * tick that came due meanwhile taken now (interrupts off) */
+static void flash_clock(uint32_t cfgr, uint32_t slow)
+{
+    uint32_t ctl = SysTick->CTLR & ~(1u << 5), cnt;      /* (not INIT) */
+    SysTick->CTLR = ctl & ~1u;
+    cnt = (uint32_t)SysTick->CNT;
+    if (SysTick->SR & 1u) {
+        flash_poll_isr();
+    }
+    NVIC_ClearPendingIRQ(SysTicK_IRQn);
+    RCC->CFGR0 = cfgr;
+    SysTick->CMP = (slow ? 72000000u : 144000000u) / POLL_HZ - 1u;
+    SysTick->CNT = slow ? cnt / 2u : cnt * 2u;
+    SysTick->CTLR = ctl;
+}
+
+/* the slew and gate interrupts (hw_init enables them with SysTick; nothing else is enabled, and no VTF slot is used) */
+#define FLASH_IRQ1 ((1u << (TIM2_IRQn - 32)) | (1u << (TIM3_IRQn - 32)) | (1u << (TIM4_IRQn - 32)))
+
+uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
+{
+    uint32_t i, r = FLASH_OK, cfgr, mtvec, rxw, adc = adc_ready;
+    uint16_t slewing;
+    BARRIER();                                           /* the record (written as its own type) is complete */
+    adc_ready = 0;                                       /* no new injected sequence (hw_adc_ms) */
+    for (i = 0; i < FLASH_TC_POLLS && !(USART2->STATR & USART_STATR_TC); i++) {
+    }
+    __disable_irq();
     gate_force_closed();
-    /* a phase slew pauses: no period may stay stretched while interrupts are off; it resumes afterwards */
-    uint16_t slewing = (uint16_t)((TIM2->DMAINTENR | TIM3->DMAINTENR) & TIM_UIE);
+    slewing = (uint16_t)((TIM2->DMAINTENR | TIM3->DMAINTENR) & TIM_UIE);
     TIM2->DMAINTENR &= (uint16_t)~TIM_UIE;
     TIM3->DMAINTENR &= (uint16_t)~TIM_UIE;
     if (!cur_spread) {                                   /* spread spectrum: the DMA sets every period's length */
@@ -795,31 +921,63 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
         TIM3->ATRLR = (uint16_t)(cur_steps - 1u);
     }
     slew_pend2 = slew_pend3 = 0;
-    RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV2;
+    rxw = uart_rx_w();
+    /* only SysTick, through VTF slot 0 into SRAM; mtvec to the SRAM fault handler */
+    cfgr = RCC->CFGR0;
+    __asm volatile("csrr %0, mtvec" : "=r"(mtvec));
+    PFIC->IRER[1] = FLASH_IRQ1;
+    PFIC->VTFIDR[0] = SysTicK_IRQn;
+    PFIC->VTFADDR[0] = (uint32_t)flash_tick | 1u;
+    __asm volatile("csrw mtvec, %0" ::"r"((uint32_t)flash_fault) : "memory");
+    flash_clock((cfgr & ~(RCC_HPRE | RCC_PPRE2)) | RCC_HPRE_DIV2, 1);
+    __enable_irq();
+    watchdog_kick();
+    __disable_irq();                                     /* (each key pair back to back) */
     FLASH->KEYR = FLASH_KEY1;
     FLASH->KEYR = FLASH_KEY2;
-
-    if (erase_addr != 0u) {
-        FLASH->MODEKEYR = FLASH_KEY1;                    /* fast mode for the 256-byte page erase */
-        FLASH->MODEKEYR = FLASH_KEY2;
-        FLASH->CTLR |= FLASH_CTLR_PAGE_ER;
-        FLASH->ADDR = erase_addr;
-        FLASH->CTLR |= FLASH_CTLR_STRT;
-        while (FLASH->STATR & FLASH_STATR_BSY) {
+    FLASH->MODEKEYR = FLASH_KEY1;                        /* fast mode: the 256-byte page erase */
+    FLASH->MODEKEYR = FLASH_KEY2;
+    __enable_irq();
+    if (FLASH->CTLR & (FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK)) {
+        r = FLASH_ERR_KEY;
+    } else {
+        if (erase_addr != 0u) {
+            FLASH->STATR = FLASH_STATR_EOP | FLASH_STATR_WRPRTERR;   /* (write 1 to clear) */
+            FLASH->CTLR |= FLASH_CTLR_PAGE_ER;
+            FLASH->ADDR = erase_addr;
+            FLASH->CTLR |= FLASH_CTLR_STRT;
+            r = flash_wait();
+            FLASH->CTLR &= ~(FLASH_CTLR_PAGE_ER | FLASH_CTLR_STRT);
+            watchdog_kick();
         }
-        FLASH->CTLR &= ~FLASH_CTLR_PAGE_ER;
-        stall_us += STORE_ERASE_US;
-    }
-    FLASH->CTLR |= FLASH_CTLR_PG;
-    for (i = 0; i < halfwords; i++) {
-        *(volatile uint16_t *)(addr + 2u * i) = src[i];
-        while (FLASH->STATR & FLASH_STATR_BSY) {
+        if (r == FLASH_OK && halfwords != 0u) {
+            FLASH->CTLR |= FLASH_CTLR_PG;
+            for (i = 0; i < halfwords && r == FLASH_OK; i++) {
+                FLASH->STATR = FLASH_STATR_EOP | FLASH_STATR_WRPRTERR;
+                *(volatile uint16_t *)(addr + 2u * i) = src[i];
+                r = flash_wait();
+#if FLASH_VERIFY
+                if (r == FLASH_OK && *(volatile const uint16_t *)(addr + 2u * i) != src[i]) {
+                    r = FLASH_ERR_VERIFY;
+                }
+#endif
+            }
+            FLASH->CTLR &= ~FLASH_CTLR_PG;
+            watchdog_kick();
         }
     }
-    FLASH->CTLR &= ~FLASH_CTLR_PG;
     FLASH->CTLR |= FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK;
-
-    RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV1;
+    __disable_irq();
+    flash_clock(cfgr, 0);
+    PFIC->VTFADDR[0] = 0;
+    __asm volatile("csrw mtvec, %0" ::"r"(mtvec) : "memory");
+    PFIC->IENR[1] = FLASH_IRQ1;
+    if (uart_rx_w() != rxw || (USART2->STATR & (USART_STATR_ORE | USART_STATR_FE | USART_STATR_NE))) {
+        (void)USART2->DATAR;                             /* (STATR then DATAR: the error flags clear) */
+        uart_rx_pos = uart_rx_w();                       /* received at the halved baud: dropped, the line too */
+        uart_rx_drop = 1;
+    }
+    adc_ready = (uint8_t)adc;
     __enable_irq();
     if (slewing) {
         TIM2->INTFR = (uint16_t)~TIM_UIF;
@@ -827,139 +985,5 @@ static uint32_t flash_program(uint32_t addr, const uint16_t *src, uint32_t halfw
         TIM2->DMAINTENR |= TIM_UIE;
         TIM3->DMAINTENR |= TIM_UIE;
     }
-    return stall_us;
-}
-
-/* The single-page logs (settings, current calibration, energy): the record (in core_scratch) goes into slot *next,
- * the write position its load found at boot and tracked in RAM since; a full page is erased first and the record
- * goes into slot 0 (without may_erase: nothing is written, returns 0). Returns the stall estimate in us. */
-static uint32_t page_append(uint32_t page, uint8_t *next, uint32_t bytes, uint32_t n, uint32_t may_erase)
-{
-    uint32_t idx = *next, erase = 0;
-    if (idx >= n) {
-        if (!may_erase) {
-            return 0;
-        }
-        erase = page;
-        idx = 0;
-    }
-    *next = (uint8_t)(idx + 1u);                         /* n: the next record erases the page */
-    return flash_program(page + idx * bytes, (const uint16_t *)core_scratch, bytes / 2u, erase);
-}
-
-/* Appends one 32-byte record (16 half-words, v2 with the extension); erases the page first when all 8 slots are
- * used. */
-MEASURED uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
-{
-    store_pack_ext(s, ext, ++store_seq, (store_slot_t *)core_scratch);
-    return page_append(SETTINGS_ADDR, &store_free, STORE_SLOT_BYTES, STORE_SLOTS, 1u);
-}
-
-/* Power-on scene log: SCENE_LOG_PAGES pages below the settings page, 16-byte records (core/scene.c). As with the
- * settings, the log is only read right after reset; the write position is tracked in RAM. */
-static uint32_t scene_next;                              /* record index to write next */
-static uint8_t scene_erase;                              /* erase its page first */
-static uint16_t scene_seq;
-
-MEASURED int scene_load(scene_t *sc)
-{
-    int newest = scene_log_find((const uint8_t *)SCENE_LOG_ADDR, sc, &scene_seq);
-    scene_next = (uint32_t)scene_log_next((const uint8_t *)SCENE_LOG_ADDR, newest, &scene_erase);
-    return newest < 0 ? -1 : 0;
-}
-
-MEASURED uint32_t scene_store(const scene_t *sc)
-{
-    scene_rec_t *rec = (scene_rec_t *)core_scratch;
-    uint32_t idx = scene_next, erase = 0;
-    if (scene_erase) {                                   /* entering a page: its oldest records go */
-        erase = SCENE_LOG_ADDR + (idx / SCENE_RECS_PAGE) * SCENE_PAGE_BYTES;
-    }
-    scene_log_pack(sc, ++scene_seq, rec);
-    scene_next = (idx + 1u) % SCENE_RECS;
-    scene_erase = (uint8_t)(scene_next % SCENE_RECS_PAGE == 0u);
-    return flash_program(SCENE_LOG_ADDR + idx * SCENE_REC_BYTES, (const uint16_t *)rec, SCENE_REC_BYTES / 2u, erase);
-}
-
-/* Current calibration (core/calstore.h): one page, 64-byte records. As with the settings, the page is only read
- * right after reset; the write position is tracked in RAM. */
-static uint32_t cal_seq;
-static uint16_t cal_cnt;
-static uint8_t cal_free;
-
-MEASURED int cal_load(isense_cal_t *c, uint16_t *count)
-{
-    cal_free = (uint8_t)cal_next_free((const uint8_t *)CAL_PAGE_ADDR);
-    if (cal_find((const uint8_t *)CAL_PAGE_ADDR, c, &cal_seq, &cal_cnt) < 0) {
-        cal_cnt = 0;
-        *count = 0;
-        return -1;
-    }
-    *count = cal_cnt;
-    return c->levels != 0u ? 0 : -1;
-}
-
-MEASURED uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
-{
-    if (c->levels != 0u) {
-        cal_cnt++;
-    }
-    cal_pack(c, ++cal_seq, cal_cnt, (cal_rec_t *)core_scratch);
-    *count = cal_cnt;
-    return page_append(CAL_PAGE_ADDR, &cal_free, CAL_REC_BYTES, CAL_RECS, 1u);
-}
-
-/* Energy log (core/energy.h): one page of 8-byte entries; read only right after reset, the write position is tracked
- * in RAM. */
-static uint8_t energy_next;
-
-MEASURED uint32_t energy_load(void)
-{
-    energy_next = (uint8_t)energy_log_next((const uint8_t *)ENERGY_ADDR);
-    return energy_log_find((const uint8_t *)ENERGY_ADDR);
-}
-
-MEASURED uint32_t energy_store(uint32_t wh, uint8_t may_erase)
-{
-    core_scratch[0] = wh;
-    core_scratch[1] = ~wh;
-    return page_append(ENERGY_ADDR, &energy_next, ENERGY_REC_BYTES, ENERGY_RECS, may_erase);
-}
-
-MEASURED uint32_t energy_clear(void)
-{
-    energy_next = 0;
-    return flash_program(ENERGY_ADDR, 0, 0u, ENERGY_ADDR);
-}
-
-/* Power-on effect store (core/ultra.h ULTRA_FX_*): read only right after reset (main.c, ultra_fx_load; it keeps the
- * mask and CRCs of what it stored). */
-typedef char fx_store_fits[(ULTRA_FX_HDR + ULTRA_LIGHTS * ULTRA_HEAD_BYTES <= 512u && ULTRA_HEAD_BYTES == 98u) ? 1 : -1];
-
-MEASURED uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
-{
-    uint8_t *h = (uint8_t *)core_scratch;
-    uint32_t i, us = flash_program(SCENE_FX_ADDR, 0, 0u, SCENE_FX_ADDR);   /* erases page 0: the header goes */
-    if (mask == 0u) {
-        return us;
-    }
-    us += flash_program(SCENE_FX_ADDR + 256u, 0, 0u, SCENE_FX_ADDR + 256u);
-    core_scratch[2] = 0u;                                /* the 2 spare bytes (10, 11): 0, not leftover scratch */
-    for (i = 0; i < ULTRA_LIGHTS; i++) {
-        if (mask & (1u << i)) {
-            us += flash_program(SCENE_FX_ADDR + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES, (const uint16_t *)&u->light[i],
-                                ULTRA_HEAD_BYTES / 2u, 0u);
-        }
-        h[5u + i] = crc[i];
-    }
-    core_scratch[0] = ULTRA_FX_MAGIC;
-    h[4] = mask;
-    return us + flash_program(SCENE_FX_ADDR, (const uint16_t *)h, ULTRA_FX_HDR / 2u, 0u);   /* the header last */
-}
-
-/* Firmware update (core/upd_app.h): one half-word into the app descriptor page's status records (no erase; the
- * page is only erased by the bootloader, together with the descriptor). Returns the stall estimate in us. */
-uint32_t hw_flash_half(uint32_t addr, uint16_t v)
-{
-    return flash_program(addr, &v, 1u, 0u);
+    return r;
 }

@@ -70,7 +70,8 @@ void upd_app_frame_end(upd_app_t *u, uint8_t ultra_header, uint8_t flags, uint32
             u->transparent = 1;
         }
     } else {
-        u->run = 0;
+        u->run = u->decided = u->have_half = 0;
+        u->result = 0;
         u->normal_seen = 1;
         u->transparent = 0;                /* the host sends normal frames again */
     }
@@ -154,7 +155,7 @@ uint32_t upd_app_poll(upd_app_t *u, uint32_t now_ms)
 {
     if (u->transparent && now_ms - u->last_upd_ms >= UPD_APP_IDLE_MS) {
         u->transparent = 0;
-        u->run = 0;
+        u->run = u->decided = u->have_half = 0;
         if (u->result != 0u) {             /* END missed: show the result now */
             uint32_t r = u->result;
             u->result = 0;

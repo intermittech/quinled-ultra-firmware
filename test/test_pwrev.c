@@ -161,6 +161,7 @@ static void test_pwrev(void)
         c.st = &st;
         pwrev_init(&p, 0);
         st.pw = &p;
+        st.en = &test_en;
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "power_state=ok\r\npower_events=limit 0, overload trips 0, short trips 0, nothing latched\r\n"
                               "power_last_limit=none\r\npower_last_trip=none\r\n") != NULL, "status: quiet");

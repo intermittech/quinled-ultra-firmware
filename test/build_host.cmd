@@ -18,6 +18,10 @@ if not defined VSDIR (
   exit /b 2
 )
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
+rem Sequential host execution cannot expose compiler reordering across ISR hand-overs.
+rem Python 3 checks the documented source contracts as a separate safety guard.
+python "%HERE%test_shared_contract.py"
+if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\isense" mkdir "%OUT%\isense"
 cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
@@ -43,7 +47,7 @@ if %errorlevel% neq 0 exit /b 1
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\isense_tests_g50.exe"
 if %errorlevel% neq 0 exit /b 1
-for %%s in (wrap fx cfg long) do (
+for %%s in (wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax) do (
   "%OUT%\soak_tests.exe" %%s
   if errorlevel 1 exit /b 1
 )
