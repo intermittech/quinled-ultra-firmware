@@ -85,6 +85,7 @@ static void test_health_cal(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &cs;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "health_model R/G/B/W1/W2=0/0/0/-/0 %, dark 0.00 A, calibration suggested\r\n") != NULL,

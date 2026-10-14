@@ -81,6 +81,8 @@ MEASURED void isense_init(isense_t *s, uint8_t enabled, uint16_t fuse_ma, uint16
     s->limit_ma = board_ma;
     s->k = s->k_meas = s->k_fb = s->k_ss = Q16;
     s->g = Q16;
+    s->retry_max = ISENSE_RETRY_COUNT;
+    s->retry_s = ISENSE_RETRY_S;
     for (i = 0; i < ISENSE_CH; i++) {
         shape_linear(s, i);
     }
@@ -118,11 +120,22 @@ MEASURED void isense_cal_start(isense_t *s, uint16_t duty)
         return;
     }
     s->cal_step = 1;
+    s->cal_fail = 0;
     s->cal_t = 0;
     s->cal_levels = duty == 0u ? (uint8_t)ISENSE_LEVELS : 1u;
     s->cal_duty = duty == 0u ? 0u : (duty < 1024u ? 1024u : duty);
     s->cal_sum = 0;
     s->cal_n = 0;
+}
+
+uint32_t isense_cal_abort(isense_t *s, uint8_t why)
+{
+    if (s->cal_step == 0u) {
+        return 0;
+    }
+    s->cal_step = 0;                                   /* (the candidate results stay unused: cal_ms commits) */
+    s->cal_fail = why;
+    return ISENSE_EV_CAL_FAIL | ISENSE_EV_REAPPLY;
 }
 
 uint32_t isense_cal_ms(uint16_t duty)
@@ -273,10 +286,18 @@ static uint32_t overload_level(const isense_t *s)
     return umin(a > b ? a : b, s->fuse_ma);
 }
 
-static uint32_t retry_ms(uint8_t n)
+static uint32_t retry_ms(const isense_t *s)
 {
-    uint32_t t = ISENSE_RETRY_MS << n;
-    return t > ISENSE_RETRY_MAX_MS ? ISENSE_RETRY_MAX_MS : t;
+    return (s->retry_s != 0u ? s->retry_s : 1u) * 1000u;   /* (0.6.9, B7: the policy's interval) */
+}
+
+void isense_rearm(isense_t *s)
+{
+    if (s->latched) {
+        s->latched = 0;
+        s->retry_n = 0;
+        s->off_ms = retry_ms(s);                       /* released at the next ms, with the soft start (main.c) */
+    }
 }
 
 uint32_t isense_retry_left_ms(const isense_t *s)
@@ -285,7 +306,10 @@ uint32_t isense_retry_left_ms(const isense_t *s)
     if (s->tripped == ISENSE_TRIP_NONE) {
         return 0;
     }
-    t = retry_ms(s->retry_n);
+    if (s->latched) {
+        return 0xFFFFFFFFu;                            /* no retry: off until a new command or frame value */
+    }
+    t = retry_ms(s);
     return s->trip_cause == ISENSE_TRIP_NONE ? t : (s->off_ms >= t ? 0u : t - s->off_ms);   /* not registered yet: all */
 }
 
@@ -378,6 +402,7 @@ static uint32_t cal_ms(isense_t *s)
         return ISENSE_EV_REAPPLY;
     }
     s->cal_step = 0;                                   /* done: the test, then the model from it */
+    s->cal_fail = 0;
     s->cal_have = s->cal_levels;
     s->cal_pct1 = s->cal_levels == 1u ? (uint8_t)((s->cal_duty * 100u + 32767u) / 65535u) : 0u;
     s->cal_zero = (int16_t)(s->cal_res[0] < -32768 ? -32768 : (s->cal_res[0] > 32767 ? 32767 : s->cal_res[0]));
@@ -419,16 +444,17 @@ MEASURED uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak
             trip_scale(s, s->trip_cause == ISENSE_TRIP_FAST
                               ? (uint32_t)(((uint64_t)s->fast_raw * s->ma_per_lsb_q16) >> 16)
                               : (uint32_t)(s->i_ms > 0 ? s->i_ms : 0));
-            if (s->cal_step != 0u) {
-                s->cal_step = 0;
-                ev |= ISENSE_EV_CAL_FAIL;
+            ev |= isense_cal_abort(s, ISENSE_CAL_F_TRIP);
+            if (s->retry_max != 255u && s->retry_n >= s->retry_max) {
+                s->latched = 1;                        /* (0.6.9, B7) the retries used up: off (isense_rearm) */
+                ev |= ISENSE_EV_LATCH;
             }
         }
         s->ovl_ms = 0;
         s->win_n = 0;
         s->dark_ms = 0;
-        if (++s->off_ms >= retry_ms(s->retry_n)) {
-            if (s->retry_n < 5u) {
+        if (!s->latched && ++s->off_ms >= retry_ms(s)) {
+            if (s->retry_n < 254u) {
                 s->retry_n++;
             }
             s->trip_cause = ISENSE_TRIP_NONE;
@@ -456,6 +482,13 @@ MEASURED uint32_t isense_ms(isense_t *s, uint32_t sum, uint32_t n, uint32_t peak
 
     /* ---- calibration ---- */
     if (s->cal_step != 0u) {
+        /* (0.6.9, A2) the installation's limit holds in a test too (it skips the limiter: one channel alone at 25 ..
+         * 100 %): above the limiter's threshold the test stops, incomplete, rather than measure a scaled level as
+         * 100 % */
+        if (s->i_ms - (s->zero_valid ? s->zero_ma : 0) >
+            (int32_t)(((uint64_t)limit_led(s) * MARGIN_FB_Q16) >> 16)) {
+            return ev | isense_cal_abort(s, ISENSE_CAL_F_LIMIT);
+        }
         return ev | cal_ms(s);
     }
 

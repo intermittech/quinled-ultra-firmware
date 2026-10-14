@@ -2,15 +2,23 @@
  * Copyright (C) 2026 QuinLED */
 /* Current calibration in flash (boards with the input current sense, core/isense.h).
  *
- * One 256-byte page at CAL_PAGE_ADDR (src/hal/board.h: the top page of the app slot, which the app's link leaves
- * free; a firmware update only erases the new app's own length, so the page survives updates). Four 64-byte
- * records, appended one per calibration; only a full page is erased. The newest valid record (highest sequence
- * number, CRC ok) wins at boot. A record with levels = 0 clears the calibration (factory reset).
- * Wear: 4 calibrations per erase, 10k erase cycles (datasheet minimum) = 40k calibrations (a daily schedule:
- * 100 years). Write budget (0.6.2, main.c): CAL_BUDGET_CAP tests stored at once, then one per CAL_REFILL_MS, so an
- * automation running the test all the time costs at most one erase a day (>= 27 years); a test waiting for its token
- * is in use already, and the newest one is stored when the token comes.
- * A power loss during the erase of a full page loses the calibration (the regression relearns; test again). */
+ * 64-byte records (cal_rec_t), CAL_RECS per 256-byte page, in an A/B page pair (0.6.4, core/pagepair.h; read and
+ * written by core/flashrec.c cal_load / cal_store). Where the two pages are: hal/board.h's record map (CAL_PAGE_ADDR /
+ * CAL_B_ADDR); a firmware update never erases them.
+ *  - Commit: a stored test is appended with the next sequence number into an erased entry; a write never erases. The
+ *    CRC-16 is the last half-word, programmed last, and (0.6.5, the upper layout) never an erased value (cal_pack), so
+ *    a record cut short by a power loss never counts. When a page is full the other one is next: it is erased first,
+ *    in a low moment (ahead, or by the write when its erase is due; main.c flash_may). The page holding the newest
+ *    record is never erased.
+ *  - Recovery at boot (pp_find): of both pages, the valid record (magic and CRC) with the newest sequence number wins,
+ *    so a power cut at any moment leaves the last complete record (before 0.6.4 a cut after the erase of the one full
+ *    page lost the calibration). A failed write uses up its entry but never counts.
+ *  - A record with levels = 0 clears the calibration (factory reset). Until it is written, the settings record's
+ *    STORE_VOID_CAL (core/store.h) keeps the old one from loading.
+ *  - Write budget (0.6.2, main.c): CAL_BUDGET_CAP tests stored at once, then one per CAL_REFILL_MS; a test waiting for
+ *    its token is in use already, and the newest one is stored when the token comes.
+ *  - Wear: each page is erased once per 2 x CAL_RECS records, so an automation running the test all the time (4 a
+ *    day) erases each page every 2 days: >= 54 years at the datasheet's 10k cycles. */
 #ifndef CALSTORE_H
 #define CALSTORE_H
 

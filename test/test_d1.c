@@ -23,6 +23,7 @@ static void test_d1(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &st;
 
     st.bc.magic = BC_MAGIC;

@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 /* QuinLED dig2analog-ultra-5ch rev 0.4: CH32V203F8U6 (QFN20) pin map (wiki: Pin map). The only dig2analog-ultra
- * revision built. The QuinLED Diff-Power ultra receiver uses the same MCU and pin roles (BOARD_DP_RX: compile-time
- * definitions and core/rxpower.h only so far; there is no receiver hardware yet).
+ * revision built. The QuinLED Diff-Power ultra receiver uses the same MCU and pin roles (BOARD_DP_RX: its firmware
+ * build since 0.6.6, the return channel; there is no receiver hardware yet).
  *
  *  pin      port       function                                                    net
  *   1       PA0        ADC_IN0, injected group (1 kHz): a spare analog input        TP8      (receiver: buck output V_B)
@@ -36,7 +36,7 @@
 #define BOARD_H
 
 #define BOARD_D2A_ULTRA  1          /* QuinLED dig2analog-ultra-5ch rev 0.4 (firmware update: hardware id 1, rev 3) */
-#define BOARD_DP_RX      2          /* QuinLED Diff-Power ultra receiver: definitions only, no hardware yet */
+#define BOARD_DP_RX      2          /* QuinLED Diff-Power ultra receiver: its firmware build, no hardware yet */
 #ifndef BOARD
 #define BOARD BOARD_D2A_ULTRA
 #endif
@@ -51,7 +51,7 @@
  * PA0 / TP8 stays the spare analog input. */
 #define BOARD_TESTJIG    1
 
-/* the return channel (core/rc.h; ULTRA_PROTOCOL.md "Reserved: return channel"): the Diff-Power ultra receiver only.
+/* the return channel (core/rc.h; ULTRA_PROTOCOL.md "Return channel"): the Diff-Power ultra receiver only.
  * Its RS-485 transceivers: input (towards the host) DE on PB14, output (towards the next receiver) DE on PA10, both
  * ~RE on GND; USART3 TX on PB10 into the relay node. The dig2analog-ultra never reports back: none of it is built. */
 #if BOARD == BOARD_DP_RX
@@ -61,8 +61,21 @@
 #endif
 
 /* board current sense (core/isense.h): soldered fuse + 2 mohm shunt + TPA158A3 (gain 100) -> 1 k / 47 nF -> PA7 */
+#if BOARD == BOARD_DP_RX
+/* (0.6.9, the power-domain contract) the Diff-Power ultra receiver's sense sits on the ~55 V bus, before its buck
+ * module (core/rxpower.h): every current it measures, limits, logs and reports is the bus-side input current (STATUS
+ * 17, the POWER / ENERGY / LIFETIME / DIAG pages, the channel model's shares, the limiter); its voltages: STATUS 13 the
+ * bus (PA4), ENERGY's V_B the LED supply after the buck (PA0). Its ceiling is the sender's port, RXP_LINK_LIMIT_MA
+ * (3 x 750 mA PTCs): the board rating. No fuse of its own: the short / overload reference is about the PTCs' trip
+ * current, above the limiter's overshoot (core/isense.c overload_level: max(limit x 1.25, limit + 500 mA), here
+ * 2.81 A; equal to the limit, every hold at the limit would trip). No hardware yet: the shunt and the amplifier as the
+ * dig2analog-ultra's (BENCH) */
+#define ISENSE_FUSE_MA   3000u      /* the reference: overload at 2.81 A, fast trip at 4.5 A (1.5 x; 3 PTCs' trip) */
+#define ISENSE_BOARD_MA  2250u      /* board rating = RXP_LINK_LIMIT_MA: default and maximum of the remote limit */
+#else
 #define ISENSE_FUSE_MA   10000u     /* soldered fuse: 10 A */
 #define ISENSE_BOARD_MA  8000u      /* board rating: default and maximum of the remote limit */
+#endif
 /* current-sense amplifier gain (V/V) on the 2 mohm shunt: 100 = TPA158A3. Sets the ADC scale (main.c) */
 #ifndef ISENSE_AMP_GAIN
 #define ISENSE_AMP_GAIN  100u

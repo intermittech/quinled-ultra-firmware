@@ -302,6 +302,7 @@ static void test_stagger_cap(void)
     cl.apply = cap_apply;
     cl.save_now = cap_save;
     cl.set = &cli_set;
+    cl.eff = &cli_set;
     cl.st = &st;
     run_cli(&cl, "status\r");
     {

@@ -24,6 +24,7 @@ static void test_d6(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &st;
     for (i = 0; i < HW_DIAG_N; i++) {
         h[i] = 0;

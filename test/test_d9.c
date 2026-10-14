@@ -75,6 +75,7 @@ static void test_d9(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.ext = &ext;
     c.st = &st;
     c.restore = d9_restore;

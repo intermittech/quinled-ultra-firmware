@@ -60,18 +60,11 @@ cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /I "%HERE%soak" /I "
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 rem the same as the Diff-Power ultra receiver (BOARD=2): its return channel (test_soak_rc.c) and every scenario above;
-rem built as the receiver builds (tools/build_target.sh): no MON_EXTRA monitoring, 0.6.4 layout's texts (genlow), the
-rem three 0.2.4-only pages built in (RC_PAGES_024 1, 0.6.7); soak_rc024: the same without them (RC_PAGES_024 0: rcpages,
-rem they answer UNSUPPORTED)
+rem built as the receiver builds (tools/build_target.sh): no MON_EXTRA monitoring, 0.6.4 layout's texts (genlow)
+rem (0.6.9: OUTPUTS, ACKS and ERRORS always built in, official since protocol 0.2.4)
 if not exist "%OUT%\soak_rc" mkdir "%OUT%\soak_rc"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=1 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc_tests.exe" /Fo:"%OUT%\soak_rc\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DBOARD=2 /DMON_EXTRA=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc_tests.exe" /Fo:"%OUT%\soak_rc\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
-if %errorlevel% neq 0 exit /b 1
-if not exist "%OUT%\soak_rc024" mkdir "%OUT%\soak_rc024"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc024_tests.exe" /Fo:"%OUT%\soak_rc024\\" ^
-   "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
-if %errorlevel% neq 0 exit /b 1
-"%OUT%\soak_rc024_tests.exe" rcpages
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\host_tests.exe"
 if %errorlevel% neq 0 exit /b 1
@@ -174,7 +167,7 @@ cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=0 /I "%HERE%soak" /I "
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%\soak_rc_rel" mkdir "%OUT%\soak_rc_rel"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=0 /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=1 /I "%HERE%soak" /I "%OUT%\genrellow" /Fe:"%OUT%\soak_rc_rel_tests.exe" /Fo:"%OUT%\soak_rc_rel\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=0 /DBOARD=2 /DMON_EXTRA=0 /I "%HERE%soak" /I "%OUT%\genrellow" /Fe:"%OUT%\soak_rc_rel_tests.exe" /Fo:"%OUT%\soak_rc_rel\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 set "REL=conout conin conjig condip fx long spec vunit vultra vrx vlong vreset vgate vclockback r4h7 r4wraps r4rx r4reset r4gate tripreset longws r5fx r5retry r5age r5jig6p r6erase r6erasef r6ws2ultra r6boot r6boot5 r6takeover r6takeover0 r6takeover5 r6takeover5d r6rejoin5 r6fxtake r6candle r6seqwrap r6gamma0"
@@ -191,6 +184,14 @@ for %%v in (tp9 host) do (
   if errorlevel 1 exit /b 1
   "%OUT%\soak_rc_rel_tests.exe" r6fxreset %%v
   if errorlevel 1 exit /b 1
+)
+rem (0.6.9, review round 7) the approved items' scenarios (test_r7.c): the main board, the receiver, 0.6.4's layout and
+rem the release console's builds
+for %%e in (soak_tests soak_rc_tests soak_tests_lower soak_rel_tests soak_rc_rel_tests) do (
+  for %%s in ("r7ack 0" "r7ack 2" "r7cal ok" "r7cal limit" "r7cal supply" "r7cal trip" r7retry r7retryws "r7loss ultra scene" "r7loss ultra none" "r7loss ws scene" "r7loss ws none" r7fault "r7con ultra" "r7con ws" r7pages r7hot r7why r7b3 "r7upd 0" "r7upd 1") do (
+    "%OUT%\%%e.exe" %%~s
+    if errorlevel 1 exit /b 1
+  )
 )
 rem (fable-sys) the wall-switch pattern: 12 power cycles, each its own process (test_r6_sys.c r6wall)
 call "%HERE%run_r6wall.cmd" "%OUT%\soak_tests.exe" 12

@@ -209,6 +209,7 @@ static void test_vdip_z(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &st;
     z = vdip_z_mohm(&d);
     sprintf(want, "V)\r\nsupply_impedance=%u mohm (%u steps)\r\nsupply_dips=", z, (uint32_t)d.zsteps);

@@ -36,9 +36,15 @@ if "%2"=="nobuild-only" exit /b 0
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\robust_fw.exe" regress
 if %errorlevel% neq 0 exit /b 1
-rem (0.6.8) the bootloader's write protection at the boot (main.c boot_protect), each case its own process
-for %%c in (open protected vdd nodesc rdp fail) do (
+rem (0.6.8) the bootloader's write protection at the boot (main.c boot_protect), each case its own process; 0.6.9
+rem (R7-06): the snapshot not to be trusted, the boot after the rewrite's reset
+for %%c in (open protected vdd nodesc rdp fail badob verified verifybad) do (
   "%OUT%\robust_fw.exe" wrp %%c
+  if errorlevel 1 exit /b 1
+)
+rem (0.6.9) the bootloader's result at the app's boot: same / rejected on D9 only, an update's ACK on the strip
+for %%c in (updated same rejected) do (
+  "%OUT%\robust_fw.exe" hores %%c
   if errorlevel 1 exit /b 1
 )
 "%OUT%\robust_tests.exe" all 2000

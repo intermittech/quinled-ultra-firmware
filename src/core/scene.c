@@ -183,9 +183,35 @@ void scene_boot(scene_run_t *r, const scene_t *s)
     r->hold = (uint8_t)(s->mask & 0x1Fu);
     r->fading = 0;
     r->dur = (uint32_t)s->fade * 100u;               /* (the scene's fade: the same for every channel) */
+    r->in = 0;
     for (i = 0; i < 5u; i++) {
         r->t0[i] = 0;
     }
+}
+
+void scene_return(scene_run_t *r, const scene_t *s, uint8_t fx, const uint16_t *from, uint32_t now_ms)
+{
+    uint32_t i;
+    scene_boot(r, s);
+    r->sc.mask |= fx;
+    r->hold |= fx;
+    r->in = r->hold;
+    r->t_in = now_ms;
+    for (i = 0; i < 5u; i++) {
+        r->from[i] = from[i];
+    }
+}
+
+/* a channel fading in: its value now (the scene's from `from`); done: the scene's */
+static uint32_t scene_in(scene_run_t *r, uint32_t i, uint32_t sv, uint32_t now_ms)
+{
+    uint32_t el = now_ms - r->t_in, s;
+    if (el >= SCENE_IN_MS) {
+        r->in = (uint8_t)(r->in & ~(1u << i));
+        return sv;
+    }
+    s = ultra_smoothstep((el << 16) / SCENE_IN_MS);
+    return (uint32_t)((int32_t)r->from[i] + (int32_t)((((int64_t)sv - (int64_t)r->from[i]) * (int64_t)s) >> 16));
 }
 
 /* each channel's cross-fade from its own take-over (r6: the lights of a board take over one by one, at their own
@@ -197,6 +223,11 @@ void scene_takeover(scene_run_t *r, uint8_t mask, uint32_t now_ms)
     for (i = 0; i < 5u; i++) {
         if (m & (1u << i)) {
             r->t0[i] = now_ms;
+            if (r->in & (1u << i)) {             /* (B10) still fading in: the cross-fade starts where it is */
+                r->sc.v[i] = (uint16_t)scene_in(r, i, (r->sc.mask & (1u << i)) ? r->sc.v[i] : 0u, now_ms);
+                r->sc.mask = (uint8_t)(r->sc.mask | (1u << i));
+                r->in = (uint8_t)(r->in & ~(1u << i));
+            }
         }
     }
     r->hold = (uint8_t)(r->hold & ~m);
@@ -212,7 +243,7 @@ uint8_t scene_mix(scene_run_t *r, uint32_t now_ms, uint16_t *v)
     for (i = 0; i < 5u; i++) {
         uint32_t bit = 1u << i, sv = (r->sc.mask & bit) ? r->sc.v[i] : 0u;
         if (r->hold & bit) {
-            v[i] = (uint16_t)sv;
+            v[i] = (uint16_t)((r->in & bit) ? scene_in(r, i, sv, now_ms) : sv);
         } else if (r->fading & bit) {
             uint32_t el = now_ms - r->t0[i];
             if ((int32_t)el < 0) {
@@ -225,5 +256,5 @@ uint8_t scene_mix(scene_run_t *r, uint32_t now_ms, uint16_t *v)
             }
         }
     }
-    return r->fading != 0u;
+    return (r->fading | r->in) != 0u;
 }

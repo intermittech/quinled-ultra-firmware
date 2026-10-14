@@ -102,6 +102,7 @@ int main(void)
     c.write = cap;
     c.apply = apply;
     c.set = &set;
+    c.eff = &set;
     c.st = &st;
     clk0 = clk - 20000u * 7200u;                         /* the clock counted all the time over 1 s of ticks */
     ticks_now = 20000u;

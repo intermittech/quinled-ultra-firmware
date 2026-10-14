@@ -109,6 +109,7 @@ static void test_version(void)
         c.apply = ver_apply;
         c.save_now = cap_save;
         c.set = &cli_set;
+        c.eff = &cli_set;
         c.st = &st;
         st.steps = 5760;                   /* status prints the PWM frequency (144 MHz / steps) */
         st.en = &test_en;

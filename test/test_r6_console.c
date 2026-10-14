@@ -20,11 +20,15 @@
 #if !CONSOLE_FULL
 
 #if BOARD == BOARD_DP_RX                    /* (the capture's golden, by board) */
-#define CONOUT_GOLDEN_CRC 0x8132a408u
-#define CONOUT_GOLDEN_LEN 11380u
+#define CONOUT_GOLDEN_CRC 0x303faa65u      /* (0.6.9: no full status, Quindor: 0.6.8's live lines (0x8132a408, 11,380
+                                              B with the status) with the link, and the two seconds the status took;
+                                              the soak's receiver-sized bus-side load, test_soak.c ld_ma) */
+#define CONOUT_GOLDEN_LEN 9435u
 #else
-#define CONOUT_GOLDEN_CRC 0x9ce67d6du
-#define CONOUT_GOLDEN_LEN 11521u
+#define CONOUT_GOLDEN_CRC 0x738811efu      /* (0.6.9: 0.6.8's (0x9ce67d6d, 11,521 B) with the settings= / save= /
+                                              faults= lines and the live lines' link; the dip 1 ms longer (43 ms: the
+                                              lifetime record's dip write, 24 half-words now, delays its end's ms) */
+#define CONOUT_GOLDEN_LEN 12741u
 #endif
 
 static uint32_t con_crc32(const char *s, uint32_t n)
@@ -82,6 +86,14 @@ static void sc_conout(void)
     CHECK(tx_blocks == 0u, "conout: the stream never waits for the UART (%u bytes past its buffers)", tx_blocks);
     CHECK(strncmp(con_out, "QuinLED ", 8) == 0 && strstr(con_out, ", (C) 2026 QuinLED, GPL-3.0, github.com/intermittech/"
           "quinled-ultra-firmware\r\n") != NULL, "conout: the banner with its notice first (%.60s)", con_out);
+#if BOARD == BOARD_DP_RX                    /* (0.6.9, Quindor) the receiver: no full status (its pages carry it) */
+    (void)st1, (void)st2, (void)v, (void)n;
+    CHECK(con_count(con_out, "QuinLED ") == 1u && strstr(con_out, "uptime=") == NULL && strstr(con_out, "event 1=") ==
+          NULL, "conout: the receiver: the banner only, no full status (%u)", con_count(con_out, "QuinLED "));
+    lines = con_count(con_out, "  k ");
+    printf("  %u live lines\n", lines);
+    CHECK(lines >= 63u && lines <= 66u, "conout: a live line every second (%u)", lines);
+#else
     CHECK(con_count(con_out, "QuinLED ") == 3u, "conout: the banner, the full status at boot and at the minute (%u)",
           con_count(con_out, "QuinLED "));
     st1 = strstr(con_out + 8, "QuinLED ");               /* the boot's status: after a live line, with the live */
@@ -108,6 +120,7 @@ static void sc_conout(void)
     lines = con_count(con_out, "  k ");
     printf("  %u live lines\n", lines);
     CHECK(lines >= 60u && lines <= 64u, "conout: a live line every second between (%u)", lines);
+#endif
     CHECK(strstr(con_out, "type help") == NULL && strstr(con_out, "error:") == NULL, "conout: no prompt, no error "
           "reply");
     /* the golden: the capture with the version masked (a release changes it) */

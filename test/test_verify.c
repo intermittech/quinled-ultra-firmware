@@ -136,6 +136,7 @@ static void v_console(void)
     console("version"); /* another command must not consume status's interval */
     con_out_n=con_in_r=con_in_w=0;
     for(p="status\r\n";*p;p++){con_in[con_in_w++]=*p;run_ms(10);}
+    while(cli.st_part) run_ms(10); /* (0.6.9: one part more, the settings': the status to its end, as console()) */
     CHECK(strstr(con_out,"min 18.00 V, max 26.00 V")!=0,"typed status after version retains extrema: %s",strstr(con_out,"supply=")?strstr(con_out,"supply="):"missing");
     for(j=0;j<5;j++) run_ms(100);
     console("status");CHECK(stat.vs_supply_min_mv>23000,"next status restarts extrema");

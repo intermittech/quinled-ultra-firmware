@@ -4,6 +4,12 @@
  * and a supply dip come between two parts. The status takes its snapshot at the command, but its later parts read the
  * event and dip logs live: their ages must count from the time the part is written (main.c refreshes stat.uptime_s),
  * never from the command's (0.6.5: an event a second newer than the snapshot showed "49710d 6:28:15 ago"). */
+#if SOAK_NO_STATUS
+static void sc_r5age(void)
+{
+    printf("soak r5age: the receiver's release console sends no status (0.6.9): nothing to check\n");
+}
+#else
 static void sc_r5age(void)
 {
     const char *p;
@@ -26,8 +32,8 @@ static void sc_r5age(void)
     while (up_s == t0) {
         run_ms(1);
     }
-    CHECK(cli.st_part != 0u && cli.st_part <= 5u, "r5age: the next second before the dips' part (part %u)",
-          cli.st_part);
+    CHECK(cli.st_part != 0u && cli.st_part <= 7u + MON_EXTRA, "r5age: the next second before the dips' part (part %u; "
+          "0.6.9: the dips' part is 6, after the settings' own, 7 with MON_EXTRA's calibration history)", cli.st_part);
     ev_add(EVL_LIMIT, 1234u);                            /* an event and a dip, newer than the snapshot */
     vdip.deep.t_s = up_s;
     vdip.deep.min_x = 1800;
@@ -49,3 +55,4 @@ static void sc_r5age(void)
           p ? p : "(none)");
     CHECK(strstr(con_out, "49710d") == NULL, "r5age: no age from an underflow");
 }
+#endif

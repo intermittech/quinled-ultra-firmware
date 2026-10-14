@@ -168,13 +168,15 @@ SECTIONS
 	   and the bootloader's RAM (bootloader/bl.ld: its buffers end at 0x20004274, its stack starts at 0x20004A00:
 	   asserted; test/test_d1_map.py). The startup neither copies nor clears it. One 4 KB %hi page: isr.S stores with one
 	   lui. */
-	.noinit ORIGIN(RAM) + LENGTH(RAM) - __stack_size - 32 (NOLOAD) :
+	/* (0.6.9, B2) 96 bytes: the breadcrumbs first (.noinit), then the event log (main.c evl, .noinit.evl) */
+	.noinit ORIGIN(RAM) + LENGTH(RAM) - __stack_size - 96 (NOLOAD) :
 	{
-		KEEP(*(.noinit .noinit.*))
+		KEEP(*(.noinit))
+		KEEP(*(.noinit.*))
 	} >RAM
-	ASSERT(_ebss <= ADDR(.noinit) && SIZEOF(.noinit) <= 32, "RAM: .bss overlaps the reset breadcrumbs (.noinit)")
-	ASSERT(((ADDR(.noinit) + 0x800) >> 12) == ((ADDR(.noinit) + 31 + 0x800) >> 12), ".noinit: one %hi page")
-	ASSERT(ADDR(.noinit) + 32 <= 0x20004A00, ".noinit: below the bootloader's stack (a smaller STACK_SIZE moves it up)")
+	ASSERT(_ebss <= ADDR(.noinit) && SIZEOF(.noinit) <= 96, "RAM: .bss overlaps the reset breadcrumbs (.noinit)")
+	ASSERT(((ADDR(.noinit) + 0x800) >> 12) == ((ADDR(.noinit) + 95 + 0x800) >> 12), ".noinit: one %hi page")
+	ASSERT(ADDR(.noinit) + 96 <= 0x20004A00, ".noinit: below the bootloader's stack (a smaller STACK_SIZE moves it up)")
 
     .stack ORIGIN(RAM) + LENGTH(RAM) - __stack_size :
     {

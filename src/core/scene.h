@@ -66,7 +66,11 @@ typedef struct {
     uint8_t  fading;                  /* channels cross-fading to the controller's values */
     uint32_t dur;                     /* cross-fade length, ms */
     uint32_t t0[5];                   /* each channel's cross-fade start, ms (r6: the lights take over one by one) */
+    uint8_t  in;                      /* (0.6.9, B10) held channels still fading in from `from` (scene_return) */
+    uint16_t from[5];
+    uint32_t t_in;
 } scene_run_t;
+#define SCENE_IN_MS 1000u             /* (0.6.9, B10) the fade from the outputs into the scene at a signal loss */
 
 void    scene_clear(scene_t *s);
 int     scene_equal(const scene_t *a, const scene_t *b);
@@ -87,6 +91,9 @@ extern const pp_desc_t scene_pp;
 void    scene_log_pack(const scene_t *s, uint16_t seq, scene_rec_t *rec);
 
 void    scene_boot(scene_run_t *r, const scene_t *s);
+/* (0.6.9, B10) signal loss "scene": as at power-up (the scene, and `fx`: the power-on effects' channels), faded in from
+ * the outputs `from` over SCENE_IN_MS; valid data takes over as at power-up */
+void    scene_return(scene_run_t *r, const scene_t *s, uint8_t fx, const uint16_t *from, uint32_t now_ms);
 /* valid data: the channels in `mask` that still hold the scene start their cross-fade at now_ms (each its own; a
  * time still to come: the scene shows until then) */
 void    scene_takeover(scene_run_t *r, uint8_t mask, uint32_t now_ms);

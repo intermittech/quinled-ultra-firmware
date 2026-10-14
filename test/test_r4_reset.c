@@ -10,7 +10,7 @@ static void sc_r4reset(void)
     is.tripped = ISENSE_TRIP_FAST; pwm_force_off(1);
     (void)cli_apply(CMD_FACTORY_RESET, 0xA5);
     CHECK(sim_forced && is.tripped != ISENSE_TRIP_NONE, "factory reset orphaned the PWM force-off latch");
-    for (t = 0; t < ISENSE_RETRY_MS + 2u; t++) {
+    for (t = 0; t < ISENSE_RETRY_S * 1000u + 2u; t++) {
         ms_now++;
         isense_service();
     }

@@ -8,7 +8,7 @@
  *    write never erases, the next page is erased while dark (at power-up, or a second after the light went off);
  *  - flash only while dark: a write due while lit waits (no token, no entry) for the first dark second; a dip while
  *    lit writes only if dips are admitted;
- *  - power cuts: a write cut after each of its 20 half-words, at every place of the page pair; an erase cut short (the
+ *  - power cuts: a write cut after each of its half-words (24: format 2), at every place of the page pair; an erase cut short (the
  *    old page half erased, or garbage); every step of a 30-record run cut in turn (both erased patterns, the writes
  *    counter across its 32-bit wrap), each image booted, the boot's own erase cut too: always the last complete
  *    record or the one being written, never an older one or none; nothing programmed that isn't erased;
@@ -59,7 +59,9 @@ static uint32_t lf_load(lflash_t *f, life_rec_t *r)
     return life_find(f->pg[0].b, f->pg[1].b, r, &f->pos);
 }
 
-/* life_store: `cut` = the half-words programmed before the power goes (20 = all) */
+#define LH (LIFE_REC_BYTES / 2u)   /* the record's half-words (0.6.9, format 2: 24) */
+
+/* life_store: `cut` = the half-words programmed before the power goes (LH = all) */
 static uint32_t lf_store(lflash_t *f, energy_t *e, uint32_t cut)
 {
     uint32_t at = life_plan(&f->pos), i;
@@ -152,7 +154,7 @@ static void bd_boot(ebd_t *b, uint32_t ms0, uint32_t ver, uint32_t wd)
 static void bd_write(ebd_t *b, uint32_t w)
 {
     uint32_t lit = !bd_dark(b);
-    if (w != ENERGY_DUE_NONE && lf_store(&b->f, &b->e, 20u)) {
+    if (w != ENERGY_DUE_NONE && lf_store(&b->f, &b->e, LH)) {
         energy_saved(&b->e, b->s);
         b->nw++;
         b->ndip += w == ENERGY_DUE_DIP;
@@ -395,7 +397,7 @@ static void test_energy_record(void)
         b.e.lt.trips[1] = 2u;
         b.e.lt.peak_t = 137u;
         b.e.lt.peak_a = 79u;
-        CHECK(lf_store(&b.f, &b.e, 20u) == 1u, "stored");
+        CHECK(lf_store(&b.f, &b.e, LH) == 1u, "stored");
         r = bd_stored(&b, &found);
         CHECK(found && r.wh == 1000u + 1284u && r.on_s == 77u && r.lit_s == 66u && r.ups == 1u && r.dips == 14u &&
               r.ver == 0x00060300u && r.writes == 1u && r.trips[0] == 3u && r.trips[1] == 2u && r.updates == 0u &&
@@ -409,46 +411,46 @@ static void test_energy_record(void)
             lf_init(&w.f, erased);
             w.e.lt.writes = 0xFFFFFFFDu;
             for (i = 0; i < 4u; i++) {
-                (void)lf_store(&w.f, &w.e, 20u);         /* 0xFFFFFFFE, 0xFFFFFFFF, 0, 1 */
+                (void)lf_store(&w.f, &w.e, LH);         /* 0xFFFFFFFE, 0xFFFFFFFF, 0, 1 */
             }
             found = lf_load(&w.f, &r);
             CHECK(found && r.writes == 1u && w.f.pos.next == 4u, "the writes counter across its wrap: the newest is "
                   "1 (%u)", r.writes);
         }
         /* page 0's last entry: page 1 is next, its erase pending (a write never erases); no write until the erase */
-        for (k = 0; k < 5u; k++) {
-            (void)lf_store(&b.f, &b.e, 20u);
+        for (k = 0; k < LIFE_RECS - 1u; k++) {
+            (void)lf_store(&b.f, &b.e, LH);
         }
-        CHECK(b.f.pos.next == 16u && b.f.pos.erase && b.f.erases[0] + b.f.erases[1] == 0u, "6 records: page 0 full, "
+        CHECK(b.f.pos.next == 16u && b.f.pos.erase && b.f.erases[0] + b.f.erases[1] == 0u, "a page of records: page 0 full, "
               "page 1 next, its erase pending, nothing erased yet");
-        CHECK(lf_store(&b.f, &b.e, 20u) == 0u, "a write now: none (no erased entry)");
+        CHECK(lf_store(&b.f, &b.e, LH) == 0u, "a write now: none (no erased entry)");
         lf_prepare(&b.f, 0);
-        CHECK(!b.f.pos.erase && b.f.erases[1] == 1u && lf_store(&b.f, &b.e, 20u) == 1u, "erased (dark): page 1 written");
-        /* page 1 full: page 0 (records 1-6) pending; a boot sees the same and erases it before the outputs start */
-        for (k = 0; k < 5u; k++) {
-            (void)lf_store(&b.f, &b.e, 20u);
+        CHECK(!b.f.pos.erase && b.f.erases[1] == 1u && lf_store(&b.f, &b.e, LH) == 1u, "erased (dark): page 1 written");
+        /* page 1 full: page 0 (its older records) pending; a boot sees the same and erases it before the outputs start */
+        for (k = 0; k < LIFE_RECS - 1u; k++) {
+            (void)lf_store(&b.f, &b.e, LH);
         }
         found = lf_load(&b.f, &r);                       /* the next boot */
-        CHECK(found && r.writes == 12u && b.f.pos.next == 0u && b.f.pos.erase && b.f.erases[0] == 0u,
-              "12 records, a boot: page 0 next, to be erased (%u)", r.writes);
+        CHECK(found && r.writes == 2u * LIFE_RECS && b.f.pos.next == 0u && b.f.pos.erase && b.f.erases[0] == 0u,
+              "two pages of records, a boot: page 0 next, to be erased (%u)", r.writes);
         lf_prepare(&b.f, 0);
-        CHECK(b.f.erases[0] == 1u && lf_store(&b.f, &b.e, 20u) == 1u && b.f.bad == 0u, "erased at power-up, written");
+        CHECK(b.f.erases[0] == 1u && lf_store(&b.f, &b.e, LH) == 1u && b.f.bad == 0u, "erased at power-up, written");
         r = bd_stored(&b, &found);
-        CHECK(found && r.writes == 13u, "13 records (%u)", r.writes);
+        CHECK(found && r.writes == 2u * LIFE_RECS + 1u, "two pages and one records (%u)", r.writes);
 
-        /* power cuts: a write cut after each half-word, at each place: entry 1 (mid-page), entry 5 (it fills the
-         * page), the first entry of a page just erased */
+        /* power cuts: a write cut after each half-word, at each place: entry 1 (mid-page), the last entry (it
+         * fills the page), the first entry of a page just erased */
         for (place = 0; place < 3u; place++) {
-            for (cut = 0; cut <= 20u; cut++) {
+            for (cut = 0; cut <= LH; cut++) {
                 life_rec_t before, after;
                 uint32_t f2, prev;
                 c = b;
                 if (place >= 1u) {
-                    while ((c.f.pos.next & 15u) != 5u) {
-                        (void)lf_store(&c.f, &c.e, 20u);
+                    while ((c.f.pos.next & 15u) != LIFE_RECS - 1u) {
+                        (void)lf_store(&c.f, &c.e, LH);
                     }
                     if (place == 2u) {
-                        (void)lf_store(&c.f, &c.e, 20u); /* fills it; the next page erased */
+                        (void)lf_store(&c.f, &c.e, LH); /* fills it; the next page erased */
                         lf_prepare(&c.f, 0);
                     }
                 }
@@ -459,12 +461,12 @@ static void test_energy_record(void)
                 /* power lost; the next boot */
                 f2 = lf_load(&c.f, &after);
                 c.e.lt.writes = after.writes;            /* (the boot's RAM: the stored record) */
-                CHECK(f2 && (after.writes == (cut == 20u ? prev + 1u : prev) || (cut == 19u && after.writes == prev + 1u)),
+                CHECK(f2 && (after.writes == (cut == LH ? prev + 1u : prev) || (cut == LH - 1u && after.writes == prev + 1u)),
                       "place %u, cut after %u half-words: the newest is write %u (%u before)", place, cut,
                       after.writes, prev);
                 /* the boot's erase (if one is pending); the next write goes into an erased entry, the newest */
                 lf_prepare(&c.f, 0);
-                (void)lf_store(&c.f, &c.e, 20u);
+                (void)lf_store(&c.f, &c.e, LH);
                 after = bd_stored(&c, &f2);
                 CHECK(f2 && after.writes == c.e.lt.writes && c.f.bad == 0u,
                       "place %u, cut %u: the next write is the newest (%u), no half-word programmed twice (%u)",
@@ -477,17 +479,17 @@ static void test_energy_record(void)
             uint32_t i, p, f2, w, e0;
             life_rec_t got;
             c = b;
-            while ((c.f.pos.next & 15u) != 5u) {
-                (void)lf_store(&c.f, &c.e, 20u);
+            while ((c.f.pos.next & 15u) != LIFE_RECS - 1u) {
+                (void)lf_store(&c.f, &c.e, LH);
             }
-            (void)lf_store(&c.f, &c.e, 20u);             /* fills the page: the other one is erased ... */
+            (void)lf_store(&c.f, &c.e, LH);             /* fills the page: the other one is erased ... */
             w = c.e.lt.writes;
             p = (c.f.pos.next >> 4) & 1u;
             c.f.pg[p] = c.f.pg[p ^ 1u];                  /* ... cut short: it held older records (here: these) */
-            for (i = 0; i < 6u; i++) {                   /* as older records */
+            for (i = 0; i < LIFE_RECS; i++) {            /* as older records */
                 life_rec_t *o = (life_rec_t *)(c.f.pg[p].b + i * LIFE_REC_BYTES);
-                o->writes -= 6u;
-                o->crc = crc16_ccitt((const uint8_t *)o, 38u);
+                o->writes -= LIFE_RECS;
+                o->crc = crc16_ccitt((const uint8_t *)o, LIFE_REC_BYTES - 2u);
             }
             for (i = 0; i < 64u; i++) {                  /* half erased: bits go to 1 (or garbage, every 4th run) */
                 seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
@@ -496,10 +498,10 @@ static void test_energy_record(void)
             f2 = lf_load(&c.f, &got);                    /* the next boot */
             CHECK(f2 && got.writes == w, "erase cut short (%u): the newest is still write %u (%u)", k, w, got.writes);
             e0 = c.f.erases[p];
-            CHECK(c.f.pos.next == (p << 4) && c.f.pos.erase && lf_store(&c.f, &c.e, 20u) == 0u, "... the next write "
+            CHECK(c.f.pos.next == (p << 4) && c.f.pos.erase && lf_store(&c.f, &c.e, LH) == 0u, "... the next write "
                   "waits for its erase (%u)", k);
             lf_prepare(&c.f, 0);
-            CHECK(c.f.erases[p] == e0 + 1u && lf_store(&c.f, &c.e, 20u) == 1u && c.f.bad == 0u, "... erased at power-up "
+            CHECK(c.f.erases[p] == e0 + 1u && lf_store(&c.f, &c.e, LH) == 1u && c.f.bad == 0u, "... erased at power-up "
                   "or while dark, then written (%u)", k);
             if (g_fail > 20) {
                 break;
@@ -1026,6 +1028,7 @@ static void test_energy_ch(void)
     cl.apply = cap_apply;
     cl.save_now = cap_save;
     cl.set = &cli_set;
+    cl.eff = &cli_set;
     cl.st = &st;
     e.boot_mwh = 76540;
     e.ch_mwh[0] = 72000; e.ch_mwh[1] = 5; e.ch_mwh[2] = 1440; e.ch_mwh[3] = 0; e.ch_mwh[4] = 123456;

@@ -84,6 +84,7 @@ static void test_d2(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &st;
     st.ev = &l;
     run_cli(&c, "status\r");
@@ -114,4 +115,20 @@ static void test_d2(void)
     l.e[l.head].type = EVL_NONE;                         /* (a ring that never filled: stops at an empty entry) */
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "event ") == NULL, "stops at the first empty entry");
+
+    /* (0.6.9, B2) evlog_boot: a power-on (or a log never marked) begins anew; a kept reset keeps the last run's events,
+     * their ages going on */
+    memset(&l, 0x5A, sizeof l);
+    evlog_boot(&l, 1, 100);
+    CHECK(l.magic == EVL_MAGIC && l.head == 0u && l.e[0].type == EVL_NONE && l.e[7].t_s == 0u, "boot: an unmarked log "
+          "begins anew");
+    l.e[3].type = EVL_SHORT;
+    l.e[3].t_s = 3600u;                                  /* 1 h into the last run, which reset at 2 h */
+    l.e[3].ma = 4321u;
+    l.head = 3;
+    evlog_boot(&l, 1, 7200u);
+    CHECK(l.e[3].type == EVL_SHORT && l.e[3].ma == 4321u && 60u - l.e[3].t_s == 3600u + 1u + 60u,
+          "boot: kept: the event 1 h before the reset, 60 s later: 1:01:01 ago (%u)", 60u - l.e[3].t_s);
+    evlog_boot(&l, 0, 7200u);
+    CHECK(l.e[3].type == EVL_NONE && l.magic == EVL_MAGIC, "boot: a power-on begins anew");
 }

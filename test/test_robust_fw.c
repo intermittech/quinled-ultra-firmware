@@ -475,7 +475,8 @@ uint16_t *pwm_table(uint8_t ch, uint8_t *stride)
     }
 }
 const uint16_t *pwm_spread_arr(void) { return cur_spread ? spread_arr : 0; }
-void hw_init(void) {}
+static uint32_t sim_hw_up;                              /* (0.6.9, R7-06) hw_init ran: the clocks are live */
+void hw_init(void) { sim_hw_up = 1; }
 void stack_paint(void) {}
 uint32_t stack_used(void) { return 0x2A0u; }
 static uint32_t uid_hash;
@@ -582,13 +583,17 @@ static uint32_t load_raw(void);
 /* (0.6.8) the option bytes and FLASH->WPR (hal/hw.c hw_boot_open / hw_option_bytes; boot_protect): the random runs
  * start with the bootloader's sectors protected (as every board after its first boot); `robust_fw wrp <case>` sets
  * them up */
-static uint32_t sim_wpr = 0xFFFFFFFCu, sim_ob_writes, sim_ob_fail, sim_vdd;
+static uint32_t sim_wpr = 0xFFFFFFFCu, sim_ob_writes, sim_ob_fail, sim_vdd, sim_ob_bad, sim_ob_late, sim_ob_reads;
 static uint16_t sim_ob[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFF, 0xFF, 0xFF, 0xFF };
 uint32_t hw_boot_open(void) { return (sim_wpr & 3u) != 0u; }
+/* (0.6.9, R7-06: hal_check.py option_bytes checks the read itself: HCLK / 2, the inverses, twice) only before hw_init;
+ * sim_ob_bad: a snapshot not to be trusted (an inverse wrong, two reads differing) */
 uint32_t hw_option_bytes(uint16_t ob[8])
 {
+    sim_ob_reads++;
+    sim_ob_late += sim_hw_up;
     memcpy(ob, sim_ob, sizeof sim_ob);
-    return ob[0];
+    return !sim_ob_bad;
 }
 
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
@@ -816,7 +821,7 @@ static void flash_init(void)
                 random_fill((uint8_t *)&r, sizeof r);
                 r.writes = ++w;
                 r.magic = LIFE_MAGIC;
-                r.crc = crc16_ccitt((const uint8_t *)&r, 38u);
+                r.crc = crc16_ccitt((const uint8_t *)&r, LIFE_REC_BYTES - 2u);
                 memcpy(pg[k / LIFE_RECS] + (k % LIFE_RECS) * LIFE_REC_BYTES, &r,
                        k + 1u == n && chance(20) ? rrange(1, LIFE_REC_BYTES - 1u) : LIFE_REC_BYTES);
             }
@@ -1091,15 +1096,21 @@ static int regress_fx(void)
     return g_fail ? 1 : 0;
 }
 
-/* (0.6.8) `robust_fw wrp <open | protected | vdd | nodesc | rdp | fail>`: the bootloader's write protection at the
- * boot (main.c boot_protect). open: the option bytes rewritten once (WRPR0 & 0xFC, RDPR 0xA5 and the rest kept), then
- * the reset; protected / vdd (deferred) / nodesc (no valid bootloader info and descriptor) / rdp (read-protected): not
- * touched, the boot goes on; fail (the write refused): no reset, the boot goes on */
+/* (0.6.8) `robust_fw wrp <open | protected | vdd | nodesc | rdp | fail | badob | verified | verifybad>`: the
+ * bootloader's write protection at the boot (main.c boot_protect). open: the option bytes rewritten once (WRPR0 &
+ * 0xFC, RDPR 0xA5 and the rest kept), then the reset; protected / vdd (deferred) / nodesc (no valid bootloader info
+ * and descriptor) / rdp (read-protected): not touched, the boot goes on; fail (the write refused): no reset, the boot
+ * goes on. 0.6.9 (R7-06): every case: the option bytes read once, before hw_init; badob (the snapshot not to be
+ * trusted): nothing written, the event, D9's fault code; verified / verifybad: the boot after the rewrite's reset
+ * (prot_chk in .noinit, the RAM kept): the options as written (the event "bootloader protected"), or WRPR2 not as
+ * written (the event, D9's fault code); nothing written either way */
 static int wrp_case(const char *c)
 {
     static const uint16_t ob0[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFF, 0xFF, 0xFF, 0xFF };
-    const int open = strcmp(c, "protected") != 0, want_write = !strcmp(c, "open") || !strcmp(c, "fail");
-    uint32_t t;
+    static const uint16_t obw[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFC, 0xFF, 0xFF, 0xFF };
+    const int verify = !strncmp(c, "verif", 5);
+    const int open = strcmp(c, "protected") != 0 && !verify, want_write = !strcmp(c, "open") || !strcmp(c, "fail");
+    uint32_t t, k, ev_ok = 0, ev_fail = 0, ev_bad = 0;
     g_seed = 0x5EEDull;
     rs = 0x7654321ull;
     flash_map();
@@ -1119,6 +1130,15 @@ static int wrp_case(const char *c)
     if (!strcmp(c, "rdp")) {
         sim_ob[0] = 0xFF;
     }
+    sim_ob_bad = !strcmp(c, "badob");
+    if (verify) {                                        /* the boot after boot_protect's reset */
+        memcpy(sim_ob, obw, sizeof obw);
+        if (!strcmp(c, "verifybad")) {
+            sim_ob[6] = 0x7F;                            /* WRPR2: not as written */
+        }
+        bcrumb.magic = BC_MAGIC;                         /* (a reset: the RAM kept) */
+        prot_chk = PROT_MAGIC | crc16_ccitt((const uint8_t *)obw, sizeof obw);
+    }
     fib_main = ConvertThreadToFiber(0);
     fib_fw = CreateFiber(1u << 20, fw_entry, 0);
     SwitchToFiber(fib_fw);                               /* the boot */
@@ -1127,18 +1147,77 @@ static int wrp_case(const char *c)
         sim_tick();
         pass();
     }
-    printf("wrp %s: option byte writes %u, reset %u, WRPR0 %02X, RDPR %02X\n", c, sim_ob_writes, sim_reset, sim_ob[4],
-           sim_ob[0]);
+    for (k = 0; k < EVLOG_N; k++) {
+        ev_ok += evl.e[k].type == EVL_PROT_OK;
+        ev_fail += evl.e[k].type == EVL_PROT_FAIL;
+        ev_bad += evl.e[k].type == EVL_OB_BAD;
+    }
+    printf("wrp %s: option byte writes %u, reset %u, WRPR0 %02X, RDPR %02X; reads %u (%u after hw_init); events ok %u "
+           "fail %u unreadable %u; D9 %u\n", c, sim_ob_writes, sim_reset, sim_ob[4], sim_ob[0], sim_ob_reads,
+           sim_ob_late, ev_ok, ev_fail, ev_bad, ack.active && ack.led_only);
     CHECK(!sim_crash, "wrp %s: no exception", c);
+    CHECK(sim_ob_reads == 1u && sim_ob_late == 0u, "wrp %s: the option bytes read once, before hw_init (R7-06)", c);
+    CHECK(ev_bad == (uint32_t)!strcmp(c, "badob") && ev_ok == (uint32_t)!strcmp(c, "verified") &&
+          ev_fail == (uint32_t)!strcmp(c, "verifybad"), "wrp %s: the events (ok %u, fail %u, unreadable %u)", c, ev_ok,
+          ev_fail, ev_bad);
+    if (!strcmp(c, "badob") || !strcmp(c, "verifybad")) {
+        CHECK(ack.active && ack.led_only, "wrp %s: D9's fault code", c);
+    }
     CHECK(sim_ob_writes == (uint32_t)want_write, "wrp %s: the option bytes written %u time(s)", c, sim_ob_writes);
     if (!strcmp(c, "open")) {
         CHECK(sim_reset && sim_ob[4] == 0xFCu && sim_ob[0] == 0xA5u && sim_ob[1] == ob0[1] && sim_ob[2] == ob0[2] &&
               sim_ob[3] == ob0[3] && sim_ob[5] == 0xFFu && sim_ob[6] == 0xFFu && sim_ob[7] == 0xFFu,
               "wrp open: WRPR0 0xFC, RDPR 0xA5, USER / DATA / WRPR1-3 kept, then the reset");
     } else {
-        CHECK(!sim_reset && sim_ob[4] == 0xFFu, "wrp %s: no reset, WRPR0 untouched (the boot goes on)", c);
+        CHECK(!sim_reset && sim_ob[4] == (verify ? 0xFCu : 0xFFu), "wrp %s: no reset, WRPR0 untouched (the boot "
+              "goes on)", c);
     }
     printf("wrp %s: %s (%d failures)\n", c, g_fail ? "FAILED" : "passed", g_fail);
+    return g_fail ? 1 : 0;
+}
+
+/* (0.6.9, Quindor) `robust_fw hores <updated | same | rejected>`: the bootloader's result in the hand-over block at the
+ * app's boot (main.c upd_boot): updated: ACK + the minor version on the strip as before; same / rejected (its own check
+ * after a TAKE): D9 only, as an update session's SAME / NACK. The first 300 ms: the red channel (feedback 0) */
+static int hores_case(const char *c)
+{
+    const int updated = !strcmp(c, "updated"), same = !strcmp(c, "same");
+    upd_handover_t *h;
+    uint32_t t, red = 0, d9 = 0;
+    g_seed = 0x5EEDull;
+    rs = 0x7654321ull;
+    flash_map();
+    memcpy(fl + 0x10u, "QDBL\x01\x01\x03", 7);
+    fl[0x17] = 0;
+    mk_desc(fl + 0x2000u, 0x000602FFu, 1, 0x8u, 1);
+    mk_desc(desc_this, 0x000602FFu, 1, 0x8u, 1);
+    h = (upd_handover_t *)map_handover();
+    h->result = (uint8_t)(updated ? UPD_RES_UPDATED : same ? UPD_RES_SAME : UPD_RES_REJECTED);
+    h->result_version = 0x000602FFu;
+    upd_ho_seal(h);
+    uid_hash = 1;
+    chain_n = 1;
+    wire_quiet = 1;
+    sim_wpr = 0xFFFFFFFCu;                               /* (protected: the boot goes on) */
+    fib_main = ConvertThreadToFiber(0);
+    fib_fw = CreateFiber(1u << 20, fw_entry, 0);
+    SwitchToFiber(fib_fw);                               /* the boot */
+    for (t = 0; t < 6000u && !sim_reset && !sim_crash; t++) {   /* 300 ms */
+        sim_tick();
+        pass();
+        red += out_now[CH_R] != 0u;
+        d9 += ack.active && ack.led_only;
+    }
+    printf("hores %s: the result taken %u, the acknowledgement %u (D9 only %u), red lit in %u of 6000 ticks\n", c,
+           (unsigned)(h->result == UPD_RES_NONE), ack.active, ack.led_only, red);
+    CHECK(!sim_crash && !sim_reset, "hores %s: the boot goes on", c);
+    CHECK(h->result == UPD_RES_NONE && ack.active, "hores %s: the result shown and cleared", c);
+    if (updated) {
+        CHECK(!ack.led_only && red > 0u, "hores updated: ACK + the version on the strip (red %u)", red);
+    } else {
+        CHECK(ack.led_only && d9 > 0u && red == 0u, "hores %s: D9 only, the outputs dark as they were (red %u)", c, red);
+    }
+    printf("hores %s: %s (%d failures)\n", c, g_fail ? "FAILED" : "passed", g_fail);
     return g_fail ? 1 : 0;
 }
 
@@ -1152,6 +1231,9 @@ int main(int argc, char **argv)
     }
     if (argc > 2 && strcmp(argv[1], "wrp") == 0) {
         return wrp_case(argv[2]);
+    }
+    if (argc > 2 && strcmp(argv[1], "hores") == 0) {
+        return hores_case(argv[2]);
     }
     g_seed = argc > 1 ? strtoull(argv[1], 0, 16) : 0x600D5EEDull;
     if (argc > 2) {

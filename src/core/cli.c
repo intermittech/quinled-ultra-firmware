@@ -289,6 +289,22 @@ void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t fail, uint32_t cycl
 }
 #endif
 
+void evlog_boot(evlog_t *l, uint32_t keep, uint32_t prev_up_s)
+{
+    uint32_t i;
+    if (!keep || l->magic != EVL_MAGIC) {
+        uint8_t *p = (uint8_t *)l;
+        for (i = 0; i < sizeof(*l); i++) {
+            p[i] = 0;
+        }
+        l->magic = EVL_MAGIC;
+        return;
+    }
+    for (i = 0; i < EVLOG_N; i++) {
+        l->e[i].t_s -= prev_up_s + 1u;               /* (u32: the ages, now - t_s, go on; the reset's own second) */
+    }
+}
+
 void cli_banner(cli_t *c)
 {
     const cli_status_t *s = c->st;
@@ -381,7 +397,10 @@ static void events(cli_t *c)
             break;
         }
         cf(c, Z(ev_line, "event %u=%t ago, %z, %a A\r\n"), k + 1u, s->uptime_s - e->t_s,
-           nth(Z(ev_names, "limit\0overload\0short\0supply dip\0calibration"), e->type - 1u), (int32_t)e->ma);
+           nth(Z(ev_names, "limit\0overload\0short\0supply dip\0calibration\0calibration incomplete\0off: retries used up\0"
+                           "option bytes unreadable\0bootloader protected\0protection not as written\0too hot"),
+               e->type - 1u),
+           (int32_t)e->ma);
     }
 }
 
@@ -389,7 +408,7 @@ static void events(cli_t *c)
  * part only when the console has room for it (main.c, uart_room) and never waits for the UART (a whole status of
  * ~1,400 bytes held the main loop ~44 ms before). The values: the snapshot taken at the command (cli_status_t), the
  * pointed-to logs as they are when their part is written. Returns 1 while parts remain. */
-#define STATUS_PARTS (10u + MON_EXTRA)   /* (0.6.6: + the calibration history's, M2) */
+#define STATUS_PARTS (11u + MON_EXTRA)   /* (0.6.6: + the calibration history's, M2; 0.6.9: + the settings') */
 #if MON_EXTRA
 /* (0.6.6, M2) the calibration history (core/calhist.h): each stored test at 100 %, then the newest against the first */
 static void calhist_lines(cli_t *c, const calhist_t *h)
@@ -418,11 +437,11 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     const int empty = Z(empty, "");
     uint32_t i;
 #if MON_EXTRA
-    if (part == 5u) {                      /* (0.6.6, M2) its own part, after the calibration's (that one is full) */
+    if (part == 6u) {                      /* (0.6.6, M2) its own part, after the calibration's (that one is full) */
         calhist_lines(c, s->ch);
         return 1;
     }
-    part -= part > 5u;
+    part -= part > 6u;
 #endif
     switch (part) {
     case 0:
@@ -455,7 +474,29 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     }
     ovr_out(c, Z(st_ovr, "overruns=%u captures, %u frame ends, %u ms late\r\n"));   /* (main.c ovr) */
     break;
-    case 2:                                /* (0.6.5 merge: every part under 470 bytes with the longest values) */
+    case 2:                                /* (0.6.9) its own part: 218 bytes with the longest values */
+    {                                      /* (0.6.9) the settings in effect by their console keys ('*': an Ultra
+                                              CONFIG over the stored value), the retry policy, and the save state:
+                                              pending, why (main.c save_why) */
+        static const uint8_t so[11] = {
+            offsetof(settings_t, protocol), offsetof(settings_t, pwm_preset), offsetof(settings_t, dither_mode),
+            offsetof(settings_t, dither_thresh), offsetof(settings_t, dim_floor), offsetof(settings_t, min_pulse),
+            offsetof(settings_t, stagger), offsetof(settings_t, signal_loss), offsetof(settings_t, feedback_ch),
+            offsetof(settings_t, smoothing), offsetof(settings_t, gamma) };
+        const int names = Z(set_names, "protocol\0preset\0dither\0thresh\0floor\0minpulse\0stagger\0loss\0"
+                                       "feedback\0smooth\0gamma");
+        cf(c, Z(set_head, "settings="));
+        for (i = 0; i < 11u; i++) {
+            uint32_t e = ((const uint8_t *)c->eff)[so[i]];
+            cf(c, Z(set_kv, "%z %u%z, "), nth(names, i), e, e != ((const uint8_t *)c->set)[so[i]] ? Z(star, "*") : empty);
+        }
+        cf(c, Z(set_tail, "softstart %u, retry %u x %u s\r\nsave=%z%z\r\n"), (uint32_t)s->softstart != 0u,
+           (uint32_t)s->retry_n, (uint32_t)s->retry_s, s->save_why ? Z(sv_pend, "pending: ") : Z(sv_ok, "ok"),
+           nth(Z(sv_why, "\0debounce\0waiting for dark\0budget\0error hold-off\0supply"), s->save_why < 6u ?
+               s->save_why : 0u));
+    }
+    break;
+    case 3:                                /* (0.6.5 merge: every part under 470 bytes with the longest values) */
     cf(c, Z(st_cfg, "config_accepted=%u\r\npwm_hz=%u\r\npwm_steps=%u\r\nflash_saves=%u\r\n"), s->config_frames,
        (uint32_t)(F_TIM_HZ / s->steps), s->steps, s->saves);
 #if MON_EXTRA
@@ -490,7 +531,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
 #endif
     }
     break;
-    case 3:
+    case 4:
     {
         cf(c, Z(st_current, "out R/G/B/W1/W2=%P %%\r\ncurrent=%a A\r\ncurrent_peak=%a A\r\ncurrent_zero=%a A\r\n"
                             "current_limit=%a A\r\ncurrent_scale=%k %%\r\ncurrent_trips=%u\r\n"
@@ -501,8 +542,13 @@ static uint32_t status_part(cli_t *c, uint32_t part)
            nth(cause, s->i_trip_cause < 3u ? s->i_trip_cause : 0u), s->i_ch_ma,
            nth(Z(model, "none\0learned\0calibrated"), s->i_model < 3u ? s->i_model : 0u));
     }
+    if (s->cal_fail != 0u) {               /* (0.6.9, A2) the last test stopped: the stored one (next part) still
+                                              counts (here: the calibration's part reached 511 bytes) */
+        cf(c, Z(cal_fail, "calibration_last=incomplete: %z\r\n"),
+           nth(Z(cal_why, "trip\0limit\0supply"), s->cal_fail - 1u < 3u ? s->cal_fail - 1u : 0u));
+    }
     break;
-    case 4:
+    case 5:
     {
         if (s->cal.levels) {
             uint32_t l;
@@ -542,7 +588,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     }
 #endif
     break;
-    case 5:
+    case 6:
     if (s->dip) {                          /* supply dips (core/vdip.h): the deepest, then the log, newest first */
         const vdip_t *d = s->dip;
         const vdip_ev_t *e = d->deep.ref_x ? &d->deep : 0;
@@ -558,7 +604,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
         cf(c, Z(crlf, "\r\n"));
     }
     break;
-    case 6:
+    case 7:
     /* V x I: 10 mV x mA / 100 keeps it in 32 bits (75 V x 65 A): mW, shown in W */
 #if MON_EXTRA
     cf(c, ZU(st_input, "input=%h W\r\nenergy=%v Wh since boot\r\nenergy R/G/B/W1/W2=%A Wh\r\ntp8=%v V\r\n"
@@ -598,7 +644,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     }
     cf(c, Z(crlf, "\r\n"));
     break;
-    case 7:
+    case 8:
     /* the power events (core/pwrev.h): what a Diff-Power ultra receiver reports on its STATUS / POWER pages */
     if (s->pw) {
         const pwrev_t *g = s->pw;
@@ -646,6 +692,16 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     }
     break;
     default:
+    {                                      /* (0.6.9, B2) the lifetime record's fault memory (here: the lifetime's part
+                                              reached 516 bytes) */
+        const life_rec_t *r = &s->en->lt;
+        if (r->trip | r->dip_pct | r->rst) {
+            cf(c, Z(faults, "faults=trip %z %h A at %u h lit, dip %u %% %u ms %k A, reset %z %u after %u h\r\n"),
+               nth(Z(trip_k, "-\0short\0overload\0-"), r->trip & 3u), (uint32_t)(r->trip >> 2) * 50u,
+               (uint32_t)r->trip_h, (uint32_t)r->dip_pct, (uint32_t)r->dip_cs * 10u, (uint32_t)r->dip_a,
+               nth(Z(rst_k, "-\0watchdog\0fault\0-"), r->rst & 3u), (uint32_t)(r->rst >> 2), (uint32_t)r->rst_h);
+        }
+    }
     if (s->hl) {                           /* channel health (core/health.h) */
         const health_t *h = s->hl;
         uint32_t k;
@@ -679,11 +735,11 @@ static uint32_t status_part(cli_t *c, uint32_t part)
         cf(c, Z(sc_s, "%k s\r\n"), (uint32_t)c->scene->fade);
     }
         break;
-    case 9:
+    case 10:
     events(c);                             /* (0.6.5, D2) */
         break;
     }
-    return part < 9u;                      /* (the last: 9) */
+    return part < 10u;                     /* (the last: 10) */
 }
 
 #if CONSOLE_FULL
@@ -726,7 +782,9 @@ uint32_t cli_poll(cli_t *c)
 void cli_watch(cli_t *c)
 {
     const cli_status_t *s = c->st;
-    cf(c, Z(w_line, "%t %v V %a A %h W  ch %A A  out %P %%  cpu %k %%  "), s->uptime_s, s->vs_supply_mv, s->i_ma,
+    cf(c, s->fps == 0u ? Z(w_nosig, "%t no signal  ") : Z(w_link, "%t %z %ufps  "), s->uptime_s,   /* (0.6.9) the link */
+       nth(Z(w_proto, "unlocked\0WS2915\0WS2915\0WS2805\0Ultra"), s->proto_locked < 5u ? s->proto_locked : 0u), s->fps);
+    cf(c, Z(w_line, "%v V %a A %h W  ch %A A  out %P %%  cpu %k %%  "), s->vs_supply_mv, s->i_ma,
        s->vs_supply_mv / 10u * clamp0(s->i_ma) / 100u, s->i_now_ch_ma, s->out,   /* the power as `input` in status */
        (uint32_t)s->cpu_pm);
     if (s->mcu_temp_c10 != -32768) {

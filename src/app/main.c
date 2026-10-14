@@ -53,7 +53,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.8"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.9"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -100,6 +100,10 @@ static volatile uint32_t frames;
  * [1] frame ends not handled (the last one still pending), both counted by the tick; [2] render ms late: the main loop's
  * ms came this many ms after the one before, not counted after a flash operation (ovr_on = 0: housekeeping) */
 static volatile uint32_t ovr[3];
+static uint16_t cpu_peak;                  /* (0.6.5 D3, cpu_second below; 0.6.9: the DIAG page's too) */
+#if BOARD_RETURN
+static uint16_t rc_peak_ma;                /* (0.6.9) the input current's peak since the last ENERGY answer (bus side) */
+#endif
 static uint8_t ovr_on;
 /* board current sense (core/isense.h): the tick sums the ADC samples and trips; the main loop limits (isense_apply
  * in outputs_update), calibrates and retries */
@@ -398,6 +402,10 @@ RAMCODE void flash_poll_isr(void)
 /* ------------------------------------------------------------------------------- main loop state */
 static settings_t set;                     /* stored settings */
 static store_ext_t sext;                   /* stored with them: current limit and calibration (store.h) */
+/* (0.6.9, B7) the trips' retry policy in the extension's spare bytes 2 / 3 (retry_set), coded so that an erased byte
+ * (0xFF) is the default */
+#define RETRY_N_X 0xF5u                    /* count ^ this (10 ^ 0xF5 = 0xFF) */
+#define RETRY_S_X 0xFEu                    /* seconds ^ this (1 ^ 0xFE = 0xFF) */
 static settings_t eff;                     /* in effect: set, in Ultra mode overlaid by the host's CONFIG */
 static config_rx_t rx;
 static ack_t ack;
@@ -420,10 +428,15 @@ static int say_q[SAY_Q];
 static uint8_t say_h, say_n;
 #if !CONSOLE_FULL
 #define STREAM_STATUS_S 60u                /* (0.6.7) the release console: the full status every minute */
+/* (0.6.9, Quindor) the receiver's release console sends no full status: its return channel's pages (STATUS, LIFETIME,
+ * DIAG, ...) carry it; the banner, the live line, the jig's lines and the messages stay (CONSOLE_FULL 1: everything) */
+#define STREAM_STATUS   (BOARD != BOARD_DP_RX)
 #define STREAM_BOOT_S   5u                 /* ... the first once the live values are valid (the MCU temperature's first
                                               average, ~2 s: the supply's comes before), at the latest at this uptime */
+#if STREAM_STATUS
 static uint32_t status_s;                  /* ... the uptime of the last one */
 static uint8_t status_first;               /* ... 1: the first one is out */
+#endif
 #endif
 
 static void say(int z)
@@ -483,7 +496,7 @@ static ocled_t ocl;
 static uint8_t led_now;
 static pwrev_t pw;
 /* (0.6.5, D2) the event log (core/cli.h evlog_t): main loop only */
-static evlog_t evl;
+static evlog_t evl __attribute__((section(".noinit.evl")));   /* (0.6.9, B2: kept across a reset, evlog_boot) */
 typedef char evl_pw_bits[(EVL_OVERLOAD == EVL_LIMIT + 1 && EVL_SHORT == EVL_LIMIT + 2 && EVL_DIP == EVL_LIMIT + 3 &&
                           ULTRA_PW_EV_LIMITED == 1u && ULTRA_PW_EV_OVERLOAD == 2u && ULTRA_PW_EV_SHORT == 4u &&
                           ULTRA_PW_EV_SUPPLY_DIP == 8u) ? 1 : -1];
@@ -630,6 +643,25 @@ static uint32_t flash_may(uint32_t need_erase, uint32_t prog)
     return budget_avail(&flash_bright, ms_now) ? FM_BRIGHT : 0u;
 }
 
+/* (0.6.9) the status: why a pending write still waits (cli.h cli_status_t save_why; the main reasons, in order) */
+static uint8_t save_why(void)
+{
+    if (!(settings_dirty | cal_save_pend | scene_pend | fx_clear_pend | (fx_pend == 2u))) {
+        return 0;
+    }
+    if (hw_vdd_low()) {
+        return 5;
+    }
+    if (flash_err && ms_now - flash_err_ms < (FLASH_RETRY_MS << (flash_err - 1u))) {
+        return 4;
+    }
+    if ((settings_dirty && ms_now - changed_ms < SAVE_DEBOUNCE_MS) ||
+        (scene_pend && ms_now - scene_changed_ms < SCENE_SAVE_MS)) {
+        return 1;
+    }
+    return (ms_now - flash_hi_ms < FLASH_LOW_MS && !budget_avail(&flash_bright, ms_now)) ? 2u : 3u;
+}
+
 /* every ms while low (and once at power-up): one erase that is due, so a later write needs none. Not before
  * LIFE_PREP_S after power-up (a steady supply) except at power-up itself (before the outputs start: 0.6.3's
  * lifetime erase there keeps wall-switched boards going). */
@@ -678,7 +710,16 @@ static void vsense_service(void)
     hw_vsense_take(sum2, &n);
     vsense_add(&vs_sup, sum2[0], n);
     vsense_add(&vs_aux, sum2[1], n);
+    i = vdip.in_dip;
     vdip_ms(&vdip, ms_now, up_s, sum2[0], n, is.i_ms);
+    if (i && !vdip.in_dip) {               /* (0.6.9, B2) the fault memory: a dip ended, the last dip */
+        const vdip_ev_t *d = vdip_event(&vdip, 0);
+        if (d != 0 && d->ref_x != 0u) {
+            en.lt.dip_pct = (uint8_t)((uint32_t)d->min_x * 100u / d->ref_x);
+            en.lt.dip_cs = (uint8_t)(d->dur_ms / 10u > 255u ? 255u : d->dur_ms / 10u);
+            en.lt.dip_a = (uint8_t)(d->i_ma / 100u > 255u ? 255u : d->i_ma / 100u);
+        }
+    }
     vdip_z(&vdip, &vs_sup, (uint32_t)is.i_ms);            /* the supply / cable impedance (0.6.5; i_ms >= 0) */
     for (i = 0; i < 5u; i++) {
         uint32_t o = out_now[i];
@@ -713,6 +754,11 @@ static void vsense_service(void)
 
 /* once a second, in the main loop: read the conversion started a second ago, start the next one. Not while a current
  * calibration runs (its 30 ms windows read PA7 alone; the injected group would hold the PA7 results for 84 us). */
+#define TEMP_HOT_C10      950               /* (0.6.9, B6) the warning: the die at 95.0 C */
+#define TEMP_HOT_HYST_C10 100               /* ... until it is back under 85.0 C */
+static uint8_t too_hot;
+static uint8_t hl_seen;                    /* (0.6.9, B3) the HEALTH flags a second ago */
+
 static void temp_service(void)
 {
     uint32_t ts2 = 0, vref2 = 0;
@@ -728,11 +774,28 @@ static void temp_service(void)
     }
     {
         isense_cal_t c;
+        uint8_t up;
         (void)isense_cal_get(&is, &c);
         health_run(&hl, &is, &c);          /* the running model and the dark current against the stored test */
+        up = (uint8_t)(hl.flags & ~hl_seen & (ULTRA_HE_F_DARK | HEALTH_F_CAL));
+        hl_seen = hl.flags;
+        if (up != 0u) {                    /* (0.6.9, B3) D9's code when either rises: a FET stuck on, a test due */
+            ack_start(&ack, ACK_P_FAULT, (up & ULTRA_HE_F_DARK) ? 6u : HEALTH_CODE_CAL_SUGGEST);
+        }
     }
     if (temp_started) {
+        uint8_t hot;
         mcutemp_sample(&mt, ts2, vref2);
+        /* (0.6.9, B6) a warning only (nothing dims): the die over TEMP_HOT_C10 (its absolute offset varies per chip,
+         * core/mcutemp.h), back under it by TEMP_HOT_HYST_C10: the event and D9's code once, the HEALTH flag and
+         * STATUS's reason meanwhile */
+        hot = (uint8_t)(mt.valid && mt.c10 >= TEMP_HOT_C10 - (too_hot ? TEMP_HOT_HYST_C10 : 0));
+        if (hot && !too_hot) {
+            ev_add(EVL_HOT, 0);
+            ack_start(&ack, ACK_P_FAULT, HEALTH_CODE_HOT);
+        }
+        too_hot = hot;
+        hl.flags = (uint8_t)((hl.flags & ~ULTRA_HE_F_HOT) | (hot ? ULTRA_HE_F_HOT : 0u));
         if (mt.valid && mt.c10 > temp_peak) {
             temp_peak = mt.c10;
             temp_peak_s = up_s;
@@ -759,7 +822,7 @@ static void ultra_overlay(settings_t *e)
         { ULTRA_CFG_DIM_FLOOR, offsetof(settings_t, dim_floor), 0, 2 },
         { ULTRA_CFG_MIN_PULSE, offsetof(settings_t, min_pulse), 5, 100 },
         { ULTRA_CFG_STAGGER, offsetof(settings_t, stagger), 0, STAGGER_MODES - 1 },
-        { ULTRA_CFG_LOSS, offsetof(settings_t, signal_loss), 0, 2 },
+        { ULTRA_CFG_LOSS, offsetof(settings_t, signal_loss), 0, 3 },
         { ULTRA_CFG_FEEDBACK, offsetof(settings_t, feedback_ch), 0, 2 },
     };
     const uint16_t *c = ul.cfg;
@@ -849,6 +912,16 @@ static void isense_service(void)
     isense_take(&is, &sum, &n, &peak);
     __enable_irq();
     ev = PERF_CALL(PERF_ISENSE, isense_ms(&is, sum, n, peak));
+#if BOARD_RETURN
+    if (is.i_avg > (int32_t)rc_peak_ma) {
+        rc_peak_ma = (uint16_t)(is.i_avg > 65535 ? 65535 : is.i_avg);   /* (0.6.9, ENERGY 17) for the hub: the
+                                                                            port's PTCs between its polls */
+    }
+#endif
+    if (vdip.in_dip) {
+        ev |= isense_cal_abort(&is, ISENSE_CAL_F_SUPPLY);   /* (0.6.9, A2) a supply dip: a test's currents aren't the
+                                                               load's (none running: nothing) */
+    }
     if (ev & ISENSE_EV_TRIP) {
         pwm_force_off(1);                  /* overload the limit could not hold */
     }
@@ -878,6 +951,14 @@ static void isense_service(void)
             ack_start(&ack, ACK_P_FAULT, code);   /* D9: the first abnormal channel, or 6 = current while dark */
         }
     }
+    if (ev & ISENSE_EV_LATCH) {
+        ev_add(EVL_LATCH, is.trip_cause == ISENSE_TRIP_FAST ? is.peak_ma : (uint32_t)(is.i_ms > 0 ? is.i_ms : 0));
+    }                                      /* (0.6.9, B7) the retries used up: off until a new command or frame value */
+    if (ev & ISENSE_EV_CAL_FAIL) {         /* (0.6.9, A2) the test stopped (is.cal_fail: why): the stored test and the
+                                              model as before; logged with the current then, D9 code 8 */
+        ev_add(EVL_CAL_FAIL, (uint32_t)(is.i_ms > 0 ? is.i_ms : 0));
+        ack_start(&ack, ACK_P_FAULT, HEALTH_CODE_CAL_FAIL);
+    }
 }
 
 static void apply_settings(void)
@@ -905,6 +986,8 @@ static void apply_settings(void)
         st_force = 1;
     }
     limit_update();                          /* CONFIG 21 / 11-15 */
+    is.retry_max = (uint8_t)(sext.reserved[2] ^ RETRY_N_X);   /* (0.6.9, B7) the stored retry policy */
+    is.retry_s = (uint8_t)(sext.reserved[3] ^ RETRY_S_X);
     built_ok = 0;                            /* new period / options: every table again */
     outputs_dirty = 1;
 }
@@ -955,7 +1038,8 @@ static void outputs_update(uint8_t ack_on)
         tj_outputs(&tj, ms_now, v);        /* test jig: the fade over the five channels; data doesn't change it */
     } else
 #endif
-    if (ack.active && !ack.led_only) {
+    if (ack.active && !ack.led_only && eff.feedback_ch != 2u) {   /* (0.6.9, A1) feedback off: D9 only, the outputs
+                                                                    keep rendering */
         uint16_t lvl = ack_on ? 16384u : 0u;          /* 25 % */
         for (i = 0; i < 5u; i++) {
             v[i] = (eff.feedback_ch == 1u || (eff.feedback_ch == 0u && i == CH_R)) ? lvl : 0u;
@@ -1017,6 +1101,23 @@ static cfg_event_t scene_command(uint8_t cmd, uint8_t arg)
     return CFG_ACK;
 }
 
+/* (0.6.9, B7) the trips' retry policy (config frames 0x15 / 0x16, Ultra CONFIG 24): stored in the settings extension's
+ * spare bytes, coded so that an erased byte (0xFF) is the default: 10 retries, 1 s apart */
+static uint8_t retry_set(uint32_t count, uint32_t secs)
+{
+    uint8_t n = (uint8_t)(count ^ RETRY_N_X), t = (uint8_t)(secs ^ RETRY_S_X);
+    if (n == sext.reserved[2] && t == sext.reserved[3]) {
+        return 0;
+    }
+    sext.reserved[2] = n;
+    sext.reserved[3] = t;
+    is.retry_max = (uint8_t)count;
+    is.retry_s = (uint8_t)secs;
+    settings_dirty = 1;
+    changed_ms = ms_now;
+    return 1;
+}
+
 /* soft start on / off (console, config frame, Ultra CONFIG 23): stored with the settings; 1 = changed */
 static uint8_t soft_start_set(uint32_t on)
 {
@@ -1030,7 +1131,6 @@ static uint8_t soft_start_set(uint32_t on)
     return 1;
 }
 
-/* follow-up of an applied command: blink feedback, new settings live, save debounced */
 static cfg_result_t handle_result(cfg_result_t r)
 {
     if (r.event == CFG_ACK && (r.cmd == CMD_ISENSE_LIMIT || r.cmd == CMD_ISENSE_CAL)) {
@@ -1054,6 +1154,13 @@ static cfg_result_t handle_result(cfg_result_t r)
         settings_dirty = 1;
         changed_ms = ms_now;
         stat.config_frames++;
+        return r;
+    }
+    if (r.event == CFG_ACK && (r.cmd == CMD_RETRY_COUNT || r.cmd == CMD_RETRY_S)) {
+        r.event = retry_set(r.cmd == CMD_RETRY_COUNT ? r.arg : is.retry_max, r.cmd == CMD_RETRY_S ? r.arg : is.retry_s)
+                  ? CFG_ACK : CFG_SAME;
+        ack_start(&ack, r.event == CFG_ACK ? ACK_P_ACK : ACK_P_SAME, 0);
+        stat.config_frames += r.event == CFG_ACK;
         return r;
     }
     if (r.event == CFG_ACK && r.cmd == CMD_SOFT_START) {
@@ -1400,6 +1507,7 @@ static void handle_slot(const slot_t *slot, proto_t p)
     cfg_result_t r = config_process(&rx, &set, slot);
     uint16_t tgt[5];
     uint8_t i, ramp;
+    uint32_t d;
 
     last_data_ms = ms_now;
     signal_lost = 0;
@@ -1417,6 +1525,12 @@ static void handle_slot(const slot_t *slot, proto_t p)
             tgt[i] = slot->ch[i];          /* WS2915 gain header ignored (wiki: WS modes) */
         }
         ramp = (uint8_t)(set.smoothing == 2u);
+    }
+    for (i = 0, d = 0; i < 5u; i++) {
+        d |= (uint32_t)(tgt[i] ^ sm.to[i]);
+    }
+    if (d != 0u) {
+        isense_rearm(&is);                 /* (0.6.9, B7) a new frame value: retry if the retries were used up */
     }
     smooth_frame(&sm, tgt, tick_now, ramp);
     scene_takeover(&srun, 0x1Fu, ms_now);  /* valid data: the power-on scene fades over to it */
@@ -1445,6 +1559,9 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
         ultra_first_ms = ms_now;
     }
     ev = ultra_apply_slot(&ul, slot, hdr_tick);       /* frx_capture checked its CRC */
+    if (ev & ULTRA_EV_STATE) {
+        isense_rearm(&is);                 /* (0.6.9, B7) a new command: retry if the retries were used up */
+    }
     if (ev & (ULTRA_EV_STATE | ULTRA_EV_DEF)) {
         /* the power-on scene fades over light by light: a light's channels once it has its state (SET) and its
          * definition (LIGHT_DEF, which a refresh may bring after the SET); an EFFECT runs on the state, and ESPHome
@@ -1490,6 +1607,9 @@ static void handle_ultra(uint32_t host_us, uint32_t hdr_tick, const uint8_t *slo
         }
         if ((ul.cfg_changed & (1u << ULTRA_CFG_SOFT_START)) && ul.cfg[ULTRA_CFG_SOFT_START] <= 1u) {
             (void)soft_start_set(ul.cfg[ULTRA_CFG_SOFT_START]);   /* persisted, like 22 */
+        }
+        if (ul.cfg_changed & (1u << ULTRA_CFG_RETRY)) {
+            (void)retry_set(ul.cfg[ULTRA_CFG_RETRY] & 0xFFu, ul.cfg[ULTRA_CFG_RETRY] >> 8);   /* (0.6.9) persisted */
         }
         ul.cfg_changed = 0;
         apply_settings();                  /* host-managed: live at once, no blink, not saved (except 22, 23) */
@@ -1538,6 +1658,15 @@ static void gate_close_now(void)
 }
 
 /* ------------------------------------------------------------------------------- firmware update (app side) */
+/* (0.6.9, Quindor) an update session's SAME / NACK on D9 only, whatever the feedback setting: a host repeats a session
+ * (ESPHome's auto_retry) and a board that has it already, or can't take it, keeps its light. A real update's ACK (the
+ * new version, upd_boot) keeps the strip pattern; the config / console SAME / NACK are unchanged. */
+static void upd_ack_d9(ack_kind_t kind)
+{
+    ack_start(&ack, kind, 0);
+    ack.led_only = 1;
+}
+
 static void upd_action(uint32_t a)
 {
     switch (a) {
@@ -1572,10 +1701,10 @@ static void upd_action(uint32_t a)
 #endif
         break;
     case UPD_APP_SHOW_SAME:
-        ack_start(&ack, ACK_P_SAME, 0);    /* the session's image is already installed */
+        upd_ack_d9(ACK_P_SAME);            /* the session's image is already installed */
         break;
     case UPD_APP_SHOW_REJECTED:
-        ack_start(&ack, ACK_P_NACK, 0);    /* not for this board, or older without FORCE */
+        upd_ack_d9(ACK_P_NACK);            /* not for this board, or older without FORCE */
         break;
     default:
         break;
@@ -1606,16 +1735,46 @@ static void upd_capture(void)
  * were, then a reset loads them (RM 32.6: at a system reset). Never RDPR: never read protection. A power cut between
  * the option erase and the rewrite leaves RDPR erased (read-protected): the jig erases and programs again. VDD below
  * the PVD: the next boot. Before the outputs start (they are dark until data anyway); a failed write: the next boot */
+/* (0.6.9, review round 7 R7-06) the option bytes come from the boot's snapshot (main, before hw_init: hw.c
+ * hw_option_bytes reads them at a safe flash clock, each against its inverse, twice): one not to be trusted writes
+ * nothing (the event, D9 code 9). The rewrite leaves its CRC in prot_chk (.noinit) for the boot after its reset,
+ * which checks what the chip loaded: the sectors protected, RDPR 0xA5, every byte as written (the event either way;
+ * not as written: D9 code 9) */
+static uint16_t ob_snap[8];
+static uint8_t ob_ok;
+static uint32_t prot_chk __attribute__((section(".noinit.prot")));
+#define PROT_MAGIC 0x50520000u                           /* "PR" << 16 | the written bytes' CRC-16 */
+
 static void boot_protect(void)
 {
-    uint16_t ob[8];
-    if (!hw_boot_open() || hw_vdd_low() || !upd.info.desc_ok || hw_option_bytes(ob) != 0xA5u) {
+    uint32_t chk = prot_chk;
+    prot_chk = 0;
+    if (stat.bc.magic == BC_MAGIC && (chk & 0xFFFF0000u) == PROT_MAGIC) {   /* (a reset, not a power-up: RAM kept) */
+        chk = ob_ok && !hw_boot_open() && ob_snap[0] == 0xA5u &&
+              (chk & 0xFFFFu) == crc16_ccitt((const uint8_t *)ob_snap, sizeof ob_snap);
+        ev_add(chk ? EVL_PROT_OK : EVL_PROT_FAIL, 0);
+        if (!chk) {
+            ack_start(&ack, ACK_P_FAULT, HEALTH_CODE_PROTECT);
+        }
         return;
     }
-    ob[4] &= 0xFCu;                                      /* WRPR0: sectors 0 and 1 */
-    if (flash_op(HW_OB_ADDR, ob, 8u, HW_OB_ADDR) == FLASH_OK) {
+    if (!hw_boot_open() || hw_vdd_low() || !upd.info.desc_ok) {
+        return;
+    }
+    if (!ob_ok) {
+        ev_add(EVL_OB_BAD, 0);                           /* no erase on a snapshot not to be trusted */
+        ack_start(&ack, ACK_P_FAULT, HEALTH_CODE_PROTECT);
+        return;
+    }
+    if (ob_snap[0] != 0xA5u) {
+        return;                                          /* read-protected: never touched */
+    }
+    ob_snap[4] &= 0xFCu;                                 /* WRPR0: sectors 0 and 1 */
+    prot_chk = PROT_MAGIC | crc16_ccitt((const uint8_t *)ob_snap, sizeof ob_snap);
+    if (flash_op(HW_OB_ADDR, ob_snap, 8u, HW_OB_ADDR) == FLASH_OK) {
         NVIC_SystemReset();
     }
+    prot_chk = 0;
 }
 #endif
 
@@ -1634,11 +1793,11 @@ static void upd_boot(void)
             ack_start(&ack, ACK_P_ACK, (uint8_t)((minor > 29u ? 29u : minor) + 1u));   /* ACK + the minor version */
             break;
         }
-        case UPD_RES_SAME:
-            ack_start(&ack, ACK_P_SAME, 0);
+        case UPD_RES_SAME:                 /* (the bootloader's own check, after a TAKE: D9 only as above) */
+            upd_ack_d9(ACK_P_SAME);
             break;
         case UPD_RES_REJECTED:
-            ack_start(&ack, ACK_P_NACK, 0);
+            upd_ack_d9(ACK_P_NACK);
             break;
         default:
             break;
@@ -1697,16 +1856,12 @@ static void upd_service(void)
                      ULTRA_FEAT_CALIBRATION | ULTRA_FEAT_DARK_HOLD | (UPD_APP ? ULTRA_FEAT_FW_UPDATE : 0u) | \
                      ULTRA_FEAT_BOOT_PROTOCOL | ULTRA_FEAT_STAGGER_ADAPTIVE | ULTRA_FEAT_MCU_TEMP | \
                      ULTRA_FEAT_VERSION_BLINK | ULTRA_FEAT_POWER_EVENTS | ULTRA_FEAT_SUPPLY_DIPS | ULTRA_FEAT_HEALTH | \
-                     ULTRA_FEAT_ENERGY | ULTRA_FEAT_SOFT_START | ULTRA_FEAT_SCENE_EFFECT)
+                     ULTRA_FEAT_ENERGY | ULTRA_FEAT_SOFT_START | ULTRA_FEAT_SCENE_EFFECT | ULTRA_FEAT_LIFETIME | \
+                     ULTRA_FEAT_DIAG | ULTRA_FEAT_RETRY | ULTRA_FEAT_LOSS_SCENE)
 /* 0.2.4 hardware capabilities: answers (0x01), relays the boards behind it (0x02), the bus voltage (0x04), the input
  * current (0x08); no board NTC (0x10). (0.6.8: the proposal's 0x20, a second voltage input, is gone from 0.2.4: no
  * page carries its value) */
 #define RC_HW_CAPS  (ULTRA_HWCAP_RETURN | ULTRA_HWCAP_RELAY | ULTRA_HWCAP_VBUS | ULTRA_HWCAP_CURRENT)
-#ifndef RC_PAGES_024
-#define RC_PAGES_024 1                     /* the pages only the 0.2.4 proposal defines: OUTPUTS, ACKS, ERRORS (0: they
-                                              answer ULTRA_PAGE_UNSUPPORTED; ~0.6 KB less). 0.6.6: the receiver's
-                                              build has 0 (tools/build_target.sh) until the 0.2.4 review */
-#endif
 #define RC_ST_TEMP_BOARD 11u               /* 0.2.4 STATUS offsets (ULTRA_ST_* has 8, 9, 15) */
 #define RC_ST_VBUS       13u
 #define RC_ST_CURRENT    17u
@@ -1728,9 +1883,23 @@ static uint16_t rc_cfg_crc(void)
     return crc16_ccitt(b, n);
 }
 
-#if RC_PAGES_024
 static const uint8_t rc_u16[11] = { 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2 };   /* (rc_pack: u16 fields) */
-#endif
+
+/* (0.6.9, protocol 0.2.5) STATUS 8 bits 4-7: why the light isn't as the host set it, the first that applies */
+static uint32_t light_why(void)
+{
+    const vdip_ev_t *d = vdip_event(&vdip, 0);
+    return is.tripped != ISENSE_TRIP_NONE ? (is.latched ? ULTRA_ST_WHY_RETRIES_OUT : is.tripped == ISENSE_TRIP_FAST ?
+                                             ULTRA_ST_WHY_SHORT : ULTRA_ST_WHY_OVERLOAD)
+         : TJ_ACTIVE() ? ULTRA_ST_WHY_TEST
+         : is.cal_step != 0u ? ULTRA_ST_WHY_CALIBRATING
+         : too_hot ? ULTRA_ST_WHY_HOT
+         : (vdip.in_dip || (d != 0 && up_s - d->t_s < ULTRA_ST_DIP_RECENT_S)) ? ULTRA_ST_WHY_SUPPLY
+         : signal_lost ? ULTRA_ST_WHY_SIGNAL_LOSS
+         : ss.state == SS_RUN ? ULTRA_ST_WHY_SOFT_START
+         : dk.active ? ULTRA_ST_WHY_DARK_HOLD
+         : ack.active ? ULTRA_ST_WHY_PATTERN : ULTRA_ST_WHY_NONE;
+}
 
 /* the page's DATA into d (24 bytes, zero before); returns the PAGE to answer (ULTRA_PAGE_UNSUPPORTED: not here) */
 static MEASURED uint8_t rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
@@ -1744,7 +1913,7 @@ static MEASURED uint8_t rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
         v[1] = ((stat.hw_id != 0u ? stat.hw_id : BOARD) << 4) | (stat.hw_rev & 0x0Fu);
         v[2] = up_s;
         v[3] = stat.reset_flags >> 26;                   /* RSTSCKR 26-31: pin, power, software, IWDG, WWDG, low power */
-        v[4] = pwrev_state(&pw);                         /* ULTRA_ST_STATE */
+        v[4] = pwrev_state(&pw) | light_why() << ULTRA_ST_WHY_SHIFT;   /* ULTRA_ST_STATE (0.2.5: the reason) */
         v[5] = (uint16_t)mt.c10;                         /* ULTRA_ST_MCU_TEMP */
         v[6] = ULTRA_ST_NA;                              /* RC_ST_TEMP_BOARD: no sensor */
         v[7] = vs_sup.valid ? vs_sup.mv / 10u : 0xFFFFu; /* RC_ST_VBUS */
@@ -1757,7 +1926,6 @@ static MEASURED uint8_t rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
         rc_pack(d, v, fl, 14);
         break;
     }
-#if RC_PAGES_024
     case ULTRA_PAGE_OUTPUTS:
         for (i = 0; i < 5u; i++) {
             v[i] = out_now[i];
@@ -1809,7 +1977,6 @@ static MEASURED uint8_t rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
         v[10] = stack_used();
         rc_pack(d, v, rc_u16, 11);
         break;
-#endif
     case ULTRA_PAGE_IDENTITY: {
         static const uint8_t fl[5] = { 4, 1, 1, 2, 4 };
         for (i = 0; i < 12u; i++) {
@@ -1826,7 +1993,8 @@ static MEASURED uint8_t rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
     case ULTRA_PAGE_CALIBRATION: {
         static const uint8_t fl[13] = { 1, 1, 2, 3, 2, 2, 2, 2, 2, 2, 2, 2, 1 };
         v[0] = isense_cal_get(&is, &c) ? c.levels : 0u;
-        v[1] = is.calibrated ? 2u : isense_model_ok(&is) ? 1u : 0u;
+        v[1] = (is.calibrated ? 2u : isense_model_ok(&is) ? 1u : 0u) | (uint32_t)is.cal_fail << 4;   /* (0.2.5: the
+                                                           last test's end) */
         v[2] = cal_cnt;
         v[3] = cal_done_s != 0u ? up_s + 1u - cal_done_s : 0xFFFFFFu;
         if (cal_done_s != 0u && v[3] > 0xFFFFFEu) {
@@ -1872,6 +2040,67 @@ static MEASURED uint8_t rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
         break;
     case ULTRA_PAGE_ENERGY:
         energy_page(&en, up_s, vs_sup.mv / 10u * (uint32_t)(is.i_avg > 0 ? is.i_avg : 0) / 100u, d);
+        ultra_put16(d + ULTRA_EN_VB, vs_aux.valid ? vs_aux.mv / 10u : 0xFFFFu);   /* (0.2.5) after the buck */
+        ultra_put16(d + ULTRA_EN_PEAK_MA, rc_peak_ma);
+        rc_peak_ma = 0;
+        break;
+    case ULTRA_PAGE_LIFETIME: {                          /* (0.2.5, ULTRA_LT_*) the record as it is now */
+        static const uint8_t fl[11] = { 3, 3, 3, 2, 2, 3, 1, 1, 1, 2, 3 };
+        const life_rec_t *r = &en.lt;
+        v[0] = r->on_s / 360u;                           /* 0.1 h */
+        v[1] = r->lit_s / 360u;
+        v[2] = r->ups;
+        v[3] = r->trips[0];                              /* overload, short */
+        v[4] = r->trips[1];
+        v[5] = r->dips;
+        v[6] = r->peak_t;
+        v[7] = r->peak_a;
+        v[8] = r->wd;
+        v[9] = r->updates;
+        v[10] = r->writes;
+        rc_pack(d, v, fl, 11);
+        break;
+    }
+    case ULTRA_PAGE_DIAG:                                /* (0.2.5, ULTRA_DG_*) two parts */
+        if (arg[0] > 1u) {
+            return ULTRA_PAGE_UNSUPPORTED;
+        }
+        if (arg[0] == 0u) {                              /* the running board */
+            static const uint8_t fl[13] = { 1, 1, 2, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1 };
+            v[0] = stat.reset_flags >> 26;
+            v[1] = stat.bc.magic == BC_MAGIC ? stat.bc.cause : 0xFFu;
+            v[2] = stat.bc.pc;
+            v[3] = stat.bc.up_s > 0xFFFFFFu ? 0xFFFFFFu : stat.bc.up_s;
+            v[4] = stat.cpu_pm;
+            v[5] = cpu_peak;
+            for (i = 0; i < 3u; i++) {
+                j = ovr[i];
+                v[6u + i] = j > 0xFFFFu ? 0xFFFFu : j;
+            }
+            j = vdip_z_mohm(&vdip);
+            v[9] = j > 0xFFFFu ? 0xFFFFu : j;
+            v[10] = flash_err;
+            v[11] = settings_dirty | (cal_save_pend != 0u) << 1 | (uint32_t)scene_pend << 2 | (uint32_t)en.due << 3 |
+                    (fx_pend == 2u || fx_clear_pend) << 4;
+            v[12] = save_why();
+            rc_pack(d, v, fl, 13);
+            d[22] = d[23] = 0xFFu;                       /* the C10 load: not measured (MON_EXTRA 0) */
+        } else {                                         /* the fault memory (core/energy.h), the calibration trend */
+            static const uint8_t fl[7] = { 1, 2, 1, 1, 1, 1, 1 };
+            const life_rec_t *r = &en.lt;
+            v[0] = r->trip;
+            v[1] = r->trip_h;
+            v[2] = r->dip_pct;
+            v[3] = r->dip_cs;
+            v[4] = r->dip_a;
+            v[5] = r->rst;
+            v[6] = r->rst_h;
+            rc_pack(d, v, fl, 7);
+            for (i = 8; i < 13u; i++) {
+                d[i] = 0x80u;                            /* the trend: not known (MON_EXTRA 0: no history) */
+            }
+            d[13] = d[14] = 0xFFu;
+        }
         break;
     default:
         return ULTRA_PAGE_UNSUPPORTED;                   /* FW_UPDATE (reserved), pages this firmware doesn't know */
@@ -2092,6 +2321,26 @@ static void stagger_adapt(void)
     }
 }
 
+/* (0.6.9, B10) signal loss "scene": the power-on scene and effects as at power-up, faded in from the outputs now; the
+ * host's next slot starts the take-over (per light at its SET, or SCENE_TAKEOVER_MS after it). 0: nothing stored */
+static uint8_t loss_scene(void)
+{
+    uint8_t ch, fx = 0;
+    if ((scene_want.mask & 0x1Fu) == 0u && fx_mask == 0u) {
+        return 0;                          /* (the scene as set: the stored one, or one to be stored at a low moment) */
+    }
+    ultra_scene_fx_start(&ul, fx_mask, tick_now);
+    for (ch = 0; ch < ULTRA_LIGHTS; ch++) {
+        if (fx_mask & (1u << ch)) {
+            fx |= ul.light[ch].mask;
+        }
+    }
+    fx_ch = fx;
+    scene_return(&srun, &scene_want, fx, out_now, ms_now);
+    ultra_seen = 0;
+    return 1;
+}
+
 static void signal_loss_check(void)
 {
     static const uint16_t off[5] = { 0, 0, 0, 0, 0 };
@@ -2105,7 +2354,11 @@ static void signal_loss_check(void)
     if (ms_now - last_data_ms < timeout) {
         return;
     }
-    if (eff.signal_loss == 0u) {
+    if (eff.signal_loss == 3u && !signal_lost) {
+        signal_lost = 1;
+        outputs_dirty = loss_scene();      /* (0.6.9, B10) the power-on scene / effect; nothing stored: hold */
+    }
+    if (eff.signal_loss == 0u || eff.signal_loss == 3u) {
         /* mode 0 = hold (Ultra: effects keep running), like a WS2805. The host's SET applies again when it is back
          * (every ms of the gap: no slot comes meanwhile): its SEQ may have gone round by whole 256s (a streamed
          * effect, 4.4 s at 58 frames a second), and an 8-bit repeat would leave the light in its old state until the
@@ -2159,6 +2412,11 @@ static void power_service(uint8_t ack_on)
             ev_add(EVL_LIMIT + k, in.trip_ma);   /* (the board current; a short's: its peak = pwrev's) */
         }
     }
+    if (pw.ev & (ULTRA_PW_EV_OVERLOAD | ULTRA_PW_EV_SHORT)) {   /* (0.6.9, B2) the fault memory: the last trip */
+        uint32_t a = in.trip_ma / 500u;
+        en.lt.trip = (uint8_t)((pw.ev & ULTRA_PW_EV_SHORT ? 1u : 2u) | (a > 63u ? 63u : a) << 2);
+        en.lt.trip_h = (uint16_t)(en.lt.lit_s / 3600u > 65535u ? 65535u : en.lt.lit_s / 3600u);
+    }
     ocled_update(&ocl, ms_now, up_s, in.limiting, in.trip_cause);
     lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
 #if BOARD_TESTJIG
@@ -2211,7 +2469,6 @@ static void testjig_service(void)
  * second since the last status (permille). Once a second: the second that ended into stat.cpu_pm. */
 #define POLL_CYC (144000000u / POLL_HZ)   /* HCLK cycles per poll tick: SysTick's period (hw.c) */
 static uint32_t cpu_idle, cpu_t0;
-static uint16_t cpu_peak;
 
 static void cpu_second(void)
 {
@@ -2249,6 +2506,10 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
         stat.i_tripped = (uint8_t)(is.tripped != ISENSE_TRIP_NONE);
         stat.i_trip_cause = is.trip_cause != ISENSE_TRIP_NONE ? is.trip_cause : stat.i_trip_cause;
         stat.i_cal = (uint8_t)(is.cal_step != 0u);
+        stat.cal_fail = is.cal_fail;
+        stat.retry_n = is.retry_max;
+        stat.retry_s = is.retry_s;
+        stat.save_why = save_why();
         stat.i_model = (uint8_t)(is.calibrated ? 2u : (isense_model_ok(&is) ? 1u : 0u));
         for (i = 0; i < 5u; i++) {
             stat.i_ch_ma[i] = is.ch_ma[i];
@@ -2285,12 +2546,14 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
 
 }
 
+#if CONSOLE_FULL || STREAM_STATUS                /* (0.6.9: the receiver's release console has no status) */
 static void status_begin(void)
 {
     stat.cpu_peak = cpu_peak;              /* the busiest second since the last status; again from the last one */
     cpu_peak = stat.cpu_pm;
     vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
 }
+#endif
 
 /* (0.6.7) the records at power-up: the settings, the power-on scene, the engine with the stored power-on effects, the
  * calibration (into core_scratch until isense_setup: returns cal_load's result, 0 = one loaded), the calibration
@@ -2346,6 +2609,7 @@ int main(void)
 #endif
 
     stack_paint();                         /* the high-water mark in `status` */
+    evlog_boot(&evl, bcrumb.magic == BC_MAGIC, bcrumb.up_s);   /* (0.6.9, B2) the last run's events kept, or anew */
     stat.bc = bcrumb;                      /* (0.6.5, D1) the last run's breadcrumbs (before the tick runs; cli.c shows
                                               them unless the reset flags say power-on), then this run's */
     bcrumb.magic = BC_MAGIC;
@@ -2356,6 +2620,9 @@ int main(void)
     cal_ok = records_load();
     life_found = life_load(&en.lt);        /* (energy_init takes it from en.lt below) */
     hw_records_window(0);
+#if UPD_APP
+    ob_ok = (uint8_t)hw_option_bytes(ob_snap);   /* (0.6.9, R7-06) at a safe flash clock: before hw_init (hw.c) */
+#endif
 #if MON_EXTRA
     stat.fl_rej = flash_rejected() | (uint32_t)ultra_fx_rejected << 24;   /* (0.6.5, D5) the records the loaders
                                               rejected, the effect heads the store lists that did not load */
@@ -2409,6 +2676,12 @@ int main(void)
 #endif
     fwver_format(fw_version, fw_version_text);
     energy_init(&en, life_found, ms_now, fw_version, stat.reset_flags & RCC_IWDGRSTF);
+    if (stat.reset_flags & RCC_IWDGRSTF) { /* (0.6.9, B2) the fault memory: the last abnormal reset (an exception ends
+                                              in the watchdog's), with the breadcrumbs of that run */
+        en.lt.rst = (uint8_t)(stat.bc.magic == BC_MAGIC && stat.bc.cause != 0u ? 2u | (stat.bc.cause & 63u) << 2 : 1u);
+        en.lt.rst_h = (uint8_t)(stat.bc.magic == BC_MAGIC ? (stat.bc.up_s / 3600u > 255u ? 255u : stat.bc.up_s / 3600u)
+                                                         : 0u);
+    }
     stat.version = fw_version != 0u ? fw_version_text : FW_VERSION " (development build)";
     stat.bl_version = upd.info.bl_version;
     stat.uid = HW_UID;                     /* (the test jig's line) */
@@ -2436,6 +2709,7 @@ int main(void)
     cli.status_begin = status_begin;
 #endif
     cli.set = &set;
+    cli.eff = &eff;
     cli.scene = &scene_want;
     cli.st = &stat;
     stat.dip = &vdip;
@@ -2547,18 +2821,24 @@ int main(void)
             if (TJ_ACTIVE()) {
                 watch_t = ms_now;          /* (paused) */
             } else if (room >= CLI_PART_ROOM) {
+#if STREAM_STATUS
                 if (cli.st_part) {
                     stat.uptime_s = up_s;  /* (the ages against now: the logs are read live, as in the full console) */
                     (void)cli_poll(&cli);
-                } else if (ms_now - watch_t >= 1000u) {
+                } else
+#endif
+                if (ms_now - watch_t >= 1000u) {
                     watch_t = ms_now;
                     status_snapshot();
+#if STREAM_STATUS
                     if (status_first ? up_s - status_s >= STREAM_STATUS_S : (mt.valid || up_s >= STREAM_BOOT_S)) {
                         status_first = 1;
                         status_s = up_s;
                         status_begin();    /* (the extrema: since the last status) */
                         cli.st_part = 1;
-                    } else {
+                    } else
+#endif
+                    {
                         cli_watch(&cli);
                     }
                 }
@@ -2673,7 +2953,7 @@ int main(void)
                 }
             }
 #endif
-            if (srun.fading || ss.state == SS_RUN) {
+            if (srun.fading || srun.in || ss.state == SS_RUN) {
                 outputs_dirty = 1;         /* power-on scene cross-fade, soft start (offset, ramp): every ms */
             }
         }

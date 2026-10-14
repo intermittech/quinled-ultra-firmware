@@ -44,7 +44,7 @@ int settings_sanitize(settings_t *s)
         { offsetof(settings_t, stagger), 0, STAGGER_MODES - 1u },
         { offsetof(settings_t, dim_floor), 0, 2 },
         { offsetof(settings_t, min_pulse), 5, 100 },
-        { offsetof(settings_t, signal_loss), 0, 2 },
+        { offsetof(settings_t, signal_loss), 0, 3 },   /* (0.6.9, B10: 3 = scene) */
         { offsetof(settings_t, smoothing), 0, 2 },
         { offsetof(settings_t, gamma), 0, 2 },
         { offsetof(settings_t, last_proto), 0, PROTO_ULTRA },
@@ -129,7 +129,7 @@ static const uint8_t cmd_field[CMD_MIN_PULSE][4] = {   /* [cmd - 1]: offset (0xF
     { offsetof(settings_t, feedback_ch), 0, 2, 1 },
     { offsetof(settings_t, stagger), 0, STAGGER_MODES - 1u, 1 },
     { offsetof(settings_t, dim_floor), 0, 2, 1 },
-    { offsetof(settings_t, signal_loss), 0, 2, 1 },
+    { offsetof(settings_t, signal_loss), 0, 3, 1 },
     { 0xFF, 0, 0, 0 },                                /* CMD_IDENTIFY */
     { 0xFF, 0, 0, 0 },                                /* CMD_FACTORY_RESET */
     { offsetof(settings_t, smoothing), 0, 2, 1 },
@@ -168,6 +168,10 @@ cfg_result_t config_apply(config_rx_t *r, settings_t *s, uint8_t cmd, uint8_t ar
         res.event = CFG_ACK;                          /* ACK only, no value code */
         return res;
     case CMD_ISENSE_LIMIT:                            /* main.c stores it (settings extension) */
+        res.event = CFG_ACK;                          /* ACK only, no value code */
+        return res;
+    case CMD_RETRY_COUNT:                             /* (0.6.9, B7) main.c stores them (settings extension) */
+    case CMD_RETRY_S:
         res.event = CFG_ACK;                          /* ACK only, no value code */
         return res;
     case CMD_SOFT_START:                              /* main.c stores it (settings extension) */

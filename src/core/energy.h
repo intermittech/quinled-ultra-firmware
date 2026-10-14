@@ -8,10 +8,12 @@
  *    trips, supply dips, the MCU temperature and board current peaks, watchdog resets and firmware updates (a new app
  *    version at boot). A factory reset never clears it, a firmware update never touches it: only a full chip erase.
  *
- * STABLE FORMAT (LIFE_MAGIC 0x4C = format 1, from 0.6.3 on): a firmware that changes the record must still read
- * this one (by its magic) and carry its values over. life_rec_t is little-endian, 40 bytes, programmed in address
- * order: the magic (byte 37) in the second-last half-word, the CRC-16 (bytes 38-39, ultra_crc16 over bytes 0..37) in
- * the last. An entry cut short by a power loss either reads its magic as erased flash (0xFF / 0xE3: never taken) or
+ * STABLE FORMAT (LIFE_MAGIC 0x4D = format 2, from 0.6.9 on; format 1, 0x4C, 0.6.3-0.6.8, 40 bytes, isn't read: no
+ * board had shipped, Quindor): a firmware that changes the record must still read this one (by its magic) and carry
+ * its values over. life_rec_t is little-endian, 48 bytes, programmed in address order: the magic (byte 45) in the
+ * second-last half-word, the CRC-16 (bytes 46-47, ultra_crc16 over bytes 0..45) in the last. Format 2 added the fault
+ * memory (0.6.9, B2): the last trip, the last supply dip and the last abnormal reset, set in RAM when they happen and
+ * stored with the record's next write (never a write of their own). An entry cut short by a power loss either reads its magic as erased flash (0xFF / 0xE3: never taken) or
  * lacks only its CRC (its data complete). A page whose erase was cut short passes as a record 1 in 65,536.
  *
  * Storage: an A/B page pair (hal/board.h LIFE_PAGE0_ADDR / LIFE_PAGE1_ADDR), LIFE_RECS records each, appended in
@@ -41,8 +43,8 @@
  * Energy: the since-boot mWh (u32, the ENERGY page's wrapping counter) is carried into the lifetime Wh once a second,
  * whole Wh, the remainder kept: no step at its 2^32 mWh wrap (466 days at 384 W).
  * Wear (10k erase cycles, the datasheet minimum; LIFE_RECS writes per erase of a page): a board powered all the
- * time, any pattern: <= 8 writes a day, 0.67 erases a day per page: 41 years. Any pattern at all, with power cycles:
- * <= LIFE_RESERVE + 8 a powered day: 29 years even powered 24/7 (test/test_energy.c simulates both).
+ * time, any pattern: <= 8 writes a day, 0.8 erases a day per page: 34 years (format 1, 6 a page: 41). Any pattern at
+ * all, with power cycles: <= LIFE_RESERVE + 8 a powered day (test/test_energy.c simulates both, and prints the years).
  *
  * Energy per channel (0.6.5): the measured input energy split over the five channels by the channel model. Every ms
  * the outputs in effect (core/isense.h `applied`, after the limiter and the soft start) and the board current are
@@ -61,9 +63,9 @@
 #include "store.h"
 #include "pagepair.h"
 
-#define LIFE_MAGIC         0x4Cu    /* format 1 (not 0xFF / 0xE3: erased flash) */
-#define LIFE_REC_BYTES     40u
-#define LIFE_RECS          6u       /* per 256-byte page (the last 16 bytes stay unused) */
+#define LIFE_MAGIC         0x4Du    /* format 2 (not 0xFF / 0xE3: erased flash; 0x4C: format 1) */
+#define LIFE_REC_BYTES     48u
+#define LIFE_RECS          5u       /* per 256-byte page (the last 16 bytes stay unused) */
 #define ENERGY_DARK_MS     30000u   /* dark this long after being lit: a write */
 #define LIFE_SAVE_S        43200u   /* a write at most this long after the last one (12 h) */
 #define LIFE_IDLE_S        86400u   /* powered time alone is worth a regular write after a day */
@@ -80,7 +82,7 @@
 #define ENERGY_DUE_SAVE    1u       /* a regular write */
 #define ENERGY_DUE_DIP     2u       /* a supply dip */
 
-typedef struct {                    /* the lifetime record, format 1 (STABLE: see above) */
+typedef struct {                    /* the lifetime record, format 2 (STABLE: see above) */
     uint32_t wh;                    /*  0: input energy, Wh */
     uint32_t on_s;                  /*  4: powered time, s */
     uint32_t lit_s;                 /*  8: time with an output on, s */
@@ -93,8 +95,18 @@ typedef struct {                    /* the lifetime record, format 1 (STABLE: se
     uint8_t  wd;                    /* 34: watchdog resets (saturating) */
     uint8_t  peak_t;                /* 35: the highest MCU temperature, 0.5 C (0..127.5 C) */
     uint8_t  peak_a;                /* 36: the highest board current (~100 ms average), 0.1 A */
-    uint8_t  magic;                 /* 37: LIFE_MAGIC */
-    uint16_t crc;                   /* 38: CRC-16/CCITT-FALSE (ultra_crc16) over bytes 0..37 */
+    /* (format 2, 0.6.9, B2) the fault memory: the last of each, 0 = none */
+    uint8_t  trip;                  /* 37: the last trip: 1 short, 2 overload (bits 0-1) | its current, 0.5 A (bits 2-7,
+                                       saturating at 31.5 A; a short: its peak) */
+    uint16_t trip_h;                /* 38: ... the lit hours then (saturating) */
+    uint8_t  dip_pct;               /* 40: the last supply dip: its lowest reading, % of its reference */
+    uint8_t  dip_cs;                /* 41: ... how long, x 10 ms (255: longer) */
+    uint8_t  dip_a;                 /* 42: ... the board current at its lowest, 0.1 A (saturating) */
+    uint8_t  rst;                   /* 43: the last abnormal reset: 1 watchdog, 2 an exception (then the watchdog)
+                                       (bits 0-1) | the exception's mcause (bits 2-7) */
+    uint8_t  rst_h;                 /* 44: ... the uptime of that run, h (saturating) */
+    uint8_t  magic;                 /* 45: LIFE_MAGIC */
+    uint16_t crc;                   /* 46: CRC-16/CCITT-FALSE (ultra_crc16) over bytes 0..45 */
 } life_rec_t;
 
 typedef pp_pos_t life_pos_t;        /* where the next record goes: page << 4 | entry, erase pending (pagepair.h) */

@@ -11,8 +11,9 @@
  * calibration / scene write erases its next page first when that is due (main.c asks for such a write only while low:
  * flash_may's need_erase); the lifetime record's write never erases (FLASH_NONE while its erase is due).
  *
- * Flash map (hal/board.h): the settings, the calibration and the power-on scene log in A/B page pairs (pagepair.h,
- * 0.6.4), the lifetime record in one (core/energy.h, 0.6.3), the power-on effects (two pages, rewritten whole). */
+ * Flash map (hal/board.h): the settings, the calibration, the power-on scene log and the calibration history (M2,
+ * 0.6.6) in A/B page pairs (pagepair.h, 0.6.4), the lifetime record in one (core/energy.h, 0.6.3), the power-on
+ * effects in two banks of two pages (0.6.5; the 0.6.4 layout: one bank), each rewritten whole. */
 #ifndef FLASHREC_H
 #define FLASHREC_H
 

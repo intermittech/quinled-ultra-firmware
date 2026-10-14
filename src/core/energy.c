@@ -121,7 +121,7 @@ void energy_pack(energy_t *e)
     r->wh = energy_total_wh(e);
     do {
         r->writes++;                                     /* (0.6.5: a count skipped when the CRC would read erased) */
-    } while (crc16_erased(r->crc = crc16_ccitt((const uint8_t *)r, 38u)));
+    } while (crc16_erased(r->crc = crc16_ccitt((const uint8_t *)r, LIFE_REC_BYTES - 2u)));
 }
 
 void energy_saved(energy_t *e, uint32_t now_s)
@@ -138,7 +138,7 @@ void energy_saved(energy_t *e, uint32_t now_s)
 static int life_valid(const uint8_t *s)
 {
     uint32_t c = ((const life_rec_t *)s)->crc;
-    return s[37] == LIFE_MAGIC && !crc16_erased(c) && c == crc16_ccitt(s, 38u);
+    return s[offsetof(life_rec_t, magic)] == LIFE_MAGIC && !crc16_erased(c) && c == crc16_ccitt(s, LIFE_REC_BYTES - 2u);
 }
 
 const pp_desc_t life_pp = { LIFE_REC_BYTES, LIFE_RECS, (uint8_t)offsetof(life_rec_t, writes), 0u, life_valid };

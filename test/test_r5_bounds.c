@@ -29,7 +29,7 @@ static uint32_t r5b_parts(cli_t *c, const char *cmd, uint32_t *longest, char *al
     return n;
 }
 
-#define STATUS_PARTS_TEST (10u + MON_EXTRA)   /* (cli.c STATUS_PARTS: the 0.6.5 merge added the event log's, 0.6.6
+#define STATUS_PARTS_TEST (11u + MON_EXTRA)   /* (cli.c STATUS_PARTS: the 0.6.5 merge added the event log's, 0.6.6
                                                 the calibration history's, M2) */
 
 static void test_r5_bounds(void)
@@ -57,6 +57,14 @@ static void test_r5_bounds(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    {                                                    /* (0.6.9) the settings in effect: 3 digits and '*' each */
+        static settings_t eff;
+        memset(&eff, 0xFF, sizeof eff);
+        c.eff = &eff;
+    }
+    st.retry_n = st.retry_s = 255;
+    st.save_why = 2;                                     /* (the longest reason: "waiting for dark") */
+    st.cal_fail = ISENSE_CAL_F_SUPPLY;
     c.st = &st;
     st.version = "0.6.123-beta.45 (development build)";
     st.bl_version = 255;
@@ -202,6 +210,8 @@ static void test_r5_bounds(void)
     test_en.lt.on_s = test_en.lt.lit_s = test_en.lt.ups = test_en.lt.dips = test_en.lt.writes = 0xFFFFFFFFu;
     test_en.lt.trips[0] = test_en.lt.trips[1] = test_en.lt.updates = 65535;
     test_en.lt.wd = test_en.lt.peak_t = test_en.lt.peak_a = 255;
+    test_en.lt.trip = test_en.lt.dip_pct = test_en.lt.dip_cs = test_en.lt.dip_a = test_en.lt.rst = test_en.lt.rst_h = 255;
+    test_en.lt.trip_h = 65535;                           /* (0.6.9, B2: the fault memory) */
     st.en = &test_en;
 
     parts = r5b_parts(&c, "status", &longest, all, sizeof all);

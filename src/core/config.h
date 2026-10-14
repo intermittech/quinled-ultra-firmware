@@ -24,7 +24,8 @@ enum {
     CMD_FEEDBACK_CH   = 0x05,   /* 0 red, 1 all, 2 off */
     CMD_STAGGER       = 0x06,   /* STAGGER_*: 0 off, 1 fixed, 2 fixed + spread, 3 adaptive, 4 adaptive + spread */
     CMD_DIM_FLOOR     = 0x07,   /* 0 skip pulses below the minimum pulse, 1 clamp, 2 off */
-    CMD_SIGNAL_LOSS   = 0x08,   /* 0 hold (WS28xx behaviour), 1 off after 2 s, 2 fade off after 2 s */
+    CMD_SIGNAL_LOSS   = 0x08,   /* 0 hold (WS28xx behaviour), 1 off after 2 s, 2 fade off after 2 s, 3 the power-on
+                                   scene / effect after 2 s (0.6.9; none stored: hold) */
     CMD_IDENTIFY      = 0x09,   /* ARG 1 = blink the firmware version (CFG_IDENTIFY_VERSION), else the identify blink */
     CMD_FACTORY_RESET = 0x0A,   /* ARG must be 0xA5 */
     CMD_SMOOTHING     = 0x0B,   /* 0 off, 1 WS2805 input only, 2 all input */
@@ -38,6 +39,8 @@ enum {
     CMD_ISENSE_LIMIT  = 0x12,   /* board current limit x 50 mA, 0 = the board rating (main.c stores it) */
     CMD_ISENSE_CAL    = 0x13,   /* current calibration: ARG 0 = each channel at 25 / 50 / 75 / 100 %, 5..100 = at ARG % */
     CMD_SOFT_START    = 0x14,   /* soft start (core/sstart.h): 0 off, 1 on (main.c stores it; 0.6.0) */
+    CMD_RETRY_COUNT   = 0x15,   /* (0.6.9, B7) trip retries: 0 never, 1-254, 255 forever (main.c stores it; 10) */
+    CMD_RETRY_S       = 0x16,   /* ... seconds apart, 1-255 (0 = 1 s; main.c stores it; 1) */
 };
 
 /* CMD_IDENTIFY's ARG for the version blink (main.c, ack.h) */

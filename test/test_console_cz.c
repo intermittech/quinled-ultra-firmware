@@ -16,11 +16,14 @@
  * exactly those edits applied (checked once, the 0.6.7 notes). A console change: CONSOLE_DUMP=<file> writes the
  * transcript; diff it against the previous one, then take the new CRC and length. */
 
-#define CONSOLE_GOLDEN_CRC 0xa37991a9u      /* 0.6.7, the upper layout's console (M2, D9): 10,549 steps */
-#define CONSOLE_GOLDEN_LEN 11996212u        /* (0.6.6 + D9: 0x30fe4358, 12,493,731 B; the edits: 4,888 banners, 6 helps,
-                                               262 report lines) */
+#define CONSOLE_GOLDEN_CRC 0xf1be1b92u      /* 0.6.9, the upper layout's console (M2, D9): 10,549 steps */
+#define CONSOLE_GOLDEN_LEN 13393923u        /* (0.6.7: 0xa37991a9, 11,996,212 B; 0.6.9's transcript equals it with the
+                                               settings= / save= / calibration_last= / faults= lines and the live
+                                               lines' link removed, but for `set loss 3` (now valid: B10) and the
+                                               264 `get`s after it showing loss=3; checked once, the 0.6.9 notes) */
 
 static uint32_t ccz_crc = 0xFFFFFFFFu, ccz_len, ccz_steps;
+static settings_t ccz_eff;                 /* (0.6.9) the settings in effect: cli_set, some overridden */
 static uint32_t ccz_uid[3] = { 19088743u, 2309737967u, 4275878552u };
 static volatile uint32_t ccz_ovr[3];
 static volatile uint16_t ccz_hwd[HW_DIAG_N];
@@ -34,6 +37,17 @@ static uint32_t ccz_rnd(void)
     ccz_rs ^= ccz_rs >> 7;
     ccz_rs ^= ccz_rs << 17;
     return (uint32_t)(ccz_rs >> 32);
+}
+
+/* (0.6.9) the newer fields' draws: a generator of their own (the draws above as in 0.6.7) */
+static unsigned long long ccz_rs9 = 0x9E3779B97F4A7C15ull;
+
+static uint32_t ccz_rnd9(void)
+{
+    ccz_rs9 ^= ccz_rs9 << 13;
+    ccz_rs9 ^= ccz_rs9 >> 7;
+    ccz_rs9 ^= ccz_rs9 << 17;
+    return (uint32_t)(ccz_rs9 >> 32);
 }
 
 /* (0.6.6) n random bytes at p: two draws seed a generator of their own (ccz_random's structs: their sizes change no
@@ -260,6 +274,15 @@ static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev
 #if MON_EXTRA && defined(CALHIST_N)   /* (M2; the plain twin, 0.6.5, has none) */
     ccz_newer(st);
 #endif
+    /* (0.6.9, ccz_rnd9: every other value as in 0.6.7) the settings in effect (a few bytes an Ultra CONFIG's), the
+     * save state's reason (one past the last: none shown), the calibration's stop (one past: shown as the first) */
+    ccz_eff = cli_set;
+    for (i = 0; i < 3u; i++) {
+        uint32_t at = ccz_rnd9() % sizeof ccz_eff;
+        ((uint8_t *)&ccz_eff)[at] = (uint8_t)ccz_rnd9();
+    }
+    st->save_why = (uint8_t)(ccz_rnd9() % 7u);
+    st->cal_fail = (uint8_t)(ccz_rnd9() % 5u);
 }
 
 static void test_console_cz(void)
@@ -306,6 +329,8 @@ static void test_console_cz(void)
     c.save_now = cap_save;
     c.status_begin = ccz_status_begin;
     c.set = &cli_set;
+    c.eff = &ccz_eff;
+    ccz_eff = cli_set;
     c.st = &st;
     vsense_init(&vs, 220000u, 10000u, 3280u);
     st.dip_vs = &vs;

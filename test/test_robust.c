@@ -800,7 +800,7 @@ static int settings_valid(const settings_t *s)
 {
     return s->protocol <= PMODE_ULTRA && (s->pwm_preset < PWM_PRESET_COUNT || s->pwm_preset == 0xFFu) &&
            s->dither_mode <= 2u && s->dither_thresh >= 1u && s->feedback_ch <= 2u && s->stagger < STAGGER_MODES &&
-           s->dim_floor <= 2u && s->min_pulse >= 5u && s->min_pulse <= 100u && s->signal_loss <= 2u &&
+           s->dim_floor <= 2u && s->min_pulse >= 5u && s->min_pulse <= 100u && s->signal_loss <= 3u &&   /* 0.6.9: 3 */
            s->smoothing <= 2u && s->gamma <= 2u && s->last_proto <= PROTO_ULTRA &&
            settings_steps(s) >= PWM_STEPS_MIN && settings_steps(s) <= PWM_STEPS_MAX;
 }
@@ -1067,6 +1067,7 @@ static void case_cli(void)
     c.apply = cli_apply;
     c.save_now = cli_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.scene = &cli_scene;
     c.st = &cli_st;
     settings_default(&cli_set);
@@ -1380,7 +1381,7 @@ static void case_energy(void)
             random_fill((uint8_t *)&rec, sizeof rec);
             rec.writes = ++w;
             rec.magic = LIFE_MAGIC;
-            rec.crc = crc16_ccitt((const uint8_t *)&rec, 38u);
+            rec.crc = crc16_ccitt((const uint8_t *)&rec, LIFE_REC_BYTES - 2u);
             if (i + 1u == k && chance(40)) {             /* torn */
                 memcpy(dst, &rec, rrange(1, LIFE_REC_BYTES - 1u));
             } else {
@@ -1391,7 +1392,7 @@ static void case_energy(void)
     for (i = 0; i < 2u * LIFE_RECS; i++) {               /* the reference: the valid record with the newest count */
         const uint8_t *r = pg[i / LIFE_RECS] + (i % LIFE_RECS) * LIFE_REC_BYTES;
         memcpy(&rec, r, sizeof rec);
-        if (rec.magic == LIFE_MAGIC && rec.crc == crc16_ccitt(r, 38u) &&
+        if (rec.magic == LIFE_MAGIC && rec.crc == crc16_ccitt(r, LIFE_REC_BYTES - 2u) &&
             (!have || (int32_t)(rec.writes - best.writes) > 0)) {
             best = rec;
             have = 1;
@@ -1434,7 +1435,7 @@ static void case_energy(void)
             CHECK(why <= ENERGY_DUE_DIP, "energy: due %u", why);
             if (why != ENERGY_DUE_NONE) {
                 energy_pack(&e);
-                CHECK(e.lt.magic == LIFE_MAGIC && e.lt.crc == crc16_ccitt((const uint8_t *)&e.lt, 38u),
+                CHECK(e.lt.magic == LIFE_MAGIC && e.lt.crc == crc16_ccitt((const uint8_t *)&e.lt, LIFE_REC_BYTES - 2u),
                       "energy: the packed record checks");
                 energy_saved(&e, up);
                 writes++;

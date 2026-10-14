@@ -35,9 +35,10 @@
 #define ISENSE_ADC_MAX     4095u
 #define ISENSE_FAST_TICKS  2u         /* consecutive ticks over the fast-trip level: 50-100 us */
 #define ISENSE_OVL_MS      200u       /* overload trip: this long above the trip level */
-#define ISENSE_RETRY_MS    1000u      /* first retry after a trip; doubles up to ISENSE_RETRY_MAX_MS */
-#define ISENSE_RETRY_MAX_MS 32000u
-#define ISENSE_RETRY_RESET_MS 60000u  /* this long without a trip: back to the first retry time */
+#define ISENSE_RETRY_COUNT 10u        /* (0.6.9, B7, Quindor: "10 hiccups with 1 s in between") the retries after a
+                                         trip, retry_s apart (ULTRA_CFG_RETRY; 0.6.8: 1 s doubling to 32 s, forever) */
+#define ISENSE_RETRY_S     1u
+#define ISENSE_RETRY_RESET_MS 60000u  /* this long without a trip: the count starts again */
 #define ISENSE_WIN_MS      16u        /* regression / zero window */
 #define ISENSE_CAL_SETTLE_MS 10u      /* calibration, single level: the zero and each step, settle + measure */
 #define ISENSE_CAL_MEAS_MS 20u
@@ -65,7 +66,12 @@
 #define ISENSE_EV_RELEASE  0x02u      /* retry: restore the PWM outputs */
 #define ISENSE_EV_REAPPLY  0x04u      /* k or the calibration pattern changed: recompute the outputs (isense_apply) */
 #define ISENSE_EV_CAL_DONE 0x08u      /* calibration finished: I_k / zero valid (persist them) */
-#define ISENSE_EV_CAL_FAIL 0x10u      /* calibration aborted (trip) */
+#define ISENSE_EV_CAL_FAIL 0x10u      /* calibration aborted (cal_fail: why; the stored test and the model as before) */
+#define ISENSE_EV_LATCH    0x20u      /* (0.6.9, B7) the retries used up: the outputs stay off (isense_rearm) */
+/* (0.6.9, A2) cal_fail: how the last test ended (0: complete, or none since power-up) */
+#define ISENSE_CAL_F_TRIP   1u        /* a trip */
+#define ISENSE_CAL_F_LIMIT  2u        /* the installation's limit (the limiter's threshold) reached */
+#define ISENSE_CAL_F_SUPPLY 3u        /* a supply dip (main.c) */
 
 /* trip causes */
 #define ISENSE_TRIP_NONE   0u
@@ -120,7 +126,10 @@ typedef struct {
 
     /* ---- trips ---- */
     uint8_t  trip_cause;              /* last trip */
-    uint8_t  retry_n;
+    uint8_t  retry_n;                 /* retries since the count started (saturates at 254) */
+    uint8_t  retry_max;               /* (0.6.9, B7) 0 never retry, 1-254, 255 forever (isense_init: ISENSE_RETRY_COUNT) */
+    uint8_t  retry_s;                 /* ... seconds apart (0: 1 s) */
+    uint8_t  latched;                 /* the retries used up: tripped until isense_rearm */
     uint32_t trips;                   /* count since boot */
     uint32_t ovl_ms;                  /* ms above the overload level */
     uint32_t off_ms;                  /* ms since the trip */
@@ -128,6 +137,7 @@ typedef struct {
 
     /* ---- calibration ---- */
     uint8_t  cal_step;                /* 0 idle, 1 zero, 2.. channel (step - 2) / levels, level (step - 2) % levels */
+    uint8_t  cal_fail;                /* (0.6.9) the last test's end: 0 complete / none, ISENSE_CAL_F_* */
     uint8_t  cal_levels;              /* ISENSE_LEVELS (the standard test) or 1 (one level at cal_duty) */
     uint16_t cal_t;                   /* ms in the step */
     int32_t  cal_sum;                 /* <= 30 ms of i_ms (< 2^21 mA even at a gain of 1): 32 bits (fable-flash) */
@@ -163,6 +173,10 @@ void isense_set_model(isense_t *s, const int32_t ch_ma[ISENSE_CH], int32_t zero_
 /* start a calibration: zero, then each channel alone at 25 / 50 / 75 / 100 % (duty 0, the standard test) or at
  * `duty` (Q16, e.g. 16384 = 25 %; the curve is then linear) */
 void isense_cal_start(isense_t *s, uint16_t duty);
+/* (0.6.9) stop a running test, incomplete (why: ISENSE_CAL_F_*): ISENSE_EV_CAL_FAIL | _REAPPLY, 0 if none ran */
+uint32_t isense_cal_abort(isense_t *s, uint8_t why);
+/* (0.6.9, B7) latched (the retries used up): retry at the next ms, the count from 0 (a new command or frame value) */
+void isense_rearm(isense_t *s);
 /* length of a calibration in ms (duty as for isense_cal_start) */
 uint32_t isense_cal_ms(uint16_t duty);
 /* the last test (CAL_DONE) / restore one from flash (the model follows it, marked calibrated) */

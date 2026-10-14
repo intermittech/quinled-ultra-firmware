@@ -781,8 +781,9 @@ PING frames are sent outside sessions (after one, and when the line resyncs).
   and a newer version unless FORCE.
   - Taken: it leaves a request in a RAM hand-over block and resets into the bootloader, which installs the image
     during the session. Its gate forwards everything meanwhile.
-  - Not taken: the board stays transparent and blinks at END: 1 short = already this version, 1 long (NACK) =
-    rejected.
+  - Not taken: the board stays transparent and blinks at END, on its status LED only (firmware 0.6.9: the outputs
+    keep their light, so a repeated session doesn't flash the strips): 1 short = already this version, 1 long
+    (NACK) = rejected.
 - **After the install:** the new app's first boot blinks ACK + its minor version + 1. It confirms itself (a status
   record in its descriptor page) at the first PING after it has also seen normal Ultra frames. Until then, every
   boot gives the bootloader a listen window (≤ 150 ms, ended by the first normal Ultra frame), so a new session can

@@ -29,7 +29,7 @@ static int r5j_line(uint32_t *cycle, char *res, uint32_t *fail, uint32_t ma[5], 
 
 static void sc_r5jig(void)
 {
-    uint32_t cycle = 0, fail = 0, ma[5], c0, i, ok;
+    uint32_t cycle = 0, fail = 0, ma[5], c0, i, ok, ld0, ld4;
     char res[8] = "", uid[32] = "", fw[16] = "";
     printf("soak r5jig: the test jig's line for a jig PC (TP9 grounded from power-up)\n");
     soak_gpiob.INDR = 0xFFFFFBFFu;                       /* TP9 (PB10) low */
@@ -57,6 +57,8 @@ static void sc_r5jig(void)
         CHECK(lo == 0u && tj.fail == 0u, "r5jig: D9 steady on a PASS (%u ms off)", lo);
     }
 
+    ld0 = ld_ma[0];                                      /* (0.6.9: the build's loads, test_soak.c) */
+    ld4 = ld_ma[4];
     ld_ma[4] = 0;                                        /* W2's load open */
     c0 = cycle;
     run_ms(3200);
@@ -73,13 +75,13 @@ static void sc_r5jig(void)
         }
         CHECK(flips >= 3u && flips <= 5u, "r5jig: D9 at 5 Hz on a FAIL (%u changes in 400 ms)", flips);
     }
-    ld_ma[4] = 1200;
-    ld_ma[0] = 15000;                                    /* R ten times its load: ~5 A at 33 % */
+    ld_ma[4] = ld4;
+    ld_ma[0] = 10u * ld0;                                /* R ten times its load: ~5 A at 33 % */
     run_ms(3200);
     ok = (uint32_t)r5j_line(&cycle, res, &fail, ma, uid, fw);
     CHECK(ok && strcmp(res, "FAIL") == 0 && fail == 1u && ma[0] > TJ_PASS_MAX_MA, "r5jig: R too high: FAIL, bit 1 "
           "(%s, fail %u, %u mA)", res, fail, ma[0]);
-    ld_ma[0] = 1500;
+    ld_ma[0] = ld0;
     /* (0.6.6) statuses typed while the jig runs: its reports wait for the UART's room, none lost, nothing blocks */
     {
         const char *p;

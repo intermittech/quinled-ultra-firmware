@@ -288,15 +288,9 @@ static void sc_rcpages(void)
           "rcpages: STATUS V+ %u x10 mV, I %u mA (%d), "
           "flags %02X, preset %u, CONFIG crc %04X, mode %02X", ultra_get16(D(&o) + 13), ultra_get16(D(&o) + 17),
           (int)is.i_avg, D(&o)[19], D(&o)[20], ultra_get16(D(&o) + 21), D(&o)[23]);
-    CHECK(o.a[2] == 0x00u, "rcpages: no RFLAGS (%02X)", o.a[2]);
+    CHECK(o.a[2] == 0x00u, "rcpages: no RFLAGS (%02X; latched %02X, limit events %u, i %d mA)", o.a[2],
+          pwrev_latched(&pw), pw.limit_events, is.i_avg);
 
-#if !RC_PAGES_024
-    /* (0.6.6: the receiver's build answers the three 0.2.4-only pages UNSUPPORTED until the 0.2.4 review) */
-    CHECK(rc_ask(ULTRA_PAGE_OUTPUTS, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(ULTRA_PAGE_ACKS, 0, 0, &o) ==
-          ULTRA_PAGE_UNSUPPORTED && rc_ask(ULTRA_PAGE_ERRORS, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED,
-          "rcpages: OUTPUTS, ACKS, ERRORS answer UNSUPPORTED (RC_PAGES_024 0)");
-    (void)arg;
-#else
     /* OUTPUTS */
     pg = rc_ask(ULTRA_PAGE_OUTPUTS, 0, 0, &o);
     CHECK(pg == ULTRA_PAGE_OUTPUTS, "rcpages: OUTPUTS answered (%d)", pg);
@@ -337,13 +331,13 @@ static void sc_rcpages(void)
           "rcpages: ERRORS frames %u (%u), windows %u, answers %u, missed %u, aborted %u, decode errors %u",
           ultra_get16(D(&o)), frames, ultra_get16(D(&o) + 10), ultra_get16(D(&o) + 12), ultra_get16(D(&o) + 14),
           ultra_get16(D(&o) + 16), ultra_get16(D(&o) + 8));
-#endif
 
     /* IDENTITY */
     pg = rc_ask(ULTRA_PAGE_IDENTITY, 0, 0, &o);
     CHECK(pg == ULTRA_PAGE_IDENTITY && memcmp(D(&o), rc_uid, 12) == 0 &&
           ultra_get32(D(&o) + ULTRA_ID_FW_VERSION) == fw_version && D(&o)[17] == BOARD &&
-          ultra_get16(D(&o) + 18) == 0x000Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x1FFBFu,
+          ultra_get16(D(&o) + 18) == 0x000Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x1FFFBFu,   /* (0.6.9:
+                                                                     LIFETIME, DIAG, RETRY, LOSS_SCENE) */
           "rcpages: IDENTITY version %08X, hw %u, caps %04X, features %08X", ultra_get32(D(&o) + 12), D(&o)[17],
           ultra_get16(D(&o) + 18), ultra_get32(D(&o) + 20));
 
@@ -356,18 +350,20 @@ static void sc_rcpages(void)
     run_ms(4000);
     pg = rc_ask(ULTRA_PAGE_CALIBRATION, 0, 0, &o);
     CHECK(pg == ULTRA_PAGE_CALIBRATION && D(&o)[0] == 4u && D(&o)[1] == 2u && ultra_get24(D(&o) + 4) <= 4u &&
-          abs((int)ultra_get16(D(&o) + 9) - 1500) < 150 && abs((int)ultra_get16(D(&o) + 15) - 1200) < 120 &&
+          abs((int)ultra_get16(D(&o) + 9) - (int)ld_ma[0]) < (int)ld_ma[0] / 10 &&   /* (0.6.9: the bus-side loads) */
+          abs((int)ultra_get16(D(&o) + 15) - (int)ld_ma[3]) < (int)ld_ma[3] / 10 &&
           ultra_get16(D(&o) + 19) == clim.connected_ma, "rcpages: CALIBRATION after a test: levels %u, model %u, "
           "age %u, CH1 %u, CH4 %u, connected %u", D(&o)[0], D(&o)[1], ultra_get24(D(&o) + 4), ultra_get16(D(&o) + 9),
           ultra_get16(D(&o) + 15), ultra_get16(D(&o) + 19));
     arg[0] = 0;
     pg = rc_ask(ULTRA_PAGE_CAL_TEST, arg, 1, &o);
-    CHECK(pg == ULTRA_PAGE_CAL_TEST && abs((int)ultra_get16(D(&o) + 6) - 1500) < 150 &&
-          abs((int)ultra_get16(D(&o) + 0) - 375) < 60, "rcpages: CAL_TEST part 0: CH1 25 %% %u, 100 %% %u",
+    CHECK(pg == ULTRA_PAGE_CAL_TEST && abs((int)ultra_get16(D(&o) + 6) - (int)ld_ma[0]) < (int)ld_ma[0] / 10 &&
+          abs((int)ultra_get16(D(&o) + 0) - (int)ld_ma[0] / 4) < 60, "rcpages: CAL_TEST part 0: CH1 25 %% %u, 100 %% %u",
           ultra_get16(D(&o)), ultra_get16(D(&o) + 6));
     arg[0] = 1;
     pg = rc_ask(ULTRA_PAGE_CAL_TEST, arg, 1, &o);
-    CHECK(pg == ULTRA_PAGE_CAL_TEST && abs((int)ultra_get16(D(&o) + 14) - 1200) < 120 && D(&o)[18] == 25u &&
+    CHECK(pg == ULTRA_PAGE_CAL_TEST && abs((int)ultra_get16(D(&o) + 14) - (int)ld_ma[4]) < (int)ld_ma[4] / 10 &&
+          D(&o)[18] == 25u &&
           D(&o)[21] == 100u && D(&o)[22] == 4u, "rcpages: CAL_TEST part 1: CH5 100 %% %u, duties %u..%u, levels %u",
           ultra_get16(D(&o) + 14), D(&o)[18], D(&o)[21], D(&o)[22]);
     arg[0] = 2;
@@ -393,9 +389,10 @@ static void sc_rcpages(void)
     }
 
     /* pages this firmware doesn't have */
-    CHECK(rc_ask(ULTRA_PAGE_FW_UPDATE, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(0x0C, 0, 0, &o) ==
+    CHECK(rc_ask(ULTRA_PAGE_FW_UPDATE, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(0x0E, 0, 0, &o) ==
           ULTRA_PAGE_UNSUPPORTED && rc_ask(0x80, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(0xFE, 0, 0, &o) ==
-          ULTRA_PAGE_UNSUPPORTED, "rcpages: FW_UPDATE, 0x0C, 0x80, 0xFE answer UNSUPPORTED");
+          ULTRA_PAGE_UNSUPPORTED, "rcpages: FW_UPDATE, 0x0E (0.6.9: 0x0C / 0x0D defined), 0x80, 0xFE answer "
+          "UNSUPPORTED");
     for (i = 0, j = 0; i < 24; i++) {
         j |= D(&o)[i];
     }
@@ -442,7 +439,7 @@ static void sc_rcpower(void)
     printf("soak rcpower: a short, a limit event, a supply dip: latches, EVENT, the acknowledge\n");
     rc_boot_locked();
     cmd_def(0, 0, 3, 1000);
-    cmd_set(0, 65535, 0, 0);                             /* ~4.5 A */
+    cmd_set(0, 65535, 0, 0);                             /* ~1.4 A (0.6.9: bus side, test_soak.c ld_ma) */
     run_ms(2000);
     pg = rc_ask(ULTRA_PAGE_POWER, 0, 0, &r);
     CHECK(pg == ULTRA_PAGE_POWER && D(&r)[ULTRA_PW_LATCHED] == 0u && !(r.a[2] & ULTRA_RSP_EVENT),
@@ -485,7 +482,8 @@ static void sc_rcpower(void)
               19000u, "rcpower: SUPPLY dips %u, logged %u, lowest %u mV", ultra_get16(D(&o)), D(&o)[12],
               ultra_get16(D(&o) + 16));
     }
-    cmd_config(ULTRA_CFG_BOARD_MAX, 2000);               /* 2 A: the limiter reduces (a limit event) */
+    cmd_config(ULTRA_CFG_BOARD_MAX, 1000);               /* 1 A: the limiter reduces (a limit event; 0.6.9: 2 A, the
+                                                            bus-side load is 1.4 A) */
     run_ms(500);
     rc_ack(&r, 0, &o);                                   /* a 0.2.2 hub: dips 0, read before the limit event */
     CHECK(D(&o)[ULTRA_PW_LATCHED] == (ULTRA_PW_EV_LIMITED | ULTRA_PW_EV_SUPPLY_DIP) && (o.a[2] & ULTRA_RSP_EVENT) &&

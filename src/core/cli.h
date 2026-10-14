@@ -139,6 +139,11 @@ typedef struct {
     const calhist_t *ch;           /* (0.6.6, M2) the calibration history (core/calhist.h), NULL = none. (New fields at
                                       the end: test_console_cz.c's random states stay as they were) */
 #endif
+    uint8_t  cal_fail;             /* (0.6.9, A2) the last test stopped incomplete: ISENSE_CAL_F_* (0: complete / none) */
+    uint8_t  retry_n, retry_s;     /* (0.6.9, B7) the trips' retry policy */
+    uint8_t  save_why;             /* (0.6.9) why a pending write waits: 0 nothing pending, 1 debounce, 2 waiting for
+                                      dark (the hour's write while bright used), 3 the write budget, 4 a flash error's
+                                      hold-off, 5 the supply (main.c save_why) */
 } cli_status_t;
 
 typedef struct {
@@ -149,6 +154,7 @@ typedef struct {
     void (*status_begin)(void);    /* snapshot and reset extrema only for an actual status command */
 #endif
     const settings_t *set;
+    const settings_t *eff;         /* (0.6.9) the settings in effect (Ultra CONFIG over the stored ones) */
 #if MON_EXTRA && CONSOLE_FULL
     const store_ext_t *ext;        /* (0.6.7, D9) the settings' extension (store.h: the current limit, options) */
     /* (0.6.7, D9) `restore`: a backup checked here (length, CRC, version, board); main.c applies its settings,
@@ -196,20 +202,27 @@ void cli_watch(cli_t *c);
 void cli_exec(cli_t *c, const char *line);
 #endif
 
-/* (0.6.5, D2) the event log: the last EVLOG_N events with the uptime they came at (main.c ev_add; RAM, a reset clears
- * it). Fed by what counts them already, no counter of its own: the power events (pwrev_t.ev: a limit event, a trip,
+/* (0.6.5, D2) the event log: the last EVLOG_N events with the uptime they came at (main.c ev_add; RAM no reset but a
+ * power-on clears: 0.6.9, B2, vendor/wch/Link_sections.ld .noinit; evlog_boot). Fed by what counts them already, no counter of its own: the power events (pwrev_t.ev: a limit event, a trip,
  * a supply dip) and the end of a calibration. `status` ends with them, newest first. EVL_LIMIT .. EVL_DIP are the
  * ULTRA_PW_EV_* bits 0 .. 3 in that order (main.c checks it). */
 #define EVLOG_N 8u
-enum { EVL_NONE, EVL_LIMIT, EVL_OVERLOAD, EVL_SHORT, EVL_DIP, EVL_CAL };
+enum { EVL_NONE, EVL_LIMIT, EVL_OVERLOAD, EVL_SHORT, EVL_DIP, EVL_CAL, EVL_CAL_FAIL, EVL_LATCH, EVL_OB_BAD,
+       EVL_PROT_OK, EVL_PROT_FAIL, EVL_HOT };   /* (0.6.9: a test
+                                                       stopped; the retries used up, the outputs off) */
 typedef struct {
     uint32_t t_s;                  /* uptime, s */
     uint16_t ma;                   /* mA: the board current then (a short: its peak), a calibration's connected load */
     uint8_t  type;                 /* EVL_* (EVL_NONE: an empty entry) */
 } evl_ev_t;
 typedef struct evlog {
+    uint32_t magic;                /* (0.6.9) EVL_MAGIC: kept since the last power-on */
     evl_ev_t e[EVLOG_N];           /* a ring: e[head] the newest */
     uint8_t  head;
 } evlog_t;
+#define EVL_MAGIC 0x314C5645u      /* "EVL1" */
+/* (0.6.9, B2) at boot: keep = the RAM was kept (the reset breadcrumbs valid: a watchdog / software / pin reset): the
+ * last run's events stay, their times moved back by its uptime (prev_up_s: their ages go on); else a new log */
+void evlog_boot(evlog_t *l, uint32_t keep, uint32_t prev_up_s);
 
 #endif

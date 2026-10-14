@@ -1,14 +1,24 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Settings records in one 256-byte flash page (wear levelling).
- * 8 slots of 32 bytes are appended one per save; only a full page is erased (fast page erase, 16 ms).
- * Flash endurance is 10k erase cycles minimum (datasheet), so >= 80k saves. Saves are also debounced
- * (2 s after the last change), so a burst of config commands costs one record.
- * Write budget (0.6.2, main.c): STORE_BUDGET_CAP saves at once, then one per STORE_REFILL_MS (scene.h's budget). An
- * automation that changes a stored value all the time (Ultra CONFIG 22 / 23, config frames) costs at most 8 records
- * a day, one erase: >= 27 years at 10k cycles. A change waiting for its token is stored with the newest values when
- * the token comes (none lost, only stored later). The console's `save` writes at once.
- * The newest valid record (highest sequence number, CRC ok) wins at boot. */
+/* Settings records: 32-byte records (store_slot_t), STORE_SLOTS per 256-byte page, in an A/B page pair (0.6.4,
+ * core/pagepair.h; read and written by core/flashrec.c settings_load / settings_store). Where the two pages are:
+ * hal/board.h's record map (SETTINGS_ADDR / SETTINGS_B_ADDR; the upper layout: each page in its own 4 KB sector).
+ *  - Commit: a save appends a record with the next sequence number into an erased entry; a write never erases. The
+ *    CRC byte is in the last half-word, programmed last, and (0.6.5, the upper layout) never takes an erased value
+ *    (store_pack_ext), so a record cut short by a power loss never counts. When a page is full the other one is next:
+ *    it is erased first, in a low moment (ahead, or by the write when its erase is due; main.c flash_may). The page
+ *    holding the newest record is never erased.
+ *  - Recovery at boot (pp_find): of both pages, the valid record (magic and CRC) with the newest sequence number wins,
+ *    so a power cut at any moment leaves the last complete record. An entry after it that doesn't read erased (a cut
+ *    or failed write) makes its page count as full; a failed write uses up its entry but never counts.
+ *  - Saves are debounced (2 s after the last change: a burst of config commands costs one record) and budgeted (0.6.2,
+ *    main.c): STORE_BUDGET_CAP at once, then one per STORE_REFILL_MS (scene.h's budget). A change waiting for its
+ *    token is stored with the newest values when the token comes (none lost, only stored later). The full console's
+ *    `save` (CONSOLE_FULL=1) writes at once.
+ *  - Wear: each page is erased once per 2 x STORE_SLOTS records, so an automation that changes a stored value all
+ *    the time (Ultra CONFIG 22 / 23, config frames: 8 records a day) erases each page every 2 days: >= 54 years at
+ *    the datasheet's 10k cycles.
+ *  - The record also carries a factory reset's pending clears (STORE_VOIDS below). */
 #ifndef STORE_H
 #define STORE_H
 

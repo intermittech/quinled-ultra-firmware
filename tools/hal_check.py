@@ -301,6 +301,9 @@ class FlashHal(Hal):
         self.no_eop = self.wrp = self.no_unlock = self.no_ob_unlock = False
         self.keys = []
         self.ob = [0xA5, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]   # (0.6.8) the option bytes' low bytes (RM 32.6)
+        self.ob_reads = []                               # (0.6.9, R7-06) CFGR0 at each option byte read
+        self.ob_badinv = None                            # ... an index whose stored inverse is wrong
+        self.ob_flaky = None                             # ... an index whose every second read differs
         self.mmio[FLASH + 0x10] = 0x8080                 # LOCK, FAST_LOCK
         self.mmio[USART2] = 0x00C0                       # TC, TXE
         self.mmio[RCC_CFGR0] = 0x0002 | (4 << 11)        # SW = PLL, PPRE2 /2
@@ -335,6 +338,15 @@ class FlashHal(Hal):
         if a == FLASH + 0x0C:                            # STATR: done; EOP unless injected
             v = self.mmio.get(a, 0)
             return v
+        if OB_ADDR <= a < OB_ADDR + 16:                  # (0.6.9, R7-06) an option byte and its inverse
+            i = (a - OB_ADDR) // 2
+            self.ob_reads.append(self.mmio.get(RCC_CFGR0, 0))
+            v = self.ob[i] | ((~self.ob[i] & 0xFF) << 8)
+            if i == self.ob_badinv:
+                v ^= 0x0100
+            if i == self.ob_flaky and len(self.ob_reads) % 2 == 0:
+                v ^= 0x0101
+            return v if n == 2 else (v >> (8 * (a & 1))) & 0xFF
         return super().rd(a, n)
 
     def wr(self, a, n, v):
@@ -515,6 +527,27 @@ def option_bytes(elf):
     g.call("flash_op", [0x0800FF00, src, 1, 0])
     check(g.ret == 1 and (FLASH + 0x08, KEY1) not in g.keys and g.ob[4] == 0xFF,
           "a record write never unlocks the option bytes")
+    # (0.6.9, review round 7 R7-06) the snapshot: HCLK / 2 at every read (the flash clock 36 MHz, not 72), the clock
+    # back after it, each byte against its inverse, each read twice
+    print("option bytes (0.6.9, R7-06): the boot's snapshot at a safe flash clock, checked")
+    if "hw_option_bytes" not in e.syms:
+        print("  (not in this build: only an UPD_APP app reads the option bytes)")
+        return
+    base = 0x0002 | (4 << 11)                            # the boot's CFGR0: HCLK undivided
+    for case, setup, want in (("consistent", None, 1), ("an inverse wrong", "badinv", 0), ("a read differs", "flaky", 0)):
+        h = FlashHal(elf)
+        h.ob = [0xA5, 0x3F, 0x12, 0x34, 0xFF, 0xFC, 0xFF, 0xFF]
+        if setup == "badinv":
+            h.ob_badinv = 5
+        elif setup == "flaky":
+            h.ob_flaky = 3
+        h.call("hw_option_bytes", [src])
+        got = [h.peek(src + 2 * i, 2)[0] for i in range(8)]
+        slow = all((c >> 4) & 0xF == 0x8 for c in h.ob_reads)
+        check(h.ret == want and len(h.ob_reads) == 16 and slow and h.mmio.get(RCC_CFGR0, 0) == base and
+              (want == 0 or got == h.ob),
+              "%s: returns %d (%d wanted), 16 reads, every one at HCLK / 2 (%s), the clock back (%04x), the bytes %s"
+              % (case, h.ret, want, slow, h.mmio.get(RCC_CFGR0, 0), ["%02X" % v for v in got]))
 
 
 def records(elf):

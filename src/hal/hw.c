@@ -1065,13 +1065,22 @@ uint32_t hw_boot_open(void)
     return (FLASH->WPR & 3u) != 0u;                      /* a bit at 1: that 4 KB sector is writable (RM 32.4.7) */
 }
 
+/* (0.6.9, review round 7 R7-06) RM 32.1 note 2 counts the user option reads among the flash accesses that need HCLK
+ * divided above 120 MHz: at 144 MHz with SCKMOD 0 the flash clock is 72 MHz, over the datasheet's 60. So HCLK / 2
+ * meanwhile (36 MHz), as the records window, which is why main.c calls this before hw_init (no timer, interrupt, DMA
+ * or UART runs on the clocks yet). Each half-word: a byte and its inverse (RDPR / nRDPR ...), each read twice */
 uint32_t hw_option_bytes(uint16_t ob[8])
 {
-    uint32_t i;
+    const volatile uint16_t *o = (const volatile uint16_t *)HW_OB_ADDR;
+    uint32_t cfgr = RCC->CFGR0, i, ok = 1, a;
+    RCC->CFGR0 = (cfgr & ~RCC_HPRE) | RCC_HPRE_DIV2;
     for (i = 0; i < 8u; i++) {
-        ob[i] = (uint16_t)(((volatile const uint16_t *)HW_OB_ADDR)[i] & 0xFFu);
+        a = o[i];
+        ok &= a == o[i] && ((a ^ (a >> 8)) & 0xFFu) == 0xFFu;
+        ob[i] = (uint16_t)(a & 0xFFu);
     }
-    return ob[0];
+    RCC->CFGR0 = cfgr;
+    return ok;
 }
 
 /* the SRAM path's trip: all five outputs forced low (as pwm_force_off(1)); never back to PWM */

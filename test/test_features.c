@@ -329,6 +329,7 @@ static void test_cli(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &st;
     run_cli(&c, "help\r\n");
     CHECK(strstr(cli_out, "minpulse") && strstr(cli_out, "loss"), "help lists keys");

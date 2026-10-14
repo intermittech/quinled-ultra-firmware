@@ -161,11 +161,18 @@ static void wire_frame(const uint8_t *bytes, uint32_t nbits, uint64_t t0)
     wf_on = 1;
 }
 
-/* the load: logic 45 mA + each output's duty x its strip (a short: 4095, the fast trip) */
+/* the load: logic 45 mA + each output's duty x its strip (a short: 4095, the fast trip). (0.6.9) The Diff-Power
+ * receiver measures its bus side, before its buck, and a port's PTCs allow 2.25 A: a receiver-sized load, ~100 W of
+ * strips seen from a ~48 V bus, all five at 100 %: 2.1 A (under its rating) */
+#if BOARD == BOARD_DP_RX
+static uint32_t ld_ma[5] = { 450, 450, 450, 360, 360 };
+#else
 static uint32_t ld_ma[5] = { 1500, 1500, 1500, 1200, 1200 };   /* (r5jig: an open / overloaded channel) */
+#endif
+static uint32_t soak_leak_ma;                            /* (0.6.9) current with every output off (a FET stuck on) */
 static uint32_t load_raw(void)
 {
-    uint32_t ma = 45u, i, g = is.ma_per_lsb_q16 ? is.ma_per_lsb_q16 : 262410u, raw;
+    uint32_t ma = 45u + soak_leak_ma, i, g = is.ma_per_lsb_q16 ? is.ma_per_lsb_q16 : 262410u, raw;
     if (short_ticks) {
         short_ticks--;
         return 4095u;
@@ -221,7 +228,8 @@ void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
     vs_pending = 0;
 }
 void hw_temp_start(void) { soak_temp_req = 1; }
-uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2) { *ts2 = 2u * 1710u; *vref2 = 2u * 1489u; return 1; }
+static uint32_t soak_ts = 1710u;                         /* the temperature sensor's count (1710: ~30 C; 0.6.9) */
+uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2) { *ts2 = 2u * soak_ts; *vref2 = 2u * 1489u; return 1; }
 volatile uint16_t hw_diag[HW_DIAG_N];                    /* (0.6.5, D6: hal/hw.c's counters, none here) */
 void hw_dma_check(void) {}
 void pwm_force_off(uint8_t off) { sim_forced = off; }
@@ -250,6 +258,9 @@ uint32_t uart_rx_pos(void)
  * them would make uart_write wait on the board (the main loop stalls): counted in tx_blocks. (0.6.7) The release
  * console's: 2 x 256 (hal/hw.c UART_TX_SIZE) */
 #define SOAK_TX_CAP (CONSOLE_FULL ? 1024u : 512u)
+/* (0.6.9, Quindor) the receiver's release console sends no full status (main.c STREAM_STATUS): the checks that read
+ * the status (`uptime=`, `supply_dip`, `lifetime=`) check the same values in RAM there */
+#define SOAK_NO_STATUS (!CONSOLE_FULL && BOARD == BOARD_DP_RX)
 static uint32_t tx_q, tx_acc, tx_blocks;
 uint32_t uart_room(void) { return tx_q >= SOAK_TX_CAP ? 0u : SOAK_TX_CAP - tx_q; }
 static FILE *con_dump;                                   /* SOAK_CON_DUMP=<file>: every byte the console wrote */
@@ -860,7 +871,8 @@ static void sc_long(void)
     run_sparse(86400u * 3u / 2u, 1200u);                 /* to day 2 */
     /* dark from day 2 to day 30: the lifetime record written 30 s after dark, then once a day (the powered time alone);
      * no lit second counted (lit_ms passes 2^31 ms back on day 27); then lit again */
-    run_ms(180000);                                      /* 3 min every ms: >= 1 Wh not stored yet */
+    run_ms(BOARD == BOARD_DP_RX ? 600000u : 180000u);    /* 3 min every ms: >= 1 Wh not stored yet (0.6.9: the
+                                                            receiver's bus-side load, 10 min) */
     e0 = W_LIFE();
     cmd_set(0, 0, 0, 0);
     cmd_set(1, 0, 0, 0);
@@ -999,14 +1011,43 @@ static void sc_long(void)
     if (now_s() < 52u * 86400u) {
         run_sparse(52u * 86400u - now_s(), 1200u);
     }
+#if CONSOLE_FULL
     console("status");
+#else
+    while (cli.st_part) {                                /* the release console takes no command (0.6.9: a status */
+        run_ms(10);                                      /* the stream had begun before the capture lost its first */
+    }                                                    /* part): the stream's next full status, whole */
+    con_out_n = 0;
+    con_out[0] = 0;
+#if !SOAK_NO_STATUS
+    while (!cli.st_part) {
+        run_ms(10);
+    }
+    while (cli.st_part) {
+        run_ms(10);
+    }
+#endif
+#endif
+#if SOAK_NO_STATUS
+    printf("  after %u s: uptime %u s (RAM: no status on this console), %u frames, flash writes: settings %u, scene %u, "
+           "effects %u, lifetime %u, calibration %u\n", (uint32_t)now_s(), up_s, host_frames, W_SETTINGS(), W_SCENE(),
+           W_FX(), W_LIFE(), W_CAL());
+    CHECK((uint64_t)up_s + 300u >= now_s() && up_s <= now_s(), "long: uptime after 52 days (%u s, sim %u s)", up_s,
+          (uint32_t)now_s());
+    CHECK(up_s - temp_peak_s >= 51u * 86400u && vdip_event(&vdip, 0) != 0 &&
+          up_s - vdip_event(&vdip, 0)->t_s >= 2u * 86400u && up_s - vdip_event(&vdip, 0)->t_s < 3u * 86400u,
+          "long: the MCU peak's age (51 days+) and the newest dip's (2 days), from RAM");
+#else
     printf("  after %u s: uptime %d s, %u frames, flash writes: settings %u, scene %u, effects %u, lifetime %u, "
            "calibration %u\n", (uint32_t)now_s(), (int)con_uptime(), host_frames, W_SETTINGS(), W_SCENE(), W_FX(),
            W_LIFE(), W_CAL());
     CHECK(con_uptime() + 300 >= (int64_t)now_s() && con_uptime() <= (int64_t)now_s(), "long: uptime after 52 days "
           "(%d s, sim %u s)", (int)con_uptime(), (uint32_t)now_s());
-    CHECK(strstr(con_out, "peak ") && strstr(con_out, "51d ") != NULL, "long: the MCU peak's age in days (51d+)");
+    CHECK(strstr(con_out, "peak ") && (strstr(con_out, "51d ") != NULL || strstr(con_out, "52d ") != NULL),
+          "long: the MCU peak's age in days (51d+; 52d: the release console's next status, up to a minute on)");
     CHECK(strstr(con_out, "supply_dip 1=2d ") != NULL, "long: the newest dip's age (2 days)");
+#endif
+#if !SOAK_NO_STATUS
     {
         const char *d2 = strstr(con_out, "supply_dip 2=");
         char line[96];
@@ -1020,6 +1061,7 @@ static void sc_long(void)
         CHECK(d2 && (strncmp(d2 + 13, "21d 22:", 7) == 0 || strncmp(d2 + 13, "21d 23:", 7) == 0),
               "long: the day-30 dip's age (22 days)");
     }
+#endif
     CHECK(events_seen == 0u && sim_led_on == 0u && is.trips == 0u, "long: no false events (%X, D9 %u, trips %u)",
           events_seen, sim_led_on, is.trips);
     CHECK(W_SETTINGS() == 1u && W_SCENE() == 1u && W_FX() == 0u && W_CAL() == 0u, "long: flash writes settings %u "
@@ -1045,7 +1087,9 @@ static void sc_long(void)
               "%u, %u s of %u, dips %u)", r.writes, en.lt.writes, r.on_s, up_s, r.dips);
         CHECK(en.lt.lit_s > 23u * 86400u && en.lt.lit_s < 25u * 86400u, "long: lit about 24 of the 52 days (%u s)",
               en.lt.lit_s);
+#if !SOAK_NO_STATUS
         CHECK(lt && strstr(lt, ", 1 power-ups, trips 0 / 0, dips 2, ") != NULL, "long: the lifetime line");
+#endif
     }
 }
 
@@ -1686,10 +1730,11 @@ static void sc_minmax(void)
 #include "test_r6_claude.c"                      /* (claude-fw: r6race ...) */
 #include "test_r6_sys.c"                         /* (fable-sys: r6e2e ...) */
 #include "test_r6_console.c"                     /* (0.6.7: the release console: conout ...; the samples) */
+#include "test_r7.c"                             /* (0.6.9, review round 7: r7ack ...) */
 static int r6_scenarios(const char *sc, int argc, char **argv)
 {
     return r6f_scenario(sc) || r6g_scenario(sc) || r6c_scenario(sc) || r6s_scenario(sc, argc, argv) ||
-           r6o_scenario(sc);
+           r6o_scenario(sc) || r7_scenario(sc, argc, argv);
 }
 
 #if MON_EXTRA

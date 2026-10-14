@@ -145,8 +145,9 @@ void hw_flash_trip(void);
 uint32_t hw_vdd_low(void);
 /* (0.6.8) the user option bytes (RM 32.6): flash_op(HW_OB_ADDR, ob, 8, HW_OB_ADDR) erases all 8 and programs ob[0..7]
  * (the low bytes: the hardware writes each inverse). hw_boot_open: the bootloader's sectors 0-1 (4 KB each) are not
- * write-protected (FLASH->WPR, loaded at a system reset); hw_option_bytes: the 8 option bytes' low bytes into ob,
- * returns RDPR (0xA5: no read protection) */
+ * write-protected (FLASH->WPR, loaded at a system reset); hw_option_bytes: the 8 option bytes' low bytes into ob
+ * (ob[0] RDPR: 0xA5 no read protection). 0.6.9 (R7-06): read at HCLK / 2 (only before hw_init: it changes the clock),
+ * each byte checked against its inverse and read twice; returns 1 when all 8 agree, 0 = not to be trusted */
 #define HW_OB_ADDR 0x1FFFF800u
 uint32_t hw_boot_open(void);
 uint32_t hw_option_bytes(uint16_t ob[8]);

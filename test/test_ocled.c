@@ -126,6 +126,7 @@ static void test_ocled(void)
         c.apply = cap_apply;
         c.save_now = cap_save;
         c.set = &cli_set;
+        c.eff = &cli_set;
         c.st = &st;
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "overcurrent_led=off\r\npower_state=ok\r\n") != NULL, "status: off");

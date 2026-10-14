@@ -20,6 +20,7 @@ static void test_r5_ovr(void)
     c.apply = cap_apply;
     c.save_now = cap_save;
     c.set = &cli_set;
+    c.eff = &cli_set;
     c.st = &st;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "config_accepted=") && !strstr(cli_out, "overruns"), "no counters (NULL): no line");
@@ -31,8 +32,8 @@ static void test_r5_ovr(void)
     CHECK(strstr(cli_out, "  k 0.0 %\r\n") && !strstr(cli_out, "ovr"), "watch without them: %s", cli_out);
     ovr[2] = 12u;
     run_cli(&c, "status\r");
-    CHECK(strstr(cli_out, "\r\noverruns=0 captures, 0 frame ends, 12 ms late\r\nconfig_accepted=") != NULL,
-          "one counter: the line, before config_accepted");
+    CHECK(strstr(cli_out, "\r\noverruns=0 captures, 0 frame ends, 12 ms late\r\nsettings=") != NULL,
+          "one counter: the line, before the settings (0.6.9; config_accepted before)");
     ovr[0] = 4000000000u;
     ovr[1] = 7u;
     run_cli(&c, "status\r");

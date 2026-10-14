@@ -116,6 +116,7 @@ static void test_calhist(void)
     cl.apply = cap_apply;
     cl.save_now = cap_save;
     cl.set = &cli_set;
+    cl.eff = &cli_set;
     cl.st = &st;
     run_cli(&cl, "status\r");
     CHECK(strstr(cli_out, "cal_history") == NULL && strstr(cli_out, "cal_trend") == NULL, "status: no history");

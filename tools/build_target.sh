@@ -48,10 +48,10 @@ OUT="${OUT:-$FW/build/target}"
 mkdir -p "$OUT"
 # the Diff-Power receiver (BOARD=2): its own set (0.6.6): no MON_EXTRA monitoring (D5 / M5 / M3 / D6: the console
 # only; the return channel carries its values), so 0.6.4's layout's texts (ZL), the records still upper; the test jig
-# on TP6 (0.6.7: the console's RX, hal/hw.c hw_jig_pad_low); RC_PAGES_024=<0 / 1>: the three pages only the 0.2.4 proposal defines (OUTPUTS, ACKS,
-# ERRORS), 1 by default (0.6.7, Quindor: the room is there), 0 = they answer UNSUPPORTED
+# on TP6 (0.6.7: the console's RX, hal/hw.c hw_jig_pad_low). (0.6.9: RC_PAGES_024 gone: OUTPUTS, ACKS and ERRORS are
+# official since protocol 0.2.4, always built in)
 RECEIVER=0
-case " $EXTRA_CFLAGS " in *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0 -DRC_PAGES_024=${RC_PAGES_024:-1}" ;; esac
+case " $EXTRA_CFLAGS " in *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0" ;; esac
 # STACK_SIZE=<bytes> (0.6.6): the stack, 2048 by default. 1536 is ready (static worst case 928 B with the ISRs nested,
 # tools/stack.py, 0.6.7: main 800 + poll 80 + a slew 48; the QingKe V4B nests two levels) and waits for the bench: the
 # painted `stack=` high-water mark of the 30-day soak (test/ROUND4_BENCH_PLAN.md). The receiver needs at least 1792 B
@@ -64,6 +64,15 @@ if [ "$SS" != 2048 ]; then STACK_LD="-Wl,--defsym=QL_STACK_SIZE=$SS"; fi
 # build has it (its `perf`).
 CONSOLE_FULL="${CONSOLE_FULL:-0}"
 if [ "${PERF:-0}" != 0 ]; then CONSOLE_FULL=1; fi
+# (0.6.9) CONSOLE_FULL=1 builds are standalone (no bootloader), flashed over SWD: behind the bootloader the full
+# console no longer fits the slot
+case " $EXTRA_CFLAGS ${LDSCRIPT:-} " in
+  *" -DUPD_APP=1 "*|*Link_app*)
+    if [ "$CONSOLE_FULL" = 1 ]; then
+      echo "error: CONSOLE_FULL=1 builds are standalone (no bootloader), flashed over SWD: no UPD_APP / Link_app*.ld" >&2
+      exit 1
+    fi ;;
+esac
 EXTRA_CFLAGS="$EXTRA_CFLAGS -DCONSOLE_FULL=$CONSOLE_FULL"
 # the console's text, compressed (core/cz.h: tools/gen_console_text.py writes $OUT/gen/cz_text.h; Python 3, stdlib)
 "${PYTHON:-python}" "$FW/tools/gen_console_text.py" "$OUT/gen" $([ "${PERF:-0}" != 0 ] && echo --perf) \
@@ -143,8 +152,14 @@ LDSCRIPT="${LDSCRIPT:-$FW/vendor/wch/Link.ld}"
 if [ "$UPPER_RECORDS" = 0 ]; then
   case "$LDSCRIPT" in */Link.ld|*/Link_app.ld) LDSCRIPT="${LDSCRIPT%.ld}_lower.ld" ;; esac
 fi
-"$GCC" $LDARCH $LDLTO $STACK_LD -nostartfiles -Wl,--gc-sections -Wl,-Map="$OUT/fw.map" -L"$FW/vendor/wch" -T "$LDSCRIPT" \
-  $OBJS -o "$OUT/fw.elf" -lgcc
+if ! "$GCC" $LDARCH $LDLTO $STACK_LD -nostartfiles -Wl,--gc-sections -Wl,-Map="$OUT/fw.map" -L"$FW/vendor/wch" \
+  -T "$LDSCRIPT" $OBJS -o "$OUT/fw.elf" -lgcc; then
+  if [ "$XW" != 1 ]; then                # (0.6.9) the XW=0 image may no longer fit the slot
+    echo "error: the link failed with XW=0. If the region FLASH overflowed: this image needs WCH GCC's XW (XW=1," \
+         "the default; tools/toolchain/README.md). The README's sizes say which images fit without it (0.6.9)." >&2
+  fi
+  exit 1
+fi
 "${PFX}objcopy" -O binary "$OUT/fw.elf" "$OUT/fw.bin"
 "${PFX}objcopy" -O ihex "$OUT/fw.elf" "$OUT/fw.hex"
 "${PFX}objdump" -d -S "$OUT/fw.elf" > "$OUT/fw.lst"

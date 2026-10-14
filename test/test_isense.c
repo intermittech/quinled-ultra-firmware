@@ -805,7 +805,65 @@ static void test_disabled(void)
     for (k = 0; k < NCH; k++) CHECK(out[k] == req[k], "disabled: outputs changed");
 }
 
-/* the time to the retry after a trip (power events: POWER page retry seconds) */
+/* the time to the retry after a trip (power events: POWER page retry seconds); (0.6.9, B7) the retry policy */
+#define RMS (ISENSE_RETRY_S * 1000u)
+static uint32_t trip_once(isense_t *is)                /* a short, registered: its events */
+{
+    isense_tick(is, 4095);
+    isense_tick(is, 4095);
+    return isense_ms(is, 4095u * 20u, 20, 4095);
+}
+static uint32_t wait_release(isense_t *is, uint32_t max_ms)   /* ms until RELEASE (max_ms + 1: none) */
+{
+    uint32_t ms;
+    for (ms = 1; ms <= max_ms; ms++) {
+        if (isense_ms(is, 0, 20, 0) & ISENSE_EV_RELEASE) {
+            return ms;
+        }
+    }
+    return max_ms + 1u;
+}
+static void test_retry_policy(void)
+{
+    isense_t is;
+    uint32_t k, ev, latched = 0, ms;
+    printf("retry policy (0.6.9, B7): 10 retries 1 s apart, then off until a new command; 0 never, 255 forever\n");
+    isense_init(&is, 1, 10000, 8000);
+    isense_set_gain(&is, ISENSE_GAIN_DEFAULT_Q16);
+    isense_set_limit(&is, 0);
+    CHECK(is.retry_max == 10u && is.retry_s == 1u, "the default: 10 retries, 1 s apart");
+    for (k = 0; k < 10u; k++) {
+        ev = trip_once(&is);
+        ms = wait_release(&is, 5000u);
+        CHECK(!(ev & ISENSE_EV_LATCH) && ms == RMS - 1u, "retry %u 1 s after its trip (%u ms after the trip's ms)",
+              k + 1u, ms);
+    }
+    ev = trip_once(&is);
+    CHECK((ev & ISENSE_EV_LATCH) && is.latched && isense_retry_left_ms(&is) == 0xFFFFFFFFu, "the 11th trip: the "
+          "retries used up, latched");
+    CHECK(wait_release(&is, 120000u) == 120001u && is.tripped != ISENSE_TRIP_NONE, "latched: no retry in 2 min");
+    isense_rearm(&is);
+    CHECK(wait_release(&is, 5u) == 1u && is.retry_n == 1u, "a new command: the retry at the next ms, the count anew");
+    for (k = 0; k < 60000u + 10u; k++) {
+        (void)isense_ms(&is, 0, 20, 0);
+    }
+    CHECK(is.retry_n == 0u, "60 s without a trip: the count starts again (%u)", is.retry_n);
+    is.retry_max = 0;                                  /* never retry */
+    ev = trip_once(&is);
+    CHECK((ev & ISENSE_EV_LATCH) && wait_release(&is, 5000u) == 5001u, "count 0: off at the first trip");
+    isense_rearm(&is);
+    (void)wait_release(&is, 5u);
+    is.retry_max = 255;                                /* forever */
+    is.retry_s = 3;
+    for (k = 0; k < 300u; k++) {
+        latched |= trip_once(&is) & ISENSE_EV_LATCH;
+        if (wait_release(&is, 4000u) != 2999u) {
+            break;
+        }
+    }
+    CHECK(k == 300u && !latched, "count 255: 300 retries, each 3 s after its trip (%u)", k);
+}
+
 static void test_retry_left(void)
 {
     isense_t is;
@@ -815,17 +873,17 @@ static void test_retry_left(void)
     isense_set_limit(&is, 0);
     CHECK(isense_retry_left_ms(&is) == 0u, "not tripped: no retry");
     isense_tick(&is, 4095);
-    CHECK(isense_tick(&is, 4095) == 1u && isense_retry_left_ms(&is) == ISENSE_RETRY_MS, "short: the whole first wait");
+    CHECK(isense_tick(&is, 4095) == 1u && isense_retry_left_ms(&is) == RMS, "short: the whole first wait");
     isense_ms(&is, 4095u * 20u, 20, 4095);         /* registered: 1 ms of the wait gone */
-    CHECK(isense_retry_left_ms(&is) == ISENSE_RETRY_MS - 1u, "1 ms later (%u)", isense_retry_left_ms(&is));
-    for (ms = 1; ms < ISENSE_RETRY_MS && !(ev & ISENSE_EV_RELEASE); ms++) {
+    CHECK(isense_retry_left_ms(&is) == RMS - 1u, "1 ms later (%u)", isense_retry_left_ms(&is));
+    for (ms = 1; ms < RMS && !(ev & ISENSE_EV_RELEASE); ms++) {
         ev = isense_ms(&is, 0, 20, 0);
     }
-    CHECK((ev & ISENSE_EV_RELEASE) && ms == ISENSE_RETRY_MS && isense_retry_left_ms(&is) == 0u, "released after 1 s");
+    CHECK((ev & ISENSE_EV_RELEASE) && ms == RMS && isense_retry_left_ms(&is) == 0u, "released after 1 s");
     isense_tick(&is, 4095);
     isense_tick(&is, 4095);
     isense_ms(&is, 4095u * 20u, 20, 4095);
-    CHECK(isense_retry_left_ms(&is) == 2u * ISENSE_RETRY_MS - 1u, "second trip: the wait doubles (%u)",
+    CHECK(isense_retry_left_ms(&is) == RMS - 1u, "second trip: the same 1 s (0.6.9: no doubling) (%u)",
           isense_retry_left_ms(&is));
 }
 
@@ -835,6 +893,7 @@ int main(void)
            ISENSE_TEST_BW / 1e3, ISENSE_TEST_VOMAX);
     test_disabled();
     test_retry_left();
+    test_retry_policy();
     test_measurement_accuracy();
     test_powerup();
     printf("legitimate steps 0 -> 100 %% (24 V, 25 kHz, spread)\n");
