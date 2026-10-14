@@ -142,10 +142,13 @@ static int head_ok(const ultra_light_t *L)
 }
 
 /* the power-on effect store's image (core/ultra.h ULTRA_FX_*, written by hal/hw.c): the valid lights' heads */
+uint8_t ultra_fx_rejected;
+
 uint8_t ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS])
 {
     uint8_t mask = 0;
     uint32_t i;
+    ultra_fx_rejected = 0;
     if ((img[0] | ((uint32_t)img[1] << 8) | ((uint32_t)img[2] << 16) | ((uint32_t)img[3] << 24)) != ULTRA_FX_MAGIC) {
         return 0;                                        /* (little endian, as hal/hw.c writes the word) */
     }
@@ -158,10 +161,13 @@ uint8_t ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS])
             if (!head_ok(&u->light[i])) {
                 memset(&u->light[i], 0, ULTRA_HEAD_BYTES);   /* not this firmware's: as if erased */
                 u->light[i].g_q16 = g0;
+                ultra_fx_rejected += MON_EXTRA;          /* (0.6.5, D5) */
                 continue;
             }
             crc[i] = img[5u + i];
             mask |= (uint8_t)(1u << i);
+        } else if (MON_EXTRA && (img[4] & (1u << i))) {
+            ultra_fx_rejected++;                         /* (0.6.5, D5) listed, its CRC wrong */
         }
     }
     return mask;

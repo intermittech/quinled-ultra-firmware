@@ -9,6 +9,7 @@
 #include "../core/stagger.h"
 #include "../core/scratch.h"
 #include "../core/lto.h"
+#include "../core/perf.h"
 
 uint32_t SystemCoreClock = 144000000u;
 
@@ -189,6 +190,7 @@ static int32_t slew_next(volatile uint16_t *cnt, uint32_t tgt, int32_t pend, con
 void slew2_isr(void);                                    /* TIM2 update, entered via isr.S */
 void slew2_isr(void)
 {
+    PERF_T(pt);                                          /* (a PERF build: core/perf.h) */
     int32_t d;
     uint32_t idx;
     TIM2->INTFR = (uint16_t)~TIM_UIF;
@@ -197,11 +199,13 @@ void slew2_isr(void)
     if (d == 0) {
         TIM2->DMAINTENR &= (uint16_t)~TIM_UIE;           /* arrived */
     }
+    PERF_ADD(PERF_SLEW, pt);
 }
 
 void slew3_isr(void);                                    /* TIM3 update, entered via isr.S */
 void slew3_isr(void)
 {
+    PERF_T(pt);
     int32_t d;
     uint32_t idx;
     TIM3->INTFR = (uint16_t)~TIM_UIF;
@@ -224,6 +228,7 @@ void slew3_isr(void)
     if (d == 0) {
         TIM3->DMAINTENR &= (uint16_t)~TIM_UIE;
     }
+    PERF_ADD(PERF_SLEW, pt);
 }
 
 uint8_t pwm_right_aligned(uint8_t ch)
@@ -456,6 +461,7 @@ static volatile uint32_t temp_ts2, temp_vref2;
 static volatile uint32_t vs_acc[2], vs_n;                /* voltage pairs since the main loop's last take */
 static volatile uint8_t adc_ready;                       /* hw_adc_init done: the poll tick may start sequences (0
                                                             during flash_op too: the SRAM tick does not run them) */
+volatile uint16_t hw_diag[HW_DIAG_N];                    /* (0.6.5, D6) hw.h */
 
 void hw_adc_init(void)
 {
@@ -485,10 +491,18 @@ void hw_adc_init(void)
 
 uint32_t hw_adc_ms(void)
 {
+    uint32_t sr;
     if (!adc_ready) {
         return 0;
     }
-    if (inj_run != 0u && (ADC1->STATR & ADC_JEOC)) {
+    sr = ADC1->STATR;
+#if MON_EXTRA
+    if (!(sr & ADC_STRT)) {
+        hw_diag[0]++;                    /* (0.6.5, D6) no regular conversion started since the last ms (STRT, cleared
+                                            below: BENCH, continuous mode sets it at each start) */
+    }
+#endif
+    if (inj_run != 0u && (sr & ADC_JEOC)) {
         uint32_t a = (ADC1->IDATAR1 & 0xFFFu) + (ADC1->IDATAR3 & 0xFFFu);
         uint32_t b = (ADC1->IDATAR2 & 0xFFFu) + (ADC1->IDATAR4 & 0xFFFu);
         if (inj_run == 2u) {
@@ -500,8 +514,12 @@ uint32_t hw_adc_ms(void)
             vs_acc[1] += b;
             vs_n++;
         }
+#if MON_EXTRA
+    } else if (inj_run != 0u) {
+        hw_diag[1]++;                    /* (0.6.5, D6) the last sequence is not done: its values are not taken */
+#endif
     }
-    ADC1->STATR = ~(uint32_t)ADC_JEOC;                   /* rc_w0: only JEOC cleared */
+    ADC1->STATR = ~(uint32_t)(ADC_JEOC | (MON_EXTRA ? ADC_STRT : 0u));   /* rc_w0: only JEOC (and STRT) cleared */
     if (temp_req) {
         temp_req = 0;
         ADC1->ISQR = INJ_TEMP;
@@ -538,6 +556,18 @@ uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2)
     *ts2 = temp_ts2;
     *vref2 = temp_vref2;
     return 1;
+}
+
+/* (0.6.5, D6) DMA1's transfer error flags (TEIF1..7, RM 10.4.1): counted, and cleared (only the ones read) */
+void hw_dma_check(void)
+{
+    uint32_t f = DMA1->INTFR & 0x08888888u, i;
+    for (i = 0; i < 7u; i++) {
+        if (f & (DMA_TEIF1 << (4u * i))) {
+            hw_diag[2u + i]++;
+        }
+    }
+    DMA1->INTFCR = f;                                    /* (CTEIFx at the TEIFx positions) */
 }
 
 /* ---------------------------------------------------------------------------------------------------- gate */
@@ -589,6 +619,7 @@ NOINLINE void gate_rearm(const gate_plan_t *g)                 /* (poll ISR, fra
 void gate_isr(void);                                     /* TIM4 CC2, entered via isr.S (HPE + mret) */
 void gate_isr(void)
 {
+    PERF_T(pt);
     uint32_t n = 0;
     TIM4->INTFR = (uint16_t)~TIM_CC2IF;
     if (gate_t2 != 0u && TIM4->CH2CVR == gate_t1) {
@@ -599,6 +630,7 @@ void gate_isr(void)
     } else {
         TIM4->DMAINTENR = 0;                             /* hold the level until the next re-arm */
     }
+    PERF_ADD(PERF_GATE, pt);
 }
 
 uint32_t din_ring_pos(void)
@@ -708,6 +740,11 @@ static int uart_tx_busy(void)
     return (DMA1_Channel7->CFGR & DMA_CFGR1_EN) && DMA1_Channel7->CNTR != 0u;
 }
 
+uint32_t uart_room(void)
+{
+    return UART_TX_SIZE - uart_tx_len + (uart_tx_busy() ? 0u : UART_TX_SIZE);
+}
+
 uint32_t uart_busy(void)
 {
     return uart_tx_len != 0u || uart_tx_busy() || !(USART2->STATR & USART_STATR_TC);
@@ -745,7 +782,10 @@ void hw_init(void)
 
     RCC->AHBPCENR |= RCC_DMA1EN;
     RCC->APB2PCENR |= RCC_AFIOEN | RCC_IOPAEN | RCC_IOPBEN | RCC_TIM1EN | RCC_SPI1EN;
-    RCC->APB1PCENR |= RCC_TIM2EN | RCC_TIM3EN | (1u << 2) /* TIM4 */ | RCC_USART2EN;
+    RCC->APB1PCENR |= RCC_TIM2EN | RCC_TIM3EN | (1u << 2) /* TIM4 */ | RCC_USART2EN | RCC_PWREN;
+    /* (0.6.5) the PVD at 2.9 V (as the bootloader): flash_op starts nothing while VDD is below it (DS table 4-17:
+     * programming needs >= 2.4 V; a dip write may run while the supply goes away) */
+    PWR->CTLR = (PWR->CTLR & ~PWR_CTLR_PLS) | PWR_CTLR_PLS_2V9 | PWR_CTLR_PVDE;
 
     /* TIM2 partial remap 2: CH3 / CH4 on PB10 / PB11 (CH1 / ETR / CH2 stay on PA0 / PA1, unused by TIM2).
      * Others default: TIM1 CH1 / CH2 = PA8 / PA9, TIM3 CH1 / CH3 / CH4 = PA6 / PB0 / PB1, SPI1 SCK / MISO =
@@ -863,6 +903,19 @@ void hw_init(void)
 #endif
 extern void flash_tick(void), flash_fault(void);         /* isr.S, .ramtext */
 
+/* (0.6.5) the record reads at boot (main.c, before hw_init: no timer, DMA, UART or SysTick runs on the clocks yet).
+ * Upper layout: HCLK / 2, so the flash clock (HCLK / 2 with SCKMOD 0, its reset value, which nothing here changes) is
+ * 36 MHz, inside DS table 4-17's 60 MHz for reads of the non-zero-wait CodeFlash (README: Upper flash;
+ * the zero-wait area's 144 MHz is for the code path, not for these reads). The core runs at 72 MHz meanwhile. */
+void hw_records_window(uint32_t open)
+{
+#if UPPER_RECORDS
+    RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | (open ? RCC_HPRE_DIV2 : 0u);
+#else
+    (void)open;                                          /* 0.6.4's layout: zero-wait flash, read at any clock */
+#endif
+}
+
 /* the SRAM path's trip: all five outputs forced low (as pwm_force_off(1)); never back to PWM */
 RAMCODE void hw_flash_trip(void)
 {
@@ -908,6 +961,9 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     uint32_t i, r = FLASH_OK, cfgr, mtvec, rxw, adc = adc_ready;
     uint16_t slewing;
     BARRIER();                                           /* the record (written as its own type) is complete */
+    if (PWR->CSR & PWR_CSR_PVDO) {
+        return FLASH_ERR_VDD;                            /* (0.6.5) VDD below 2.9 V: the write stays pending */
+    }
     adc_ready = 0;                                       /* no new injected sequence (hw_adc_ms) */
     for (i = 0; i < FLASH_TC_POLLS && !(USART2->STATR & USART_STATR_TC); i++) {
     }

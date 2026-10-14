@@ -35,7 +35,7 @@ def main():
     ap.add_argument("--rev-mask", required=True, type=lambda s: int(s, 0),
                     help="board revisions it runs on (bit 0 v0.1 PB15 only, 1 PB11, 2 current sense)")
     ap.add_argument("--hw-id", type=int, default=qdu.HW_ID_D2A_ULTRA_5CH)
-    ap.add_argument("--min-bl", type=int, default=1)
+    ap.add_argument("--min-bl", type=int, default=qdu.MIN_BL, help="default: 2 (UPPER_RECORDS=0: 1)")
     ap.add_argument("--build-id", default="", help="git hash or similar (<= 16 characters)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()

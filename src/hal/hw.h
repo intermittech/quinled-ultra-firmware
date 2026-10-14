@@ -31,6 +31,17 @@
 #ifndef CPU_SLEEP
 #define CPU_SLEEP() __asm volatile("wfi" ::: "memory")
 #endif
+/* (0.6.5, D1) in an interrupt handler: the interrupted PC (mepc). The poll tick has the lowest priority, so there it is
+ * the main loop's place (the reset breadcrumbs, main.c bcrumb). */
+#ifndef TRAP_PC
+static inline uint32_t hw_trap_pc(void)
+{
+    uint32_t v;
+    __asm volatile("csrr %0, mepc" : "=r"(v));
+    return v;
+}
+#define TRAP_PC() hw_trap_pc()
+#endif
 
 /* PWM dither tables, written by the main loop, read by DMA once per PWM period (into the CCRs). pwm_table()
  * tells where a channel's values go: entry i of channel ch is base[i * stride]. */
@@ -49,6 +60,9 @@ void hw_init(void);
 void stack_paint(void);
 uint32_t stack_used(void);
 uint32_t hw_uid_hash(void);                      /* a hash of the chip's 96-bit unique id (ESIG, 0x1FFFF7E8) */
+#ifndef HW_UID                                   /* (the host soak test, test/soak/ch32v20x.h, has its own) */
+#define HW_UID ((const uint32_t *)0x1FFFF7E8u)   /* ... the id itself: three words (RM 31.2: UID registers 1..3) */
+#endif
 uint32_t hw_reset_flags(void);                   /* RCC reset flags captured at boot */
 void watchdog_kick(void);
 /* (re)start the PWM timers: period `steps` counts (1440..65535), table length `len`. stagger: TIM1 / TIM2 / TIM3 a
@@ -65,6 +79,8 @@ void gate_force_closed(void);
 /* DIN falling edges since the last gate_rearm(), and the poll tick acknowledge (main.c, needs ch32v20x.h) */
 #define DIN_EDGES() ((uint16_t)TIM4->CNT)
 #define POLL_ACK()  (SysTick->SR = 0u)
+/* HCLK cycles into the poll tick (SysTick counts up to CMP, then from 0; the low word of its 64-bit CNT) */
+#define POLL_CNT()  (*(volatile uint32_t *)&SysTick->CNT)
 uint32_t din_ring_pos(void);                    /* words written so far into din_ring (0..RING-1) */
 /* ADC1 (hw.c "ADC"): PA7, the current sense (core/isense.h), converted continuously (71.5 + 12.5 cycles at 12 MHz
  * = 7 us); ISENSE_RAW() is the newest result (main.c / the poll tick, needs ch32v20x.h). The injected group, started
@@ -82,6 +98,13 @@ void hw_vsense_take(uint32_t sum2[2], uint32_t *n);
  * hw_temp_start(); hw_temp_read() gives the sums of the two conversions each (0 = not done). */
 void hw_temp_start(void);
 uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2);
+/* (0.6.5, D6) fault counters (wrap): [0] ms in which no regular PA7 conversion started (the current sense stale: the
+ * trip saw old samples), [1] injected sequences (voltages / temperature) not done within their ms (hw_adc_ms, the
+ * poll tick); [2..8] DMA1 channel 1..7 transfer errors (hw_dma_check, once a second from the main loop: TEIF counted
+ * and cleared; a transfer error disables its channel). The console shows them when one is not 0. */
+#define HW_DIAG_N 9u
+extern volatile uint16_t hw_diag[HW_DIAG_N];
+void hw_dma_check(void);
 /* all five PWM outputs low at once (OCxM = force inactive; ISR-safe), or back to PWM. The tables keep running.
  * Call pwm_force_off(0) with interrupts off (it must not undo a trip the poll tick raised meanwhile). */
 void pwm_force_off(uint8_t off);
@@ -111,11 +134,15 @@ void led_set(uint8_t on);
  * flash_poll_isr (the time base and the fast trip), which trips through hw_flash_trip (SRAM) */
 void flash_poll_isr(void);
 void hw_flash_trip(void);
+/* (0.6.5) the record pages' reads at boot, before hw_init: open = HCLK / 2 (the upper CodeFlash, board.h), 0 = back */
+void hw_records_window(uint32_t open);
 /* UART: RX by DMA into a ring, TX by DMA from a buffer (non-blocking unless the buffer is full) */
 int  uart_getc(void);                           /* -1 if nothing new; -2 once after a flash operation dropped
                                                    received bytes: cancel the line being typed */
 void uart_write(const char *s);
 void uart_kick(void);                           /* start sending what uart_write buffered */
-uint32_t uart_busy(void);                       /* something queued or on the line (flash_op waits for it) */
+uint32_t uart_busy(void);
+/* (0.6.5) bytes uart_write takes now without waiting (the buffer being filled, and the other one when idle) */
+uint32_t uart_room(void);                       /* something queued or on the line (flash_op waits for it) */
 
 #endif

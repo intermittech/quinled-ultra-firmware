@@ -17,13 +17,15 @@ void cal_pack(const isense_cal_t *c, uint32_t seq, uint16_t count, cal_rec_t *re
     rec->seq = seq;
     rec->count = count;
     rec->c = *c;
-    rec->crc = crc16_ccitt(b, CAL_REC_BYTES - 2u);
+    while (crc16_erased(rec->crc = crc16_ccitt(b, CAL_REC_BYTES - 2u))) {
+        rec->rsv2[0]--;                                  /* (0.6.5: see crc16_erased; rsv2 is read by nothing) */
+    }
 }
 
 int cal_valid(const uint8_t *b)
 {
     const cal_rec_t *r = (const cal_rec_t *)b;
-    return r->magic == CAL_MAGIC && r->crc == crc16_ccitt(b, CAL_REC_BYTES - 2u);
+    return r->magic == CAL_MAGIC && !crc16_erased(r->crc) && r->crc == crc16_ccitt(b, CAL_REC_BYTES - 2u);
 }
 
 int cal_find(const uint8_t *page, isense_cal_t *out, uint32_t *seq, uint16_t *count)

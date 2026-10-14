@@ -39,6 +39,14 @@
 #define TJ_RST_HOLD_MS    5000u
 #define TJ_RST_WAIT_MS    5000u
 #define TJ_RST_CONFIRM_MS 1000u
+/* pass / fail (0.6.5, the console's `jig` line, cli_test_report): each channel's current at TJ_PEAK_PCT within these
+ * (build options; a jig PC may apply its own limits to the line's values) */
+#ifndef TJ_PASS_MIN_MA
+#define TJ_PASS_MIN_MA 50u          /* below: the channel or its load open (the zero's noise: ~+-20 mA) */
+#endif
+#ifndef TJ_PASS_MAX_MA
+#define TJ_PASS_MAX_MA 3000u        /* above: ~9 A at full, over the board's 8 A: a short or the wrong load */
+#endif
 #define TJ_EV_MODE     0x01u        /* tj_pad: test mode turned on or off */
 #define TJ_EV_RESET    0x02u        /* ... the reset gesture is complete */
 enum { TJ_RST_IDLE = 0, TJ_RST_HOLD, TJ_RST_ARMED, TJ_RST_WAIT, TJ_RST_CONFIRM };

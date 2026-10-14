@@ -13,7 +13,7 @@ Usage (library):
 import struct
 
 RAM_BASE, RAM_SIZE = 0x20000000, 20 * 1024
-FLASH_SIZE = 64 * 1024
+FLASH_SIZE = 0x38000                                     # (0.6.5) the user CodeFlash: 64 KB zero-wait + the 160 KB above (the records)
 RET_MAGIC = 0x0FFFFFF0
 
 # cost model (cycles), QingKe V4 estimate: 1 for ALU, +1 load, +1 taken branch / jump, div/rem 17 worst

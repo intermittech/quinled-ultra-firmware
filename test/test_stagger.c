@@ -99,6 +99,7 @@ static void st_mixes(int n, st_mix_t *m, uint32_t *fx, uint32_t *ad, uint32_t *a
 }
 
 static void test_stagger_sweep(int seeds);
+static void test_stagger_cap(void);
 
 static void test_stagger(void)
 {
@@ -227,6 +228,87 @@ static void test_stagger(void)
         printf("  slew: every preset, random moves arrive within +-4 counts, <= %u periods, |step| <= period / 512%s\n",
                worst_n, ok ? "" : " FAILED");
         CHECK(ok, "slew");
+    }
+    test_stagger_cap();
+}
+
+/* 0.6.5: C10's ripple load: % of the rating per preset (a raw period: the preset at or above its frequency), the
+ * ~1 min rms (a filter of the square), the peak; the research tool's one 5 A channel at 50 %; the console */
+static void test_stagger_cap(void)
+{
+    static const uint32_t lim[PWM_PRESET_COUNT] = { 2940, 2900, 2710, 2690, 2980, 2620, 2920, 3110, 3460, 3730, 3950,
+                                                     4160, 4510, 5150, 6140 };   /* k-interp.txt, mA rms */
+    stagger_cap_t c;
+    uint32_t p, s;
+    uint16_t duty[5] = { 0, 0, 0, 32768, 0 }, peak[5] = { 0, 0, 0, 5000, 0 };
+    cli_t cl;
+    cli_status_t st;
+
+    printf("C10 ripple load: per preset, the ~1 min rms, the peak, the console\n");
+    for (p = 0; p < PWM_PRESET_COUNT; p++) {          /* half the limit is 50 % at every preset (+-1 for the 25 mA
+                                                        table) */
+        memset(&c, 0, sizeof c);
+        stagger_cap_second(&c, lim[p] / 2u, pwm_preset_steps[p]);
+        CHECK(c.now >= 49u && c.now <= 51u, "preset %u: half the limit is %u %%", p, c.now);
+    }
+    memset(&c, 0, sizeof c);
+    stagger_cap_second(&c, 1730, 6000);               /* 24 kHz: the 25 kHz preset's limit, 3.46 A */
+    CHECK(c.now == 50u, "a raw period between presets: %u %%", c.now);
+    /* one 5 A channel at 50 %: 2.5 A rms of ripple, 72 % at 25 kHz (the research tool: 70 %, steps 82 %) */
+    memset(&c, 0, sizeof c);
+    stagger_cap_second(&c, stagger_ripple_ma(duty, peak, STAGGER_FIXED_O2, STAGGER_FIXED_O3), 5760);
+    CHECK(c.now == 72u, "one 5 A channel at 50 %%, 25 kHz: %u %%", c.now);
+    /* the ~1 min rms: 10 min at 50 %, then off (C10 cools with ~64 s), the peak stays; 0 / 100 % each second: the
+     * rms, 71 % (heating goes with the square), not the mean */
+    memset(&c, 0, sizeof c);
+    for (s = 0; s < 600u; s++) {
+        stagger_cap_second(&c, 1730, 5760);
+    }
+    CHECK(c.avg >= 49u && c.avg <= 50u && c.peak == c.avg, "10 min at 50 %%: ~1 min %u %%", c.avg);
+    for (s = 0; s < 64u; s++) {
+        stagger_cap_second(&c, 0, 5760);
+    }
+    CHECK(c.now == 0u && c.avg >= 28u && c.avg <= 32u && c.peak >= 49u, "64 s off: %u %% (e^-1/2 of 50), peak %u %%",
+          c.avg, c.peak);
+    memset(&c, 0, sizeof c);
+    for (s = 0; s < 1200u; s++) {
+        stagger_cap_second(&c, (s & 1u) ? 3460u : 0u, 5760);
+    }
+    CHECK(c.avg >= 69u && c.avg <= 72u, "0 / 100 %% every other second: %u %% (rms)", c.avg);
+    {                                                 /* the HEALTH page's byte 23 (health_page first) */
+        uint8_t pg[24];
+        health_t h;
+        health_init(&h);
+        health_page(&h, 412, 75, pg);
+        stagger_cap_page(&c, pg);
+        CHECK(pg[STAGGER_CAP_PG] == c.avg && ultra_get24(pg + ULTRA_HE_TEMP_AGE) == 75u, "HEALTH page: byte 23 = %u %%",
+              pg[STAGGER_CAP_PG]);
+        c.avg = 300;
+        stagger_cap_page(&c, pg);
+        CHECK(pg[STAGGER_CAP_PG] == 255u, "HEALTH page: 300 %% as 255");
+        c.avg = 0;
+    }
+
+    /* the console: with the stagger's lines */
+    memset(&cl, 0, sizeof cl);
+    memset(&st, 0, sizeof st);
+    settings_default(&cli_set);
+    st.version = "test";
+    st.steps = 5760;
+    st.en = &test_en;
+    st.ripple_ma = 1730;
+    st.cap = c;
+    cl.write = cap_write;
+    cl.apply = cap_apply;
+    cl.save_now = cap_save;
+    cl.set = &cli_set;
+    cl.st = &st;
+    run_cli(&cl, "status\r");
+    {
+        char want[100];
+        sprintf(want, "ripple_rms=1.73 A\r\nc10_load=%u %%, 1 min %u %%, peak %u %%\r\n",
+                (uint32_t)c.now, (uint32_t)c.avg, (uint32_t)c.peak);
+        CHECK(strstr(cli_out, want) != NULL, "status: %s", want);
     }
 }
 

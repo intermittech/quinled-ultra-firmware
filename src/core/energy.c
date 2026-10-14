@@ -118,8 +118,9 @@ void energy_pack(energy_t *e)
 {
     life_rec_t *r = &e->lt;
     r->wh = energy_total_wh(e);
-    r->writes++;
-    r->crc = crc16_ccitt((const uint8_t *)r, 38u);
+    do {
+        r->writes++;                                     /* (0.6.5: a count skipped when the CRC would read erased) */
+    } while (crc16_erased(r->crc = crc16_ccitt((const uint8_t *)r, 38u)));
 }
 
 void energy_saved(energy_t *e, uint32_t now_s)
@@ -135,7 +136,8 @@ void energy_saved(energy_t *e, uint32_t now_s)
  * decisions) */
 static int life_valid(const uint8_t *s)
 {
-    return s[37] == LIFE_MAGIC && ((const life_rec_t *)s)->crc == crc16_ccitt(s, 38u);
+    uint32_t c = ((const life_rec_t *)s)->crc;
+    return s[37] == LIFE_MAGIC && !crc16_erased(c) && c == crc16_ccitt(s, 38u);
 }
 
 static const pp_desc_t life_pp = { LIFE_REC_BYTES, LIFE_RECS, (uint8_t)offsetof(life_rec_t, writes), 0u, life_valid };
@@ -157,6 +159,41 @@ uint32_t life_plan(life_pos_t *pos)
 uint32_t life_free(const life_pos_t *pos)
 {
     return pp_free(&life_pp, pos);
+}
+
+MEASURED void energy_ch_ms(energy_t *e, const uint16_t out[ISENSE_CH], int32_t ma)
+{
+    uint32_t k;
+    for (k = 0; k < ISENSE_CH; k++) {
+        e->ch_d[k] += out[k];
+    }
+    e->ch_i += (uint32_t)ma;                             /* (>= 0) */
+    e->ch_n++;
+}
+
+MEASURED void energy_ch_second(energy_t *e, const isense_t *is, uint32_t mv)
+{
+    uint32_t k, n = e->ch_n, f[ISENSE_CH], sum = 0, mj;
+    int32_t i;
+    if (n == 0u) {
+        return;
+    }
+    i = (int32_t)(e->ch_i / n) - (is->zero_valid ? is->zero_ma : 0);
+    mj = i > 0 ? mv * (uint32_t)i / 1000u * n / 1000u : 0u;     /* mV x mA = uW (75 V x 20 A fits); x n ms: mJ */
+    for (k = 0; k < ISENSE_CH; k++) {
+        /* the modelled current at the mean output, mA (< 2^15); the mean of 16-bit levels as 16 bits: GCC then still
+         * knows every isense_ch_ma caller's level fits (shape_at keeps no range check: isense_ms 20 cycles) */
+        f[k] = isense_ch_ma(is, k, (uint16_t)(e->ch_d[k] / n));
+        sum += f[k];
+        e->ch_d[k] = 0;
+    }
+    for (k = 0; sum != 0u && k < ISENSE_CH; k++) {
+        /* its share, Q16 (<= 65536), of the second's mJ (< 2^21): a 64-bit product, no division by sum per mJ */
+        uint32_t m = e->ch_mj[k] + (uint32_t)(((uint64_t)mj * ((f[k] << 16) / sum)) >> 16);
+        e->ch_mwh[k] += m / 3600u;
+        e->ch_mj[k] = (uint16_t)(m % 3600u);
+    }
+    e->ch_i = e->ch_n = 0;
 }
 
 void energy_page(const energy_t *e, uint32_t now_s, uint32_t power_mw, uint8_t out[24])

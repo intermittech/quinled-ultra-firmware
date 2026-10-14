@@ -363,6 +363,33 @@ static void test_r4_trial_window(void)
     CHECK(fl_violations == 0 && keep_areas_intact(), "flash rules");
 }
 
+#if UPPER_RECORDS
+/* ---------------------------------------------------------------- (0.6.5) the record pages above the slot */
+static void test_r4_cal_page(void)
+{
+    uint32_t ops[32], n, k, past = 0;
+    static image_t *big;
+    printf("the largest image (%u B, to the zero-wait flash's end) and the record pages above it (0.6.5)\n",
+           (unsigned)UPD_APP_BODY_MAX);
+    n = bl_erase_plan(UPD_APP_BODY_MAX, ops, 32u);
+    for (k = 0; k < n; k++) {
+        uint32_t a = ops[k] & ~1u, sz = (ops[k] & 1u) ? 256u : 4096u;
+        past |= a + sz > UPD_APP_END;
+    }
+    CHECK(!past, "erase plan for the largest image ends at 0x08010000");
+    big = (image_t *)malloc(sizeof(image_t));
+    board_reset_model();
+    make_image(&r4_a, 8000, V(0, 4, 0, 0xFF), 1, REV_OK, 1, 481);
+    make_image(big, UPD_APP_BODY_MAX, V(0, 5, 0, 0xFF), 1, REV_OK, 1, 483);
+    factory(&r4_a);
+    board_power_on();
+    host_session(big, 0xB1, &SESS_DEFAULT);
+    host_after();
+    CHECK(running(big), "the %u-byte image installed", (unsigned)big->len);
+    CHECK(fl_violations == 0 && keep_areas_intact(), "the record pages survived");
+    free(big);
+}
+#else
 /* ---------------------------------------------------------------------------- the calibration page at 0xF600 */
 static void test_r4_cal_page(void)
 {
@@ -399,6 +426,8 @@ static void test_r4_cal_page(void)
     CHECK(!touches_cal && fl_violations == 0 && keep_areas_intact(), "the calibration page and the record pages survived");
     free(big);
 }
+
+#endif
 
 /* ------------------------------------------------------------ a reset with RAM kept at every flash operation */
 static void test_r4_reset_cuts(uint32_t len, uint32_t stride)

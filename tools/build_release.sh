@@ -30,7 +30,7 @@ for v in $VARIANTS; do
   cp "$BL_OUT/bl.bin" "$OUT/bootloader-rev$rev.bin"
   cp "$BL_OUT/bl.hex" "$OUT/bootloader-rev$rev.hex"
   APP_OUT="$OUT/obj/app-$name"
-  OUT="$APP_OUT" EXTRA_CFLAGS="$flags -DUPD_APP=1 -DFW_VERSION=\"$VERSION\"" LDSCRIPT="$FW/vendor/wch/Link_app.ld" bash "$FW/tools/build_target.sh" | tail -1
+  OUT="$APP_OUT" PERF=0 EXTRA_CFLAGS="$flags -DUPD_APP=1 -DFW_VERSION=\"$VERSION\"" LDSCRIPT="$FW/vendor/wch/Link_app.ld" bash "$FW/tools/build_target.sh" | tail -1
   IMG="$OUT/quinled-dig2analog-ultra-5ch-$VERSION-$name.bin"
   "$PY" "$FW/tools/release/mkimage.py" --elf "$APP_OUT/fw.elf" --bin "$APP_OUT/fw.bin" --version "$VERSION" \
     --rev-mask "$mask" --build-id "$BUILD_ID" --out "$IMG"

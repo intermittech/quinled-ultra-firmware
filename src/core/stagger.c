@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 #include "stagger.h"
 #include "lto.h"
+#include "presets.h"
 #include "scratch.h"
 
 #define N        STAGGER_GRID
@@ -165,6 +166,33 @@ uint32_t stagger_ripple_ma(const uint16_t *duty, const uint16_t *peak_ma, uint16
     pulses_t p;
     setup(duty, peak_ma, &p);
     return ripple_of(&p, peak_ma, o2, o3);
+}
+
+/* C10 (stagger.h): the LED_+ ripple each preset allows, 3.2 A / K, in 25 mA (tools: the C10 ripple model,
+ * k-interp.txt: 2.94 2.90 2.71 2.69 2.98 2.62 2.92 3.11 3.46 3.73 3.95 4.16 4.51 5.15 6.14 A rms) */
+static const uint8_t cap_lim25[PWM_PRESET_COUNT] = { 118, 116, 108, 108, 119, 105, 117, 124, 138, 149, 158, 166, 180,
+                                                     206, 246 };
+
+MEASURED void stagger_cap_second(stagger_cap_t *c, uint32_t ripple_ma, uint32_t steps)
+{
+    uint32_t p = 0, v;
+    while (p + 1u < PWM_PRESET_COUNT && pwm_preset_steps[p] > steps) {
+        p++;
+    }
+    v = ripple_ma * 4u / cap_lim25[p];                   /* x 100 / (25 mA units) */
+    v = v > 4095u ? 4095u : v;
+    c->now = (uint16_t)v;
+    c->heat += v * v - (c->heat >> 6);                   /* (< 2^24 x 64) */
+    v = isqrt64(c->heat >> 6);
+    c->avg = (uint16_t)v;
+    if (v > c->peak) {
+        c->peak = (uint16_t)v;
+    }
+}
+
+void stagger_cap_page(const stagger_cap_t *c, uint8_t out[24])
+{
+    out[STAGGER_CAP_PG] = (uint8_t)(c->avg > 255u ? 255u : c->avg);
 }
 
 uint16_t stagger_gap_q16(uint32_t steps)

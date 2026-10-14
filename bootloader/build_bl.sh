@@ -24,7 +24,7 @@ ARCH="-march=rv32imc_zicsr_zifencei -mabi=ilp32"
 # -fno-optimize-crc: GCC 15 would turn the bitwise CRC loops into 1.75 KB of lookup tables (speed isn't needed here)
 CFLAGS="$ARCH -Os -g -ffunction-sections -fdata-sections -fno-common -msmall-data-limit=8 -ffreestanding \
  -fno-optimize-crc -Wall -Wextra -Wno-unused-parameter -Wno-unterminated-string-initialization -DCH32V20x_D6 -DBL_HW_REV=$BL_HW_REV -DBL_BUILD_ID=\"$BL_BUILD_ID\" \
- -I$FW/vendor/wch -I$FW/src/hal -I$FW/src/core -I$BL $EXTRA_CFLAGS"
+ -I$FW/vendor/wch -I$FW/src/hal -I$FW/src/core -I$BL -DUPPER_RECORDS=${UPPER_RECORDS:-1} $EXTRA_CFLAGS"
 "$GCC" $CFLAGS -x assembler-with-cpp -c "$BL/bl_start.S" -o "$OUT/bl_start.o"
 OBJS="$OUT/bl_start.o"
 for s in bl_main bl_hw bl_core bl_rx; do

@@ -2,7 +2,8 @@
  * Copyright (C) 2026 QuinLED */
 /* Channel health (core/health.c), included by test_main.c: the test's classes (normal, no load, not rising, far
  * above / below the test before, a lost load), the dark current at the test and while running, the running model's
- * drift against the stored test, single-level tests, the D9 code, and the HEALTH page. */
+ * drift against the stored test, single-level tests, the D9 code, and the HEALTH page; "calibration suggested"
+ * (0.6.5, test_health_cal). */
 #include "../src/core/health.h"
 
 /* a standard test: each channel's current at 25 / 50 / 75 / 100 % (linear from i100 unless set after), the zero */
@@ -18,6 +19,142 @@ static void he_test(isense_cal_t *c, const uint16_t i100[5], int16_t zero)
             c->ma[ch][l] = (uint16_t)(i100[ch] * (l + 1u) / 4u);
         }
     }
+}
+
+/* 0.6.5: "calibration suggested" (HEALTH_F_CAL): the running model off the stored test for HEALTH_SUGGEST_S s while
+ * the channel is on, latched until the next test; the HEALTH page bit, the console */
+/* health_run, and whether this call raised HEALTH_F_CAL */
+static uint32_t hc_run(health_t *h, const isense_t *is, const isense_cal_t *st)
+{
+    uint32_t was = h->flags & HEALTH_F_CAL;
+    health_run(h, is, st);
+    return (h->flags & HEALTH_F_CAL) && !was;
+}
+
+static void test_health_cal(void)
+{
+    static const uint16_t base[5] = { 3000, 3000, 2500, 0, 5000 };
+    static const uint16_t small[5] = { 100, 0, 0, 0, 0 };
+    isense_cal_t st, none;
+    health_t h;
+    isense_t is;
+    cli_t c;
+    cli_status_t cs;
+    uint32_t s, raised = 0;
+    uint8_t pg[24];
+
+    printf("channel health: calibration suggested\n");
+    health_init(&h);
+    he_test(&st, base, 30);
+    memset(&none, 0, sizeof none);
+    isense_init(&is, 1, 10000, 8000);
+    isense_cal_set(&is, &st);
+    is.ch_ma[4] = 6750;                                   /* W2 +35 %, +1750 mA, on */
+    is.applied[4] = 30000;
+    for (s = 1; s < HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && !(h.flags & HEALTH_F_CAL) && (h.flags & ULTRA_HE_F_DRIFT) && h.drift_s == HEALTH_SUGGEST_S - 1u,
+          "drifting %u s: not yet (%u)", s - 1u, h.drift_s);
+    is.applied[4] = 0;                                    /* dark: neither counts nor resets */
+    for (s = 0; s < 1000u; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && h.drift_s == HEALTH_SUGGEST_S - 1u, "dark: held (%u)", h.drift_s);
+    is.applied[4] = 1;
+    CHECK(hc_run(&h, &is, &st) != 0u && (h.flags & HEALTH_F_CAL), "raised at %u s on", HEALTH_SUGGEST_S);
+    for (s = 0; s < 100u; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && (h.flags & HEALTH_F_CAL), "raised once, then latched");
+    is.ch_ma[4] = 5000;                                   /* the model back at the test: still latched */
+    (void)health_run(&h, &is, &st);
+    CHECK((h.flags & HEALTH_F_CAL) && !(h.flags & ULTRA_HE_F_DRIFT) && h.drift_s == 0u, "latched without drift");
+    health_page(&h, 400, 1, pg);
+    CHECK((pg[ULTRA_HE_FLAGS] & HEALTH_F_CAL) != 0u, "HEALTH page: flags bit 4");
+
+    /* the console: on the health_model line */
+    memset(&c, 0, sizeof c);
+    memset(&cs, 0, sizeof cs);
+    settings_default(&cli_set);
+    cs.version = "test";
+    cs.steps = 5760;
+    cs.en = &test_en;
+    cs.hl = &h;
+    c.write = cap_write;
+    c.apply = cap_apply;
+    c.save_now = cap_save;
+    c.set = &cli_set;
+    c.st = &cs;
+    run_cli(&c, "status\r");
+    CHECK(strstr(cli_out, "health_model R/G/B/W1/W2=0/0/0/-/0 %, dark 0.00 A, calibration suggested\r\n") != NULL,
+          "status: calibration suggested");
+
+    /* a new test clears it */
+    health_test_start(&h, &st);
+    (void)health_test_done(&h, &st);
+    (void)health_run(&h, &is, &st);
+    CHECK(!(h.flags & HEALTH_F_CAL), "a new test clears it");
+    run_cli(&c, "status\r");
+    CHECK(strstr(cli_out, "calibration suggested") == NULL, "status: not after the test");
+
+    /* a drift that goes away before the time starts counting again */
+    is.ch_ma[4] = 6750;
+    for (s = 0; s < HEALTH_SUGGEST_S - 10u; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    is.ch_ma[4] = 5000;
+    (void)health_run(&h, &is, &st);
+    is.ch_ma[4] = 3250;                                   /* -35 % */
+    for (s = 0; s < HEALTH_SUGGEST_S - 1u; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && !(h.flags & HEALTH_F_CAL), "an interrupted drift starts again");
+    CHECK(hc_run(&h, &is, &st) != 0u, "-35 %% raises it too");
+
+    /* not: +20 %; +40 % but only 40 mA (a 100 mA channel); no stored test; no usable model */
+    health_test_start(&h, &st);
+    (void)health_test_done(&h, &st);
+    is.ch_ma[4] = 6000;
+    for (s = 0; s < 2u * HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && !(h.flags & HEALTH_F_CAL), "+20 %%: nothing");
+    he_test(&st, small, 30);
+    isense_cal_set(&is, &st);
+    is.ch_ma[0] = 140;
+    is.applied[0] = 30000;
+    for (s = 0; s < 2u * HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && (h.flags & ULTRA_HE_F_DRIFT) && !(h.flags & HEALTH_F_CAL), "100 -> 140 mA: drift, no suggestion");
+    is.ch_ma[0] = 6750;
+    for (s = 0; s < 2u * HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &none);
+    }
+    CHECK(!raised && !(h.flags & HEALTH_F_CAL), "no stored test: nothing");
+    he_test(&st, base, 30);
+    isense_init(&is, 1, 10000, 8000);                     /* learned only, not trusted yet: nothing */
+    is.ch_ma[4] = 6750;
+    is.applied[4] = 30000;
+    for (s = 0; s < 2u * HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && !(h.flags & HEALTH_F_CAL), "model not usable: nothing");
+
+    /* a strip added where the test found nothing (W1): 250 mA learned raises it, 150 mA doesn't */
+    isense_cal_set(&is, &st);
+    is.ch_ma[3] = 150;
+    is.applied[3] = 20000;
+    for (s = 0; s < 2u * HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(!raised && !(h.flags & HEALTH_F_CAL) && h.model_dev[3] == ULTRA_HE_NA, "W1 empty at the test, 150 mA: nothing");
+    is.ch_ma[3] = 250;
+    for (s = 0; s < HEALTH_SUGGEST_S; s++) {
+        raised |= hc_run(&h, &is, &st);
+    }
+    CHECK(raised && (h.flags & HEALTH_F_CAL), "W1 empty at the test, 250 mA: a new load");
 }
 
 static void test_health(void)
@@ -170,4 +307,5 @@ static void test_health(void)
         ack_start(&a, ACK_P_ACK, 0);
         CHECK(!a.led_only, "the acknowledge stays on the feedback channel too");
     }
+    test_health_cal();
 }

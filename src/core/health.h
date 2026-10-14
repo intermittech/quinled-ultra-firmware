@@ -16,6 +16,11 @@
  *  - Once a second: the running model (the regression's current at 100 % of each channel) against the stored test,
  *    flagged from HEALTH_DRIFT_PCT % ("W1: +35 %"), and the current while dark (the zero tracking) against the stored
  *    test's zero.
+ *  - "Calibration suggested" (0.6.5): a channel's running model HEALTH_DRIFT_PCT % and HEALTH_TEST_MA mA off the
+ *    stored test (or HEALTH_NEWLOAD_MA on a channel the test found empty: a strip added) for HEALTH_SUGGEST_S seconds
+ *    while that channel is on (dark seconds neither count nor reset it: the model only learns while lit) latches
+ *    HEALTH_F_CAL until the next test. Display only: the limiter keeps using the running model as before; nothing
+ *    starts a test by itself.
  * Pure logic, host-tested (test/test_health.c). */
 #ifndef HEALTH_H
 #define HEALTH_H
@@ -30,9 +35,14 @@
 #define HEALTH_DRIFT_PCT   25
 #define HEALTH_DARK_MA     50
 #define HEALTH_DARK_ABS_MA 100
+#define HEALTH_NEWLOAD_MA  200     /* a channel the stored test found empty: this much learned is a new load */
+#define HEALTH_SUGGEST_S   300u    /* drifting this long (s, the channel on) raises HEALTH_F_CAL */
+/* the HEALTH page's flags (ULTRA_HE_FLAGS) bit 4: calibration suggested. Proposed for protocol 0.2.4 as
+ * ULTRA_HE_F_CAL_SUGGESTED; a 0.2.3 receiver ignores the bit (0x10-0x80 were never set) */
+#define HEALTH_F_CAL       0x10u
 
 typedef struct {
-    uint8_t  flags;                /* ULTRA_HE_F_* */
+    uint8_t  flags;                /* ULTRA_HE_F_*, HEALTH_F_CAL */
     uint8_t  cls[5];               /* the last test's class (ULTRA_HE_*) | reasons (ULTRA_HE_R_*) */
     int8_t   test_dev[5];          /* the last test at 100 % against the one before, % (ULTRA_HE_NA) */
     int8_t   model_dev[5];         /* the running model against the stored test, % (ULTRA_HE_NA) */
@@ -40,6 +50,7 @@ typedef struct {
     int16_t  prev_zero;            /* the test before the running one */
     uint16_t prev_ma[5];           /* ... each channel at 100 % (0: no load, or none) */
     uint8_t  prev_have;
+    uint16_t drift_s;              /* seconds a channel drifted while on (HEALTH_F_CAL at HEALTH_SUGGEST_S) */
 } health_t;
 
 void    health_init(health_t *h);

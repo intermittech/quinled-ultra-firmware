@@ -29,6 +29,17 @@ cl /nologo /O2 /W4 /wd4996 /I"%HERE%.." /I"%HERE%..\..\src\core" /Fe:"%OUT%\bl_t
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\bl_tests.exe"
 if %errorlevel% neq 0 exit /b 1
+rem 0.6.5: the same for 0.6.4's flash layout (UPPER_RECORDS=0: the bench fallback, bootloader 1)
+if not exist "%OUT%\lower" mkdir "%OUT%\lower"
+cl /nologo /O2 /W4 /wd4996 /DUPPER_RECORDS=0 /I"%HERE%.." /I"%HERE%..\..\src\core" /Fe:"%OUT%\bl_tests_lower.exe" ^
+   /Fo:"%OUT%\lower\\" "%HERE%test_bl.c" "%HERE%..\bl_core.c" "%HERE%..\bl_rx.c"
+if %errorlevel% neq 0 exit /b 1
+rem (a release image needs its own layout's bootloader: BL_TEST_IMAGE is for the default layout's run above)
+setlocal
+set "BL_TEST_IMAGE="
+"%OUT%\bl_tests_lower.exe"
+if %errorlevel% neq 0 exit /b 1
+endlocal
 set "ESPH="
 if defined ULTRA_ESPHOME set "ESPH=%ULTRA_ESPHOME%\components\dig2analog_ultra"
 if not defined ESPH if exist "%HERE%..\..\..\quinled-ultra-esphome\components\dig2analog_ultra\update_session.h" (

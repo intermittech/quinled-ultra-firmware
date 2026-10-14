@@ -94,17 +94,33 @@ MEASURED uint8_t health_test_done(health_t *h, const isense_cal_t *now)
 
 MEASURED void health_run(health_t *h, const isense_t *is, const isense_cal_t *stored)
 {
-    uint32_t ch;
-    uint8_t f = (uint8_t)(h->flags & (ULTRA_HE_F_TESTED | ULTRA_HE_F_ABNORMAL));
+    uint32_t ch, drift = 0;                /* 1: a channel drifts, 2: a drifting channel is on */
+    uint8_t f = (uint8_t)(h->flags & (ULTRA_HE_F_TESTED | ULTRA_HE_F_ABNORMAL | HEALTH_F_CAL));
     for (ch = 0; ch < 5u; ch++) {
-        int32_t t = (int32_t)health_i100(stored, ch);
-        h->model_dev[ch] = ULTRA_HE_NA;
-        if (t >= HEALTH_NOLOAD_MA && isense_model_ok(is)) {
-            h->model_dev[ch] = dev_pct(is->ch_ma[ch], t);
-            if (h->model_dev[ch] >= HEALTH_DRIFT_PCT || h->model_dev[ch] <= -HEALTH_DRIFT_PCT) {
-                f |= ULTRA_HE_F_DRIFT;
+        int32_t t = (int32_t)health_i100(stored, ch), d = is->ch_ma[ch] - t, thr = HEALTH_NEWLOAD_MA;
+        int8_t m = ULTRA_HE_NA;
+        if (isense_model_ok(is)) {         /* thr: the change that counts (a load where the test found none: ...) */
+            if (t >= HEALTH_NOLOAD_MA) {
+                m = dev_pct(is->ch_ma[ch], t);
+                thr = 0x7FFFFFFF;
+                if (m >= HEALTH_DRIFT_PCT || m <= -HEALTH_DRIFT_PCT) {
+                    f |= ULTRA_HE_F_DRIFT;
+                    thr = HEALTH_TEST_MA;
+                }
+            } else if (stored->levels == 0u) {
+                thr = 0x7FFFFFFF;          /* (no test: nothing to compare) */
+            }
+            if ((d < 0 ? -d : d) >= thr) {
+                drift |= 1u + (is->applied[ch] != 0u);
             }
         }
+        h->model_dev[ch] = m;
+    }
+    /* the seconds a drifting channel was on (dark ones hold the count); its 16-bit wrap after 18 h of drift does no
+     * harm: the flag is latched by then */
+    h->drift_s = drift != 0u ? (uint16_t)(h->drift_s + (drift >> 1)) : 0u;
+    if (h->drift_s >= HEALTH_SUGGEST_S) {
+        f |= HEALTH_F_CAL;                 /* until the next test (health_test_done) */
     }
     if (is->zero_valid) {
         f |= dark(h, is->zero_ma, stored->zero_ma, (uint8_t)(stored->levels != 0u));

@@ -193,20 +193,36 @@ static void test_testjig(void)
     }
     CHECK(!bad && !tj_led(&t, t.t0) && tj_led(&t, t.t0 + 100u), "D9 in test mode");
 
-    /* the console line */
+    /* the console lines: the report, then (0.6.5 D10) the jig PC's line with pass / fail, the id and the version */
     {
         cli_t cc;
+        cli_status_t cst;
+        static const uint32_t uid[3] = { 0x01234567u, 0x89ABCDEFu, 0xFEDCBA98u };
         static const int32_t ma[5] = { 136, 131, 398, 795, -3 };
+        static const int32_t lim[6] = { 3000, 50, 49, 3001, 1000, 0 };
         memset(&cc, 0, sizeof cc);
+        memset(&cst, 0, sizeof cst);
+        cst.uid = uid;
+        cst.version = "0.6.5-beta.1";
+        cc.st = &cst;
         cc.write = cap_write;
         cli_out[0] = 0;
         cli_test_report(&cc, ma, 33, 7, 24012);
         CHECK(strcmp(cli_out, "test @33%: R 0.14 A, G 0.13 A, B 0.40 A, W1 0.80 A, W2 0.00 A; "
-                              "est. @100%: R 0.41, G 0.40, B 1.21, W1 2.41, W2 0.00 A; supply 24.01 V (cycle 7)\r\n") == 0,
-              "report line: %s", cli_out);
+                              "est. @100%: R 0.41, G 0.40, B 1.21, W1 2.41, W2 0.00 A; supply 24.01 V (cycle 7)\r\n"
+                              "jig cycle=7 FAIL fail=16 a=0.14/0.13/0.40/0.80/0.00 supply=24.01 "
+                              "uid=19088743,2309737967,4275878552 fw=0.6.5-beta.1\r\n") == 0, "report lines: %s", cli_out);
         cli_out[0] = 0;
         cli_test_report(&cc, ma, 33, 1, 0);
-        CHECK(strstr(cli_out, "supply n/a (cycle 1)") != NULL, "report line without the supply");
+        CHECK(strstr(cli_out, "supply n/a (cycle 1)\r\njig cycle=1 FAIL fail=16 ") && strstr(cli_out, " supply=0.00 "),
+              "report lines without the supply: %s", cli_out);
+        cli_out[0] = 0;
+        cli_test_report(&cc, lim, 33, 2, 24000);
+        CHECK(strstr(cli_out, "jig cycle=2 FAIL fail=12 a=3.00/0.05/0.05/3.00/1.00 ") != NULL,
+              "the limits pass, 49 / 3001 fail (bits 4 / 8): %s", cli_out);
+        cli_out[0] = 0;
+        cli_test_report(&cc, lim + 1, 33, 3, 24000);
+        CHECK(strstr(cli_out, "jig cycle=3 FAIL fail=22 ") != NULL, "fail bits per channel: %s", cli_out);
     }
 }
 

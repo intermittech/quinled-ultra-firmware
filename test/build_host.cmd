@@ -23,12 +23,27 @@ rem Python 3 checks the documented source contracts as a separate safety guard.
 python "%HERE%test_shared_contract.py"
 if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%" mkdir "%OUT%"
+rem the console's compressed text (core/cz.h): tools/gen_console_text.py writes %OUT%\gen\cz_text.h (--upper: the
+rem default record layout's texts; genlow: 0.6.4's layout, UPPER_RECORDS=0)
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\gen" --upper
+if %errorlevel% neq 0 exit /b 1
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\genlow"
+if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%\isense" mkdir "%OUT%\isense"
-cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
+cl /nologo /O2 /W4 /wd4996 /I "%OUT%\gen" /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
    "%HERE%test_main.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\isense_tests.exe" /Fo:"%OUT%\isense\\" ^
    "%HERE%test_isense.c" "%HERE%..\src\core\isense.c"
+if %errorlevel% neq 0 exit /b 1
+rem 0.6.5 D7: the core as a PERF=2 bench build (core/perf.h): the counting and the console's `perf` (test_r5_perf.c)
+if not exist "%OUT%\perf" mkdir "%OUT%\perf"
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\genperf" --perf --upper
+if %errorlevel% neq 0 exit /b 1
+cl /nologo /O2 /W4 /wd4996 /DPERF_BUILD=2 /I "%OUT%\genperf" /Fe:"%OUT%\perf_tests.exe" /Fo:"%OUT%\perf\\" ^
+   "%HERE%test_r5_perf.c" "%HERE%..\src\core\*.c"
+if %errorlevel% neq 0 exit /b 1
+"%OUT%\perf_tests.exe"
 if %errorlevel% neq 0 exit /b 1
 rem the same against a gain-50 amplifier (CSA220NA, board.h ISENSE_AMP_GAIN 50)
 if not exist "%OUT%\isense50" mkdir "%OUT%\isense50"
@@ -38,16 +53,40 @@ if %errorlevel% neq 0 exit /b 1
 rem the time-warp soak (0.6.2, test/test_soak.c): src\app\main.c itself on a model of the hardware, past every
 rem counter's wrap; each scenario in its own process (a fresh boot), ~30 s together
 if not exist "%OUT%\soak" mkdir "%OUT%\soak"
-cl /nologo /O2 /W4 /wd4996 /I "%HERE%soak" /Fe:"%OUT%\soak_tests.exe" /Fo:"%OUT%\soak\\" ^
+cl /nologo /O2 /W4 /wd4996 /I "%HERE%soak" /I "%OUT%\gen" /Fe:"%OUT%\soak_tests.exe" /Fo:"%OUT%\soak\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\host_tests.exe"
 if %errorlevel% neq 0 exit /b 1
+rem 0.6.5 D3: the CPU load from the WFI stamps, on the soak's model of the sleep (test_r5_cpu_soak.c)
+"%OUT%\soak_tests.exe" r5cpu
+if errorlevel 1 exit /b 1
+rem (0.6.5, D1) the reset breadcrumbs after a watchdog reset (test_soak.c d1)
+"%OUT%\soak_tests.exe" d1
+if %errorlevel% neq 0 exit /b 1
 "%OUT%\isense_tests.exe"
 if %errorlevel% neq 0 exit /b 1
+rem (0.6.5, D2) the event log: a short, a supply dip, a calibration (test_soak.c d2)
+"%OUT%\soak_tests.exe" d2
+if %errorlevel% neq 0 exit /b 1
+rem 0.6.5 D4: the overrun counters on main.c (test_r5_ovr_soak.c)
+"%OUT%\soak_tests.exe" r5ovr
+if errorlevel 1 exit /b 1
 "%OUT%\isense_tests_g50.exe"
 if %errorlevel% neq 0 exit /b 1
-for %%s in (wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax) do (
+rem (0.6.5, D5) the flash state: rejected records at boot, a pending save, a failed write (test_soak.c d5)
+"%OUT%\soak_tests.exe" d5
+if %errorlevel% neq 0 exit /b 1
+rem (0.6.5) 0.6.4's flash layout (UPPER_RECORDS=0, the bench fallback): the soak's flash scenarios on its record map
+if not exist "%OUT%\soak_lower" mkdir "%OUT%\soak_lower"
+cl /nologo /O2 /W4 /wd4996 /DUPPER_RECORDS=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_tests_lower.exe" /Fo:"%OUT%\soak_lower\\" ^
+   "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
+if %errorlevel% neq 0 exit /b 1
+for %%s in (wrap fx cfg r4flash r5console) do (
+  "%OUT%\soak_tests_lower.exe" %%s
+  if errorlevel 1 exit /b 1
+)
+for %%s in (wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax r5dip r5fx r5console r5jig) do (
   "%OUT%\soak_tests.exe" %%s
   if errorlevel 1 exit /b 1
 )

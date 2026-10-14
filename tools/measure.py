@@ -268,6 +268,16 @@ def measure_monitor(emu, scratch):
     dip += [("vdip_ms", [vd, t, 0, 2604, 1, 2000]) for t in range(410, 414)]
     n, c = worst(dip)
     rows.append(("vdip_ms, a dip: start / its end into the log (worst)", n, c, ""))
+    if "vdip_z" in emu.syms:                                         # 0.6.5: the supply / cable impedance
+        vs = emu.addr("vs_sup")
+        emu.poke(vs + 16, struct.pack("<I", 1))                      # (vsense_t.ms: inside a 16 ms average)
+        n, c = worst([("vdip_z", [vd, vs, 2000]) for t in range(8)])
+        rows.append(("vdip_z, inside a supply average (every 1 ms)", n, c, ""))
+        emu.poke(vs + 16, struct.pack("<I", 0))                      # (ms 0: every call ends an average)
+        n, c = worst([("vdip_z", [vd, vs, 2000]) for t in range(8)])
+        rows.append(("vdip_z, an average's end, steady (every 16 ms)", n, c, ""))
+        n, c = worst([("vdip_z", [vd, vs, 6000]) for t in range(8)])
+        rows.append(("vdip_z, a load step (once per step)", n, c, ""))
     emu.call("energy_init", [en, 0, 0, 0x00060300, 0])                  # (0.6.3: found, now, version, watchdog)
     n, c = worst([(f, a) for t in range(1, 50) for f, a in (("energy_ms", [en, t, 24000, 2000, 1]),
                                                             ("energy_due", [en, t, 0, 1]))])
@@ -289,6 +299,12 @@ def measure_monitor(emu, scratch):
     emu.call("health_test_start", [hl, scratch + 3100])
     n = emu.call("health_test_done", [hl, scratch + 3100])
     rows.append(("health_test_done (after a calibration test)", n, emu.cycles(), ""))
+    if "energy_ch_ms" in emu.syms:                                      # 0.6.5: energy per channel
+        emu.poke(scratch + 3200, struct.pack("<5H", 40000, 0, 65535, 1000, 30000))
+        n, c = worst([("energy_ch_ms", [en, scratch + 3200, 2500 + t]) for t in range(20)])
+        rows.append(("energy_ch_ms: the outputs and the current summed (every 1 ms)", n, c, ""))
+        n, c = worst([("energy_ch_second", [en, IS, 24000]) for t in range(3)])
+        rows.append(("energy_ch_second: the split by the channel model (once a second)", n, c, ""))
     return rows
 
 
@@ -392,7 +408,7 @@ def main():
     # every 20th tick (1 ms): the ADC injected group, the last sequence's 4 results read, the next one started
     emu.wr(sym("adc_ready"), 1, 1)
     emu.wr(sym("inj_run"), 1, 1)
-    emu.mmio[ADC1_STATR] = 0x4                         # JEOC
+    emu.mmio[ADC1_STATR] = 0x14                        # JEOC, STRT (0.6.5, D6: a regular conversion ran: not stale)
     for a in range(0x4001243C, 0x4001244C, 4):         # IDATAR1-4
         emu.mmio[a] = 1234
     sub = ["poll_sub"] if "poll_sub" in emu.syms else [k for k in emu.syms if k.startswith("sub.")]  # the ms divider
@@ -494,6 +510,15 @@ def main():
             rows.append(("dither_build_var (spread) %s, steps %d, table %d (x5)" % (what, steps, ln), n, emu.cycles(), ""))
     n = emu.call("stagger_slew", [100, 2000, 11, 5760, 11, 1])
     rows.append(("stagger_slew (per period while moving)", n, emu.cycles(), ""))
+    if "stagger_cap_second" in emu.syms:                                # 0.6.5: C10's ripple load, once a second
+        cap = scratch + 3300
+        emu.poke(cap, bytes(12))
+        n, c = 0, 0
+        for steps in (65535, 5760, 1440):                               # (the preset search: its longest at 100 kHz)
+            k = emu.call("stagger_cap_second", [cap, 2500, steps])
+            if emu.cycles() >= c:
+                n, c = k, emu.cycles()
+        rows.append(("stagger_cap_second: C10's ripple load (once a second, worst)", n, c, ""))
 
     if isense:
         rows += measure_isense(emu, scratch)

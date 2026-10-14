@@ -26,8 +26,14 @@ import sys
 
 from rv32emu import Emu
 
-REG = {"cal": (0x0800F600, 0x100), "scene": (0x0800F700, 0x500), "fx": (0x0800FC00, 0x200),
-       "energy": (0x0800FE00, 0x100), "settings": (0x0800FF00, 0x100)}
+import os
+if os.environ.get("UPPER_RECORDS", "1") != "0":     # 0.6.5: the records' two upper sectors (src/hal/board.h)
+    REG = {"records A": (0x08010000, 0x600), "records B": (0x08011000, 0x600)}
+    LIFE_PAGES = (0x08010300, 0x08011300)
+else:                                                # 0.6.4's layout
+    REG = {"cal": (0x0800F600, 0x100), "scene": (0x0800F700, 0x500), "fx": (0x0800FC00, 0x200),
+           "energy": (0x0800FE00, 0x100), "settings": (0x0800FF00, 0x100)}
+    LIFE_PAGES = (0x0800FB00, 0x0800FE00)
 LIFE = "life_store"           # 0.6.3: the lifetime record in two pages (0x0800FB00 = the scene log's 5th until then)
 
 
@@ -100,14 +106,14 @@ def stores(elf):
     e.poke(crc, bytes(rnd.getrandbits(8) for _ in range(5)))
     e.call("scene_fx_store", [ul, 0x1F, crc])
     log.append(("fx", e.ret))
-    fx_all = e.peek(*REG["fx"])
+    fx_all = (e.peek(0x08010400, 0x200) + e.peek(0x08011400, 0x200)) if "records A" in REG else e.peek(*REG["fx"])
     e.call("scene_fx_store", [ul, 0, crc])
     log.append(("fx0", e.ret))
     if LIFE not in e.syms:
         e.call("energy_clear", [])
         log.append(("eclear", e.ret))
     img = {r: e.peek(a, n) for r, (a, n) in REG.items()}
-    img["life (0xFB00 + 0xFE00)"] = e.peek(0x0800FB00, 0x100) + e.peek(0x0800FE00, 0x100)
+    img["life (its two pages)"] = e.peek(LIFE_PAGES[0], 0x100) + e.peek(LIFE_PAGES[1], 0x100)
     img["fx (all lights)"] = fx_all
     return log, img, e.writes
 
@@ -118,6 +124,9 @@ def save_now(elf):
     rnd = random.Random(5)
     s, x = e.sym("set"), e.sym("sext")
     assert (s[1], x[1]) == (16, 7), (s, x)
+    if "uart_write" in e.syms and any(k == "cli" or k.startswith("cli.lto_priv.") for k in e.syms):
+        # (save_now's reply goes through cli_say, which writes through cli.write: set as main() does at boot)
+        e.poke(e.sym("cli")[0], struct.pack("<I", e.sym("uart_write")[0]))
     log = []                                                   # (void: the flash and the writes are compared)
     for _ in range(19):
         e.poke(s[0], bytes(rnd.getrandbits(8) for _ in range(16)))
@@ -131,7 +140,8 @@ def save_now(elf):
             e.mmio[0x40020084] = 0                                 # DMA1 channel 7 CNTR
             e.mmio[0x40004400] = 0xC0                              # USART2 STATR: TXE, TC
         log.append(e.call("save_now", []) > 0)
-    return log, {"settings": e.peek(*REG["settings"])}, e.writes
+    a = (0x08010000, 0x08011000) if "records A" in REG else (0x0800FF00, 0x0800F900)   # the settings' A / B pages
+    return log, {"settings": e.peek(a[0], 0x100) + e.peek(a[1], 0x100)}, e.writes
 
 
 def compare(what, a, b, shared=None):

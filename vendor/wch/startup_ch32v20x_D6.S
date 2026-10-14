@@ -17,63 +17,11 @@
 _start:
 	j	handle_reset
 
-    .section    .vector,"ax",@progbits
-    .align  1
-_vector_base:
-    .option norvc;
-    .word   _start
-    .word   0
-    .word   NMI_Handler                /* NMI */
-    .word   HardFault_Handler          /* Hard Fault */
-    .word   0
-    .word   Ecall_M_Mode_Handler       /* Ecall M Mode */
-    .word   0
-    .word   0
-    .word   Ecall_U_Mode_Handler       /* Ecall U Mode */
-    .word   Break_Point_Handler        /* Break Point */
-    .word   0
-    .word   0
-    .word   SysTick_Handler            /* SysTick */
-    .word   0
-    .word   SW_Handler                 /* SW */
-    .word   0
-    /* External Interrupts */
-    .word   WWDG_IRQHandler            /* Window Watchdog */
-    .word   PVD_IRQHandler             /* PVD through EXTI Line detect */
-    .word   TAMPER_IRQHandler          /* TAMPER */
-    .word   RTC_IRQHandler             /* RTC */
-    .word   FLASH_IRQHandler           /* Flash */
-    .word   RCC_IRQHandler             /* RCC */
-    .word   EXTI0_IRQHandler           /* EXTI Line 0 */
-    .word   EXTI1_IRQHandler           /* EXTI Line 1 */
-    .word   EXTI2_IRQHandler           /* EXTI Line 2 */
-    .word   EXTI3_IRQHandler           /* EXTI Line 3 */
-    .word   EXTI4_IRQHandler           /* EXTI Line 4 */
-    .word   DMA1_Channel1_IRQHandler   /* DMA1 Channel 1 */
-    .word   DMA1_Channel2_IRQHandler   /* DMA1 Channel 2 */
-    .word   DMA1_Channel3_IRQHandler   /* DMA1 Channel 3 */
-    .word   DMA1_Channel4_IRQHandler   /* DMA1 Channel 4 */
-    .word   DMA1_Channel5_IRQHandler   /* DMA1 Channel 5 */
-    .word   DMA1_Channel6_IRQHandler   /* DMA1 Channel 6 */
-    .word   DMA1_Channel7_IRQHandler   /* DMA1 Channel 7 */
-    .word   ADC1_2_IRQHandler          /* ADC1_2 */
-    .word   USB_HP_CAN1_TX_IRQHandler  /* USB HP and CAN1 TX */
-    .word   USB_LP_CAN1_RX0_IRQHandler /* USB LP and CAN1RX0 */
-    .word   CAN1_RX1_IRQHandler        /* CAN1 RX1 */
-    .word   CAN1_SCE_IRQHandler        /* CAN1 SCE */
-    .word   EXTI9_5_IRQHandler         /* EXTI Line 9..5 */
-    .word   TIM1_BRK_IRQHandler        /* TIM1 Break */
-    .word   TIM1_UP_IRQHandler         /* TIM1 Update */
-    .word   TIM1_TRG_COM_IRQHandler    /* TIM1 Trigger and Commutation */
-    .word   TIM1_CC_IRQHandler         /* TIM1 Capture Compare */
-    .word   TIM2_IRQHandler            /* TIM2 */
-    .word   TIM3_IRQHandler            /* TIM3 */
-    .word   TIM4_IRQHandler            /* TIM4 */
-    /* QuinLED: the table ends here. The firmware enables SysTick (12), TIM2 (44), TIM3 (45) and TIM4 (46) only
-     * (src/hal/hw.c, src/hal/isr.S); an interrupt that is never enabled never fetches its entry, so the 16 entries
-     * after TIM4 (I2C1 .. DMA1 channel 8, 64 bytes) are not needed. The handler names stay weak below. */
-
-    .option rvc;
+    /* QuinLED 0.6.5 (Quindor's choice, -188 B): no vector table. mtvec is one entry for every interrupt and exception
+     * (unified mode: src/hal/isr.S trap_entry dispatches on mcause, +4..+10 instructions per interrupt entry). The
+     * firmware enables SysTick (12), TIM2 (44), TIM3 (45) and TIM4 (46) only. During a flash operation hw.c flash_op
+     * points mtvec to its SRAM handler and takes SysTick through VTF, as before. The handler names below stay weak
+     * (unused). */
     .section    .text.vector_handler, "ax", @progbits
     .weak   NMI_Handler                /* NMI */
     .weak   HardFault_Handler          /* Hard Fault */
@@ -228,9 +176,8 @@ handle_reset:
 /* Enable global interrupt and configure privileged mode */
    	li t0, 0x88           
    	csrw mstatus, t0
-/* Configure the interrupt vector table recognition mode and entry address mode */
- 	la t0, _vector_base
-    ori t0, t0, 3           
+/* QuinLED 0.6.5: one entry for interrupts and exceptions (mtvec MODE 0: unified, MODE1 0: the code at the base) */
+	la t0, trap_entry
 	csrw mtvec, t0
 
     jal  SystemInit

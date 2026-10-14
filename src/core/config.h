@@ -89,7 +89,20 @@ typedef struct {
 } cfg_result_t;
 
 uint8_t      crc8_smbus(const uint8_t *d, uint32_t n);
-uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);    /* = ultra_crc16 (CRC-16/CCITT-FALSE), one copy: the
+uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);
+/* (0.6.5) a CRC-16 field programmed last reads like erased flash (0xFFFF / 0xE339) while its record was cut short:
+ * the packers never write those values, the checks reject them (the calibration and the lifetime record) */
+#ifndef UPPER_RECORDS
+#define UPPER_RECORDS 1               /* (the default of src/core/ultra_update.h; the builds pass it) */
+#endif
+/* (0.6.5) the monitoring that fits only in the upper layout's room: D5 the flash state line, M5 C10's ripple load, M3
+ * the energy per channel, D6 the ADC / DMA counters. 0.6.4's layout (UPPER_RECORDS=0, the bench fallback) builds
+ * without them: its app slot has no room (README "New in 0.6.5"). Their console texts are ZU(...) (core/cz.h). */
+#ifndef MON_EXTRA
+#define MON_EXTRA UPPER_RECORDS
+#endif
+static inline int crc16_erased(uint32_t c) { return UPPER_RECORDS && (c == 0xFFFFu || c == 0xE339u); }   /* (0.6.4's
+                                         layout: 0.6.4's rules, its records read as before) */    /* = ultra_crc16 (CRC-16/CCITT-FALSE), one copy: the
                                                              calibration and lifetime records */
 void         settings_default(settings_t *s);
 /* a record read from flash: every field within the range the firmware relies on (the enums; a raw period of

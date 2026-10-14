@@ -25,6 +25,6 @@ typedef struct {
 
 /* board_ma / fuse_ma 0 = not part of it; user_ma 0 = none; connected_ma 0 = not known */
 void climit_eval(climit_t *c, uint16_t user_ma, uint16_t board_ma, uint16_t fuse_ma, uint32_t connected_ma);
-const char *climit_src_name(uint8_t src);
+/* (the console names the source: core/cli.c, status) */
 
 #endif

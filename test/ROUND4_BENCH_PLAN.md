@@ -24,3 +24,35 @@ Instrument D9/PB15 as a temporary timing marker if needed; do not add a DMA chan
 P0 flash continuity is stricter than “the light looks unchanged”: PWM timing and asynchronous fades are part of
 the primary output function. 0.6.4 accepts the halved carrier for the operation's time only (Quindor's decision,
 WCH RM 32.1; ask WCH about the datasheet's 60 MHz HCLK note); measure that window, do not infer it.
+
+
+## Upper flash (0.6.5: the records at 0x08010000-0x08011FFF; README: Upper flash)
+
+Proposed qualification, **not performed**; sample counts and timeouts are project screening choices, the 2.4-3.6 V
+programming range and the timing table are WCH's. Start with three F8U6 prototypes; for a production decision at least
+ten devices from two traceable lots. Log marking, lot, UID, option bytes, tool versions, image hash. Keep the old record
+pages (0.6.4 layout) as lower-region controls in a dedicated qualification image. Read SCKMOD first (must be 0); use
+HPRE /2 for every physical-flash access at 144 MHz; buffers in RAM; a GPIO toggled around each operation.
+
+| Test | Procedure | Pass criterion |
+|---|---|---|
+| 1. Address integrity | Erase / program all 640 upper 256-byte pages with address-derived patterns (incl. 0x08010000, 0x0801FF00, 0x08020000, 0x08030000, 0x08037F00): zeros, ones, AA/55, walking bits, pseudorandom; compare all after each pass. | Zero mismatch, trap, alias or neighbour change; an upper write never changes a lower address. Stop at 0x08038000 (exclusive). |
+| 2. Erase granularity | Preprogram target and neighbours; 256-byte fast erases and aligned 4 KB erases in upper scratch sectors. | Exactly the requested unit changes, to the sample's erased pattern (0xE339 or 0xFFFF: record which); neighbours unchanged. |
+| 3. The firmware's sequences | From zero-wait flash: the record writes as the firmware does them (fast page erase + half-word programs, `flash_op`), in upper pages and lower controls; read status and read back before restoring the clock. | All bytes correct, untouched bytes intact, no error or timeout (provisional 100 ms per erase / program command), also after a cold power cycle. |
+| 4. Half-word semantics / wear | Write a full page, then one half-word several times (incl. 0 -> 1 transitions); inspect the whole page after each; time every command; cut the power during one. | A repeatable model in both regions. If a half-word write rewrites the page: the wear and power-cut accounting must use page rewrites (open risk, both regions). |
+| 5. Coherency | Read a page through both aliases (0x0000xxxx, 0x0800xxxx), program, read again at once (volatile 8/16/32-bit, unrelated reads between), for upper and lower pages. | Every read after completion matches before any reset; warm and cold resets give the same contents. |
+| 6. Clock matrix | Access at HCLK 48 / 72 / 96 / 120 MHz with SCKMOD 0, and the firmware's guarded 72 MHz at 144 MHz; watch SysTick, the DIN sampling, the PWM and the UART across the switches. | Zero errors in the supported settings; the clock and interrupts restored exactly; no LED pulse or timing glitch from the guard. Unguarded 144 MHz reads: characterization only. |
+| 7. Reset durability | >= 1,000 cold cycles and 1,000 software / watchdog / pin resets over freshly written and near-rollover records. | Every completed save preserved; no stale record, sequence rollback or false erased page. |
+| 8. Power cuts | >= 10,000 interrupted writes on >= 3 devices: during erases, first / middle / last half-word, the check half-word, page rollover; abrupt and slow brown-out, nominal and minimum supply, hot. | Always the last committed or the new complete record, never a mixed one taken as valid; an older committed record never disappears during a later save. |
+| 9. Voltage / temperature | At -40 / 25 / +85 C and 2.4 / 3.3 / 3.6 V at the MCU (within the part's grade): >= 100 erase / program cycles at the bottom / middle / top pages and >= 10,000 read / CRC passes of the record area. | Zero mismatch or status error; startup and the read guard correct; times within the firmware's limits. |
+| 10. Endurance | On >= 3 sacrificial devices: matched lower and upper pages through 10,000 erase / program / read-back cycles at 25 C; the record workload on a rotating pool; log errors and times. | No error to the release target; upper no worse than lower; no growing neighbour corruption. (Screening, not a population guarantee.) |
+| 11. Retention screen | Program cycled and uncycled pages; 168 h unpowered at 85 C; compare hot and at room temperature. | Zero changed bits (an early-failure screen, not proof of 20 years). |
+| 12. Programming / preservation | Each production tool: program an image with first / last upper pages, its verify plus an independent dump; then update the firmware with sentinel records present (over the data line and over SWD). | Every byte verified; records and calibration survive updates; a deliberately wrong verify image fails (the check covers the upper area). |
+| 13. Read protection | On sacrificial devices: RDP with known lower / upper patterns; external reads; the firmware's own record read / write; then unprotect. | No external readout of the upper data; the firmware works; unprotecting erases the upper sentinels too. |
+
+**Go / no-go:** keep 0.6.4's layout (`UPPER_RECORDS=0`, `firmware-0.6.4-src/`) until addressing, the guarded reads,
+read-back, preservation and the record wear / power-cut model pass on real F8U6 samples.
+
+**Dip-write hold-up (0.6.5):** from the dip trigger to the MCU's brown-out at 12 / 24 / 48 V, full load and no load,
+against the measured record write time (lifetime record 20 half-words). If the hold-up is shorter in the worst case:
+`FLASH_DIP_WRITES 0` (no write during a dip; main.c).

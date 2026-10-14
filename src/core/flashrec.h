@@ -31,6 +31,7 @@
 #define FLASH_ERR_EOP 3u            /* the operation ended without EOP */
 #define FLASH_ERR_KEY 4u            /* the flash did not unlock */
 #define FLASH_ERR_VERIFY 5u         /* a half-word read back differently (FLASH_VERIFY builds only, BENCH) */
+#define FLASH_ERR_VDD 6u            /* (0.6.5) VDD below the PVD's 2.9 V: not started (DS table 4-17: >= 2.4 V) */
 
 /* the primitive (hal/hw.c; test/test_soak.c: its model): erase the 256-byte page at erase_addr (0: none), then program
  * `halfwords` half-words from src at addr (erased flash). Returns FLASH_OK or FLASH_ERR_*. */
@@ -60,11 +61,17 @@ uint32_t life_store(energy_t *e);
 uint32_t life_pending(void);
 uint32_t life_prepare(void);
 uint32_t life_room(void);           /* erased entries left (main.c keeps one for a dip write while bright) */
+/* the power-on effects (core/ultra.h ULTRA_FX_*), 0.6.5: two banks of two pages (SCENE_FX_ADDR / SCENE_FX_B_ADDR): the
+ * newest valid one into the engine (core/scene.c ultra_fx_load); returns the lights loaded */
+uint8_t  scene_fx_load(ultra_t *u, uint8_t crc[ULTRA_LIGHTS]);
 /* the power-on effect store (two pages at SCENE_FX_ADDR, core/ultra.h ULTRA_FX_*; loaded with ultra_fx_load): the
  * lights in mask with their CRC-8s (none: the store is erased), the header last. Erases both pages: only where erases
  * are admitted. */
 uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS]);
 /* firmware update (core/upd_app.h): one half-word into the app descriptor page's status records (no erase) */
 uint32_t hw_flash_half(uint32_t addr, uint16_t v);
+/* (0.6.5, D5) the records the loaders rejected at boot (pagepair.h pp_pos_t.bad), 6 bits each: settings, calibration
+ * << 6, scene log << 12, lifetime record << 18 */
+uint32_t flash_rejected(void);
 
 #endif

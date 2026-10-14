@@ -43,11 +43,20 @@
  * Wear (10k erase cycles, the datasheet minimum; LIFE_RECS writes per erase of a page): a board powered all the
  * time, any pattern: <= 8 writes a day, 0.67 erases a day per page: 41 years. Any pattern at all, with power cycles:
  * <= LIFE_RESERVE + 8 a powered day: 29 years even powered 24/7 (test/test_energy.c simulates both).
+ *
+ * Energy per channel (0.6.5): the measured input energy split over the five channels by the channel model. Every ms
+ * the outputs in effect (core/isense.h `applied`, after the limiter and the soft start) and the board current are
+ * summed; once a second the second's LED energy (the supply x (the mean current - the zero, the board's own current),
+ * whole mJ) is shared out by each channel's modelled current at its mean output (isense_ch_ma: the calibrated /
+ * learned curve). RAM only, since boot (the lifetime record's stable format has no room for it): `status`
+ * `energy R/G/B/W1/W2=`. Without a usable model (all channels 0) the second goes to no channel; the zero's share
+ * (logic, standby) is in `energy=` only. mWh counters wrap like boot_mwh (the console shows up to 2,147 kWh each).
  * Pure logic, host-tested (test/test_energy.c). */
 #ifndef ENERGY_H
 #define ENERGY_H
 
 #include <stdint.h>
+#include "isense.h"                 /* the channel model (energy per channel) */
 #include "scene.h"                  /* the write budget (scene_budget_t) */
 #include "store.h"
 #include "pagepair.h"
@@ -111,6 +120,12 @@ typedef struct {
     uint16_t trips_seen[2];         /* the trips since boot (core/pwrev.h's u16 counts), as last seen */
     uint8_t  saved;                 /* stored since boot */
     scene_budget_t budget;
+    /* energy per channel (0.6.5, RAM only) */
+    uint32_t ch_d[ISENSE_CH];       /* this second: each output's sum (16-bit levels x ms) */
+    uint32_t ch_i;                  /* ... the board current's sum, mA */
+    uint32_t ch_n;                  /* ... ms */
+    uint32_t ch_mwh[ISENSE_CH];     /* each channel since boot, mWh */
+    uint16_t ch_mj[ISENSE_CH];      /* ... below one mWh, mJ */
 } energy_t;
 
 /* at boot: found = e->lt holds the newest stored record (life_find; else it is cleared); ver = this app's version
@@ -140,6 +155,10 @@ uint32_t life_find(const uint8_t *page0, const uint8_t *page1, life_rec_t *r, li
 uint32_t life_plan(life_pos_t *pos);
 /* erased entries left for writes without an erase (pagepair.h pp_free) */
 uint32_t life_free(const life_pos_t *pos);
+/* energy per channel: every ms the outputs in effect (isense's applied) and the board current (mA); once a second the
+ * split, with the channel model and the supply (mV) */
+void     energy_ch_ms(energy_t *e, const uint16_t out[ISENSE_CH], int32_t ma);
+void     energy_ch_second(energy_t *e, const isense_t *is, uint32_t mv);
 /* ENERGY page DATA (protocol 0.2.3, ULTRA_EN_*); now_s = the uptime in s */
 void     energy_page(const energy_t *e, uint32_t now_s, uint32_t power_mw, uint8_t out[24]);
 

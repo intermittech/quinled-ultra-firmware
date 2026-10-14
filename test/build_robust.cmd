@@ -20,12 +20,15 @@ if not defined VSDIR (
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
 if not exist "%OUT%" mkdir "%OUT%"
 if not exist "%OUT%\fw" mkdir "%OUT%\fw"
+rem the console's compressed text (core/cz.h): tools/gen_console_text.py writes %OUT%\gen\cz_text.h
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\gen" --upper
+if %errorlevel% neq 0 exit /b 1
 rem /fsanitize=address: heap / global / stack overflows and use after free abort the run with a report
-cl /nologo /O2 /W4 /wd4996 /Zi /fsanitize=address /Fe:"%OUT%\robust_tests.exe" /Fo:"%OUT%\\" /Fd:"%OUT%\robust_tests.pdb" ^
+cl /nologo /O2 /W4 /wd4996 /Zi /fsanitize=address /I "%OUT%\gen" /Fe:"%OUT%\robust_tests.exe" /Fo:"%OUT%\\" /Fd:"%OUT%\robust_tests.pdb" ^
    "%HERE%test_robust.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 rem (4457 / 4312: main.c built for the 64-bit host with UPD_APP = 1: a shadowed name, flash addresses cast to pointers)
-cl /nologo /O2 /W4 /wd4996 /wd4457 /wd4312 /Zi /fsanitize=address /I "%HERE%soak" /Fe:"%OUT%\robust_fw.exe" /Fo:"%OUT%\fw\\" ^
+cl /nologo /O2 /W4 /wd4996 /wd4457 /wd4312 /Zi /fsanitize=address /I "%HERE%soak" /I "%OUT%\gen" /Fe:"%OUT%\robust_fw.exe" /Fo:"%OUT%\fw\\" ^
    /Fd:"%OUT%\robust_fw.pdb" "%HERE%test_robust_fw.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 if "%2"=="nobuild-only" exit /b 0

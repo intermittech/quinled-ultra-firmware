@@ -170,6 +170,18 @@ static int vals_eq(const ultra_vals_t *x, const ultra_vals_t *y)
 }
 #endif
 
+/* an effect's output keeps the light's b[] (0.6.5): five straight copies. As a loop, GCC's loop distribution turns
+ * it into a call to newlib's memmove (+218 B) whenever LTO happens not to inline the effect, so the image's size
+ * jumped by ~250 B with unrelated changes elsewhere */
+static void b_cpy(ultra_vals_t *o, const ultra_vals_t *b)
+{
+    o->b[0] = b->b[0];
+    o->b[1] = b->b[1];
+    o->b[2] = b->b[2];
+    o->b[3] = b->b[3];
+    o->b[4] = b->b[4];
+}
+
 /* ================================================================================================ clock */
 /* Before the first header the engine runs on its own clock (the power-on effect without a controller): the same line
  * from ref (tick 0, time 0 at the init) at the nominal rate. ultra_clock_tend moves ref along, so the time stays
@@ -765,14 +777,14 @@ static void fx_flicker(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ul
         L->fx_next += iv;
     }
     vals_cpy(o, c);
-    for (i = 0; i < 5u; i++) {
-        o->b[i] = b->b[i];
-    }
+    b_cpy(o, b);
 }
 
 /* ESPHome random: every interval a random color (RGB normalized, CW / WW random), brightness only for lights
  * without colors; transition with smoothstep; color brightness (B) stays the light's */
-static void fx_random(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *o)
+/* (o: never b, so restrict: 0.6.5's LTO otherwise made the colour copy at the end a 218-byte memmove call. Always
+ * inlined into the effect dispatch, as in 0.6.4: LTO's budget had moved it out of line for +146 B) */
+static ALWAYS_INLINE void fx_random(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *restrict o)
 {
     uint32_t tr = ultra_get24(L->fxp), iv = ultra_get24(L->fxp + 3), i;
     int colored = has_color(L);
@@ -809,9 +821,7 @@ static void fx_random(ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ult
     if (colored) {
         o->m = b->m;                                     /* colors are random, brightness follows the light */
     }
-    for (i = 0; i < 5u; i++) {
-        o->b[i] = b->b[i];
-    }
+    b_cpy(o, b);
 }
 
 /* candle: mostly small dips, now and then a deeper one, smoothed (~16 ms) */

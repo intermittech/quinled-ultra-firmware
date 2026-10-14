@@ -307,6 +307,8 @@ static void run_cli(cli_t *c, const char *in)
 {
     cli_out[0] = 0;
     while (*in) cli_feed(c, *in++);
+    while (cli_poll(c)) {                  /* (0.6.5: a status in parts) */
+    }
 }
 
 static void test_cli(void)
@@ -385,7 +387,8 @@ static void test_cli(void)
     st.vs_supply_max_mv = 24050;
     run_cli(&c, "status\r");
     CHECK(strstr(cli_out, "supply=24.01 V (min 23.98 V, max 24.05 V)\r\ninput=130.4 W\r\n"
-                          "energy=0.00 Wh since boot\r\ntp8=1.65 V\r\ntest_mode=off\r\n") != NULL,
+                          "energy=0.00 Wh since boot\r\nenergy R/G/B/W1/W2=0.00/0.00/0.00/0.00/0.00 Wh\r\n"
+                          "tp8=1.65 V\r\ntest_mode=off\r\n") != NULL,
           "status voltages, input power (24.012 V x 5432 mA)");
     /* uptime h:mm:ss (days beyond 24 h), outputs in %, the stagger offsets in % of the period, ripple in A */
     st.uptime_s = 3723u;

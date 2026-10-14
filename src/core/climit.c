@@ -27,9 +27,3 @@ void climit_eval(climit_t *c, uint16_t user_ma, uint16_t board_ma, uint16_t fuse
         c->need = connected_ma > l ? CLIMIT_NEED_YES : CLIMIT_NEED_NO;
     }
 }
-
-const char *climit_src_name(uint8_t src)
-{
-    static const char *const n[] = { "board", "user", "fuse", "none" };
-    return src <= CLIMIT_SRC_NONE ? n[src] : "?";
-}

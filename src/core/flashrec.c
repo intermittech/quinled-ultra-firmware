@@ -135,7 +135,6 @@ uint32_t cal_prepare(void)
 
 /* ---- power-on scene log: an A/B pair (0.6.4, core/scene.h scene_pp; 0.6.3: a ring that erased the page it entered),
  * 16 records of 16 bytes per page */
-#define SCENE_B_ADDR (SCENE_LOG_ADDR + SCENE_PAGE_BYTES)
 static pp_pos_t scene_pos;
 static uint16_t scene_seq;
 
@@ -213,6 +212,70 @@ MEASURED uint32_t life_prepare(void)
 typedef char fx_store_fits[(ULTRA_FX_HDR + ULTRA_LIGHTS * ULTRA_HEAD_BYTES <= 512u && ULTRA_HEAD_BYTES == 98u) ? 1 : -1];
 #endif
 
+#if UPPER_RECORDS
+/* two banks of two pages (0.6.5, the upper layout): a store rewrites the bank that doesn't hold the newest one, its
+ * header (written last) with the next 16-bit sequence number in its two spare bytes (0.6.0-0.6.4 wrote 0 there), so a
+ * power cut during a store keeps the effects stored before it */
+static const uint32_t fx_bank[2] = { SCENE_FX_ADDR, SCENE_FX_B_ADDR };
+static uint8_t fx_cur;                                   /* the bank holding the newest store (none: 0) */
+static uint16_t fx_seq;
+
+static uint32_t fx_hdr(uint32_t b, uint32_t *seq)
+{
+    const uint8_t *h = (const uint8_t *)(uintptr_t)fx_bank[b];
+    *seq = (uint32_t)h[10] | (uint32_t)h[11] << 8;
+    return ((uint32_t)h[0] | (uint32_t)h[1] << 8 | (uint32_t)h[2] << 16 | (uint32_t)h[3] << 24) == ULTRA_FX_MAGIC;
+}
+
+MEASURED uint8_t scene_fx_load(ultra_t *u, uint8_t crc[ULTRA_LIGHTS])
+{
+    uint32_t sa, sb, a = fx_hdr(0, &sa), b = fx_hdr(1, &sb);
+    fx_cur = (uint8_t)(b && (!a || (int16_t)(uint16_t)(sb - sa) > 0));
+    fx_seq = (uint16_t)(fx_cur ? sb : sa);
+    return ultra_fx_load(u, (const uint8_t *)(uintptr_t)fx_bank[fx_cur], crc);
+}
+
+MEASURED uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
+{
+    uint8_t *h = (uint8_t *)core_scratch;
+    uint32_t i, nb = fx_cur ^ 1u, base = fx_bank[nb], r = flash_op(base, 0, 0u, base);   /* page 0: its header goes */
+    if (mask != 0u && r == FLASH_OK) {
+        r = flash_op(base + 256u, 0, 0u, base + 256u);
+    }
+    for (i = 0; i < ULTRA_LIGHTS && r == FLASH_OK; i++) {
+        if (mask & (1u << i)) {
+            r = flash_op(base + ULTRA_FX_HDR + i * ULTRA_HEAD_BYTES, (const uint16_t *)&u->light[i],
+                         ULTRA_HEAD_BYTES / 2u, 0u);
+        }
+    }
+    if (r != FLASH_OK) {
+        return r;                                        /* no header after a failed head */
+    }
+    core_scratch[0] = ULTRA_FX_MAGIC;
+    core_scratch[2] = (uint32_t)(uint16_t)(fx_seq + 1u) << 16;   /* bytes 10-11: the sequence (8-9: crc[3-4] below) */
+    h[4] = mask;                                         /* (mask 0: a valid header that loads nothing: cleared) */
+    for (i = 0; i < ULTRA_LIGHTS; i++) {
+        h[5u + i] = crc[i];
+    }
+    /* the header last, its magic last of all: a header cut short has no magic, so the bank doesn't count (with the
+     * magic first, an erased sequence number 0xFFFF could look newer than the other bank's) */
+    r = flash_op(base + 4u, (const uint16_t *)(h + 4), (ULTRA_FX_HDR - 4u) / 2u, 0u);
+    if (r == FLASH_OK) {
+        r = flash_op(base, (const uint16_t *)h, 2u, 0u);
+    }
+    if (r == FLASH_OK) {
+        fx_cur = (uint8_t)nb;
+        fx_seq++;
+    }
+    return r;
+}
+#else
+/* 0.6.4's layout: one bank, rewritten in place (a cut during a store loses the effects, never anything else) */
+MEASURED uint8_t scene_fx_load(ultra_t *u, uint8_t crc[ULTRA_LIGHTS])
+{
+    return ultra_fx_load(u, (const uint8_t *)SCENE_FX_ADDR, crc);
+}
+
 MEASURED uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS])
 {
     uint8_t *h = (uint8_t *)core_scratch;
@@ -238,8 +301,14 @@ MEASURED uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t c
     }
     return flash_op(SCENE_FX_ADDR, (const uint16_t *)h, ULTRA_FX_HDR / 2u, 0u);   /* the header last */
 }
+#endif
 
 uint32_t hw_flash_half(uint32_t addr, uint16_t v)
 {
     return flash_op(addr, &v, 1u, 0u);
+}
+
+uint32_t flash_rejected(void)
+{
+    return set_pos.bad | (uint32_t)cal_pos.bad << 6 | (uint32_t)scene_pos.bad << 12 | (uint32_t)life_pos.bad << 18;
 }

@@ -155,7 +155,22 @@ SECTIONS
 
 	PROVIDE( _end = _ebss);
 	ASSERT(_ebss <= ORIGIN(RAM) + LENGTH(RAM) - __stack_size, "RAM overlaps reserved stack")
+	/* (0.6.5) every byte of the image (code, constants, the SRAM code's and .data's load copies) in the zero-wait
+	   64 KB: the flash helpers and everything timing-critical run from there; the upper CodeFlash holds records only.
+	   QL_DIAG_BIG_SLOT: a measurement-only link (never flashed) may define it to go beyond */
+	ASSERT(DEFINED(QL_DIAG_BIG_SLOT) || ORIGIN(FLASH) + LENGTH(FLASH) <= 0x10000, "the image must stay in the zero-wait flash")
 	PROVIDE( end = . );
+
+	/* QuinLED (0.6.5): the reset breadcrumbs (main.c bcrumb), 32 bytes no reset clears, at the same address in every
+	   link (0x200047E0, just below the stack): outside the hand-over block (0x20000000-1F) and the bootloader's RAM
+	   (bootloader/bl.ld: its buffers end at 0x20004274, its stack starts at 0x20004A00; test/test_noinit_map.py). The
+	   startup neither copies nor clears it. One 4 KB %hi page: isr.S stores with one lui. */
+	.noinit ORIGIN(RAM) + LENGTH(RAM) - __stack_size - 32 (NOLOAD) :
+	{
+		KEEP(*(.noinit .noinit.*))
+	} >RAM
+	ASSERT(_ebss <= ADDR(.noinit) && SIZEOF(.noinit) <= 32, "RAM: .bss overlaps the reset breadcrumbs (.noinit)")
+	ASSERT(((ADDR(.noinit) + 0x800) >> 12) == ((ADDR(.noinit) + 31 + 0x800) >> 12), ".noinit: one %hi page")
 
     .stack ORIGIN(RAM) + LENGTH(RAM) - __stack_size :
     {

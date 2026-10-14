@@ -166,6 +166,8 @@ void     ultra_scene_fx_start(ultra_t *u, uint8_t mask, uint32_t tick);
 /* from a store image: the heads of its valid lights (CRC ok) into u; returns their mask, their CRCs into crc
  * (core/scene.c, with the scene log: the engine itself stays free of the firmware's other modules) */
 uint8_t  ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS]);
+extern uint8_t ultra_fx_rejected;         /* (0.6.5, D5) heads the image lists that the last load rejected (CRC, or not
+                                             this firmware's head) */
 void     ultra_scene_fx_stop(ultra_t *u);
 /* a light's head is a power-on effect to store: defined, SCENE mode 1 and an effect it can run from power-up */
 int      ultra_scene_fx_ok(const ultra_light_t *L);

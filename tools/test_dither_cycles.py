@@ -5,8 +5,9 @@
 Usage: python tools/test_dither_cycles.py <MEASURE=1 fw.elf>
 Reference: xPack GCC 15.2, default rev04 LTO measurement build, rv32emu COST.
 These are emulator cycle estimates, not scope measurements. The upper bounds are the
-0.6.4 costs (0.6.2: 1,051 / 1,148 / 1,061; fable-algo's one-pass dither_build: 725); a new
-compiler/configuration requires a reviewed baseline.
+0.6.4 costs (0.6.2: 1,051 / 1,148 / 1,061; fable-algo's one-pass dither_build: 725), dither_build_var
+1,149 since 0.6.5 (-fno-ipa-modref: +1, Quindor's flash trade); a new compiler/configuration requires a
+reviewed baseline.
 """
 import argparse
 import struct
@@ -19,7 +20,7 @@ args = parser.parse_args()
 failures = 0
 for function, level, policy, length, limit, expected in (
         ("dither_build", 28963, 2, 50, 725, 636),
-        ("dither_build_var", 65184, 0, 32, 1148, None)):
+        ("dither_build_var", 65184, 0, 32, 1149, None)):
     emu = Emu(args.elf)
     dst, opts, arr = 0x20004000, 0x20004300, 0x20004400
     emu.poke(opts, struct.pack("<iHxxiHxx", 2, 655, policy, 29))

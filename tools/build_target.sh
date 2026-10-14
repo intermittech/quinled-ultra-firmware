@@ -24,18 +24,33 @@ if "$GCC" --version | head -1 | grep -q " 8\."; then ARCH="-march=rv32imc -mabi=
 LDARCH="-march=rv32imc -mabi=ilp32"   # selects the rv32imc multilib (libgcc)
 OUT="${OUT:-$FW/build/target}"
 mkdir -p "$OUT"
+# the console's text, compressed (core/cz.h: tools/gen_console_text.py writes $OUT/gen/cz_text.h; Python 3, stdlib)
+"${PYTHON:-python}" "$FW/tools/gen_console_text.py" "$OUT/gen" $([ "${PERF:-0}" != 0 ] && echo --perf) \
+    $([ "${UPPER_RECORDS:-1}" != 0 ] && echo --upper)
 echo "compiler: $("$GCC" --version | head -1)"
 # -msmall-data-limit=400: every variable up to 400 bytes goes to .sbss / .sdata, in reach of gp (one instruction
 # less per access); the big buffers (ul, din_ring / din_copy, tail_copy, uart_tx, the PWM tables) stay outside.
 # Small constants (.srodata) stay in flash (Link_sections.ld).
 if [ "${MEASURE:-0}" = 1 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DMEASURE_BUILD"; fi
+# UPPER_RECORDS (0.6.5, src/core/ultra_update.h): 1 (default) = the records in the upper CodeFlash, the code area to
+# 0x10000; 0 = 0.6.4's layout (the bench fallback): the *_lower.ld linker scripts.
+UPPER_RECORDS="${UPPER_RECORDS:-1}"
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DUPPER_RECORDS=$UPPER_RECORDS"
+# PERF=1 / PERF=2 (0.6.5): the console's `perf` (core/perf.h; 1 the mcycle counter, 2 SysTick), a bench build only:
+# bigger and slower than the release (build_release.sh sets PERF=0); flash it standalone (the default Link.ld)
+if [ "${PERF:-0}" != 0 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DPERF_BUILD=$PERF"; fi
 # 0.6.4 (review round 4): -fno-jump-tables (gpt-opt: branch dispatch is smaller on RV32IMC than flash-resident address
 # tables, and the measured render / dispatch paths are faster; the bootloader has its own flags), -fno-ipa-sra
 # (fable-flash: with LTO the scalar replacement of aggregate parameters made bigger clones than the calls it saved).
+# 0.6.5: -fno-shrink-wrap-separate (-24 B on the upper-flash tree, no measured row slower; 0 B in 0.6.2's sweep);
+# -fno-ipa-modref (-84 B; Quindor's choice: 6 rows +1..+10 cycles, 10 rows faster).
 # Measured and left out (fable-flash): per-file tunes (they stop LTO's inlining), -fipa-pta, -fmerge-all-constants,
-# -fshort-enums, the inliner's parameters: 0 B or worse.
-OPT="-Os -g -fno-jump-tables -fno-ipa-sra -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
-CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -I$FW/vendor/wch -I$FW/src/hal -I$FW/src $EXTRA_CFLAGS"
+# -fshort-enums, the inliner's parameters: 0 B or worse. 0.6.5 re-sweep: -fno-ipa-modref -84 B but 6 rows +1..+10
+# cycles (taken: Quindor); -fno-ipa-icf / -cp-clone / -ra / -reference-addressable / -stack-alignment, -fno-tree-vrp 0 B;
+# -fno-ipa-cp, -fno-inline-small-functions, -fno-tree-loop-distribute-patterns, -fno-ipa-reference / -pure-const /
+# -bit-cp / -vrp, -fno-tree-pre, small-data limits 200 / 800 / 2048: larger.
+OPT="-Os -g -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
+CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -I$FW/vendor/wch -I$FW/src/hal -I$FW/src -I$OUT/gen $EXTRA_CFLAGS"
 SRC="$FW/src/app/main.c $FW/src/hal/hw.c"
 for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
 # GCC 15 turns bitwise CRC loops into 256-entry tables (-foptimize-crc). The firmware update's CRCs (upd_app.c) run
@@ -62,13 +77,18 @@ for s in $SRC; do
   case "$s" in */upd_app.c) f="$NOCRC" ;; esac
   case "$s" in */cli.c|*/config.c|*/store.c|*/scene.c|*/calstore.c|*/upd_app.c|*/ack.c|*/climit.c|*/mcutemp.c) f="$f $COLD" ;; esac
   case "$s" in */pwrev.c|*/fwver.c|*/health.c|*/vdip.c) f="$f $COLD" ;; esac   # also cold: every ms at most / boot
-  # (flashrec.c, pagepair.c: not cold, 0.6.4: LTO inlines the stores into their one caller each, as in hw.c before)
+  case "$s" in */pagepair.c|*/vsense.c) f="$f $COLD" ;; esac   # 0.6.5: -56 B, no row slower (boot / flash ops; per ms)
+  # (flashrec.c not cold: +244 B, LTO inlines the stores into their callers; 0.6.5 re-measured: dark / ocled / energy /
+  # sstart / smooth / gamma +8..+216 B, presets / ultra_update / rxpower 0)
   # (energy.c not since 0.6.3: LTO doesn't inline across -msave-restore, and its small calls into main / hw.c cost more)
   case "$s" in */div64.c) ;; *) f="$f $LTOFLAGS" ;; esac
   "$GCC" $CFLAGS $f -c "$s" -o "$o"
   OBJS="$OBJS $o"
 done
 LDSCRIPT="${LDSCRIPT:-$FW/vendor/wch/Link.ld}"
+if [ "$UPPER_RECORDS" = 0 ]; then
+  case "$LDSCRIPT" in */Link.ld|*/Link_app.ld) LDSCRIPT="${LDSCRIPT%.ld}_lower.ld" ;; esac
+fi
 "$GCC" $LDARCH $LDLTO -nostartfiles -Wl,--gc-sections -Wl,-Map="$OUT/fw.map" -L"$FW/vendor/wch" -T "$LDSCRIPT" \
   $OBJS -o "$OUT/fw.elf" -lgcc
 "${PFX}objcopy" -O binary "$OUT/fw.elf" "$OUT/fw.bin"

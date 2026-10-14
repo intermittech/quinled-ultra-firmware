@@ -15,9 +15,9 @@ MEMORY
 
 /* CH32V20x_D6 - CH32V203K8-CH32V203C8-CH32V203G8-CH32V203F8 */
 /**/
-	/* 64 KB minus the current calibration page (256 B, 0xF600), the power-on scene log (2 KB, 0xF700) and the
-	   settings page (256 B, 0xFF00), see src/hal/board.h */
-	FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 0xF600
+	/* the zero-wait 64 KB (0.6.5: the record pages are in the upper CodeFlash, src/hal/board.h; 0.6.4's layout:
+	   Link_lower.ld) */
+	FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 0x10000
 	RAM (xrw) : ORIGIN = 0x20000000, LENGTH = 20K
  
   

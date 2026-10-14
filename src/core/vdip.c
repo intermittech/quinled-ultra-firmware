@@ -31,6 +31,8 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, ui
     ref = d->ref_q12 >> 12;
     d->ref_q12 += x - ref;                               /* running mean, 1/4096 per ms */
     if (x * 100u < ref * (d->in_dip ? VDIP_LEAVE_PCT : VDIP_ENTER_PCT)) {
+        d->zi1 = d->zi2 = 0xFFFFu;                       /* (the impedance: no settled window around a dip) */
+        d->zok = 0;
         if (d->in_dip) {
             d->run = 0;                                  /* still down */
         } else {
@@ -82,6 +84,54 @@ const vdip_ev_t *vdip_event(const vdip_t *d, uint32_t k)
 uint32_t vdip_pct(const vdip_ev_t *e)
 {
     return e->ref_x ? ((uint32_t)e->min_x * 100u + e->ref_x / 2u) / e->ref_x : 0u;
+}
+
+MEASURED void vdip_z(vdip_t *d, const vsense_t *vs, uint32_t ma)
+{
+    int32_t i, tol, a, b;
+    d->zma += ma;
+    if (vs->ms != 0u) {
+        return;                                          /* (not the end of a supply average) */
+    }
+    i = (int32_t)(d->zma / VSENSE_WIN_MS);
+    d->zma = 0;
+    if (d->ref_q12 == 0u) {
+        return;                                          /* (the boot hold-off: PA4's RC still charging) */
+    }
+    tol = VDIP_Z_STEADY_MA + (i >> 8);
+    a = i - d->zi1;
+    b = (int32_t)d->zi1 - d->zi2;
+    d->zi2 = d->zi1;
+    d->zi1 = (uint16_t)i;
+    if ((uint32_t)(a + tol) > 2u * (uint32_t)tol || (uint32_t)(b + tol) > 2u * (uint32_t)tol) {
+        d->zok -= (uint8_t)(d->zok != 0u);                /* not settled */
+        return;
+    }
+    a = i - d->zi_set;                                   /* the current's rise, the supply's fall (16-bit difference) */
+    b = (int16_t)(uint16_t)(d->zv_set - vs->mv);
+    if (a < 0) {
+        a = -a;
+        b = -b;
+    }
+    if (d->zok != 0u && a >= VDIP_Z_STEP_MA) {           /* a step */
+        d->znum += b;
+        d->zden += (uint32_t)a;
+        if (d->zden >= VDIP_Z_DEN_MAX) {
+            d->znum >>= 1;
+            d->zden >>= 1;
+        }
+        d->zsteps += (uint16_t)(d->zsteps != 0xFFFFu);
+    }
+    d->zi_set = (uint16_t)i;
+    d->zv_set = (uint16_t)vs->mv;
+    d->zok = VDIP_Z_GAP;
+}
+
+uint32_t vdip_z_mohm(const vdip_t *d)
+{
+    /* mV / mA x 1000: x 125 / (den / 8) stays in 32 bits (num < 2^21) to within 0.4 % of 4 steps' den */
+    int32_t r = d->zsteps >= VDIP_Z_MIN_STEPS ? d->znum * 125 / (int32_t)(d->zden >> 3) : 0;
+    return r > 0 ? (uint32_t)r : 0u;
 }
 
 static uint32_t age_s(uint32_t now_s, uint32_t t_s)

@@ -4,14 +4,19 @@
 
 Version words, the descriptor, CRC-32/MPEG-2 over little-endian words (= the CH32 CRC unit), Intel HEX output.
 """
+import os
 import re
 import struct
 
 APP_DESC = 0x08002000
 APP_BODY = 0x08002100
-APP_END = 0x0800F600                     # the bootloader's slot ends at 0xF700; 0xF600 holds the calibration
+# UPPER_RECORDS (0.6.5, as tools/build_target.sh): 1 (default) = the records in the upper CodeFlash, the app slot to
+# 0x08010000, bootloader 2; 0 = 0.6.4's layout: the bootloader's slot ends at 0xF700, 0xF600 holds the calibration
+UPPER_RECORDS = os.environ.get("UPPER_RECORDS", "1") != "0"
+APP_END = 0x08010000 if UPPER_RECORDS else 0x0800F600
 APP_ENTRY = 0x00002100
-APP_BODY_MAX = APP_END - APP_BODY          # 54,784 bytes
+APP_BODY_MAX = APP_END - APP_BODY          # 57,088 bytes (0.6.4's layout: 54,528, the app's link)
+MIN_BL = 2 if UPPER_RECORDS else 1         # the oldest bootloader that takes such an image (ultra_update.h)
 BL_SIZE = 0x2000
 DESC_BYTES = 64
 HW_ID_D2A_ULTRA_5CH = 1
@@ -103,8 +108,8 @@ def check_image(img):
     if info["body_len"] != len(body) or crc32_words(body) != info["body_crc"]:
         raise ValueError("body length / CRC")
     if info["body_len"] % 4 or not 0 < info["body_len"] <= APP_BODY_MAX:
-        # the bootloader's slot runs to 0xF700 (ultra_update.h), 256 bytes past the app's link: an image that long
-        # would erase the calibration page at 0xF600 (src/hal/board.h). mkimage.py never makes one; refuse one here too.
+        # 0.6.4's layout: the bootloader's slot runs to 0xF700 (ultra_update.h), 256 bytes past the app's link: an
+        # image that long would erase the calibration page at 0xF600 (src/hal/board.h). Refused here too.
         raise ValueError(f"body length {info['body_len']}: must be a multiple of 4, 1..{APP_BODY_MAX}")
     return info
 

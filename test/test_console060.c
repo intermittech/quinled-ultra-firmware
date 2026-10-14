@@ -52,7 +52,7 @@ static void test_cli060(void)
     cli_out[0] = 0;
     cli_watch(&c);
     CHECK(strcmp(cli_out, "1:02:03 24.01 V 3.45 A 82.8 W  ch 0.50/0.50/0.50/0.95/0.95 A  out 100.0/100.0/100.0/50.0/50.0 %"
-                          "  45.2 C  k 100.0 %  dips 2\r\n") == 0, "watch line: %s", cli_out);
+                          "  cpu 0.0 %  45.2 C  k 100.0 %  dips 2\r\n") == 0, "watch line: %s", cli_out);
     run_cli(&c, "s");
     CHECK(c.watch_ms == 0 && cli_out[0] == 0 && c.len == 0, "any key stops watch (and is used up)");
     run_cli(&c, "watch\r");

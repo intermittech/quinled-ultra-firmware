@@ -176,6 +176,7 @@ static void test_decoder(void)
 #include "test_features.c"
 #include "test_ultra.c"
 #include "test_ultra_all_off.c"
+#include "test_d6.c"                             /* (0.6.5) ADC / DMA counters */
 #include "test_stagger.c"
 #include "test_boot.c"
 #include "test_wire.c"
@@ -183,13 +184,17 @@ static void test_decoder(void)
 #include "test_dtw.c"
 #include "test_update.c"
 #include "test_cal.c"
+#include "test_d5.c"                             /* (0.6.5) flash state */
 #include "test_div64.c"
+#include "test_r5_cpu.c"                       /* (0.6.5 D3: the CPU load) */
 #include "test_mcutemp.c"
 #include "test_version.c"
 #include "test_ocled.c"
+#include "test_r5_ovr.c"                       /* (0.6.5 D4: the overrun counters) */
 #include "test_pwrev.c"
 #include "test_vsense.c"
 #include "test_testjig.c"
+#include "test_d2.c"                             /* (0.6.5) event log */
 #include "test_gamma_tables.c"
 #include "test_vdip.c"
 #include "test_energy.c"
@@ -197,6 +202,9 @@ static void test_decoder(void)
 #include "test_sstart.c"
 #include "test_scenefx.c"
 #include "test_console060.c"
+#include "test_d1.c"                             /* (0.6.5) reset breadcrumbs */
+#include "test_r5_bounds.c"                    /* (0.6.5 D8: every console output under one part) */
+#include "test_console_cz.c"                   /* (the whole console output, compressed vs plain) */
 #include "test_spec.c"
 #include "test_r4_mutation.c"                    /* (gpt-mutation: regressions from surviving mutants) */
 
@@ -446,6 +454,7 @@ int main(void)
     test_ultra_all_off();
     test_stagger();
     test_spread();
+    test_d6();
     test_decoder();
     {
         const uint16_t wave[] = { 0, 0x7FFFu, 0xFF00u, 0 };
@@ -456,20 +465,24 @@ int main(void)
     }
     test_update();
     test_calstore();
+    test_d5();
     test_isense_curves();
     test_isense_average();
     test_chain_calibrate();
     test_climit();
     test_div64();
+    test_r5_cpu();
     test_dark();
     test_gamma_exact();
     test_mcutemp();
     test_version();
     test_ocled();
+    test_r5_ovr();
     test_pwrev();
     test_vsense();
     test_rxpower();
     test_testjig();
+    test_d2();
     test_gamma_tables();
     test_vdip();
     test_energy();
@@ -478,6 +491,9 @@ int main(void)
     test_tj_reset();
     test_scenefx();
     test_cli060();
+    test_d1();
+    test_r5_bounds();
+    test_console_cz();
     test_spec();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;

@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 typedef struct { volatile uint32_t CNT; } soak_tim_t;
-typedef struct { volatile uint32_t SR; } soak_systick_t;
+typedef struct { volatile uint32_t SR, CNT; } soak_systick_t;  /* CNT: the low word (hal/hw.h POLL_CNT) */
 typedef struct { volatile uint32_t RDATAR; } soak_adc_t;
 typedef struct { volatile uint32_t INDR; } soak_gpio_t;
 extern soak_tim_t soak_tim4;
@@ -22,11 +22,15 @@ extern soak_gpio_t soak_gpiob;
 #define ADC1    (&soak_adc1)
 #define RAMCODE                                  /* (hal/hw.h: SRAM code on the chip) */
 #define GPIOB   (&soak_gpiob)
+#define HW_UID  soak_uid                         /* (hal/hw.h: the chip's unique id) */
+extern const uint32_t soak_uid[3];
 
 #define __disable_irq() ((void)0)
 #define __enable_irq()  ((void)0)
 #define BARRIER()       ((void)0)
-#define CPU_SLEEP()     ((void)0)
+#define CPU_SLEEP()     soak_sleep()        /* (test_soak.c: nothing, or r5cpu's model of the WFI) */
+void soak_sleep(void);
+#define TRAP_PC()       0x00003A1Cu              /* (0.6.5, D1) the main loop's PC the tick sees */
 #define RCC_IWDGRSTF    0x20000000u
 #if !defined(__GNUC__)
 #define __attribute__(x)

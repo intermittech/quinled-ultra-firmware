@@ -48,10 +48,12 @@ static int chance(uint32_t pct) { return rint_(100) < pct; }
 static double urand(double a, double b) { return a + (b - a) * (double)(rnd64() >> 11) / 9007199254740992.0; }
 
 /* ================================================================================================ hardware model */
+const uint32_t soak_uid[3] = { 1u, 2u, 3u };
 soak_tim_t soak_tim4;
 soak_systick_t soak_systick;
 soak_adc_t soak_adc1;
 soak_gpio_t soak_gpiob = { 0xFFFFFFFFu };
+void soak_sleep(void) {}                                 /* (soak/ch32v20x.h CPU_SLEEP: the WFI) */
 
 /* the PWM tables exactly as hal/hw.c sizes them (ASan sees a table built past them) */
 uint16_t pwm_tab1[PATTERN_MAX_LEN * 4], pwm_tab2[PATTERN_MAX_LEN * 6], pwm_tab3[PATTERN_MAX_LEN * 6];
@@ -517,6 +519,8 @@ void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
     vs_pending = 0;
 }
 void hw_temp_start(void) {}
+volatile uint16_t hw_diag[HW_DIAG_N];                    /* (0.6.5, D6: hal/hw.c's counters, none here) */
+void hw_dma_check(void) {}
 uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2)
 {
     *ts2 = chance(90) ? 2u * 1710u + rint_(40) : rnd() & 0x1FFFu;
@@ -539,8 +543,19 @@ static char con_in[4096];
 static uint32_t con_in_r, con_in_w, con_out_n;
 static char con_out[1u << 15];
 int uart_getc(void) { return con_in_r < con_in_w ? (int)(unsigned char)con_in[con_in_r++] : -1; }
+static FILE *con_dump;                                   /* ROBUST_CON_DUMP=<file>: every byte the console wrote */
 void uart_write(const char *s)
 {
+    static int con_dump_init;
+    if (!con_dump_init) {
+        const char *f = getenv("ROBUST_CON_DUMP");
+        con_dump_init = 1;
+        con_dump = f ? fopen(f, "wb") : NULL;
+    }
+    if (con_dump) {
+        fputs(s, con_dump);
+        fflush(con_dump);
+    }
     while (*s) {
         if (con_out_n + 1u < sizeof con_out) {
             con_out[con_out_n] = *s;
@@ -551,25 +566,27 @@ void uart_write(const char *s)
     con_out[con_out_n < sizeof con_out ? con_out_n : sizeof con_out - 1u] = 0;
 }
 void uart_kick(void) {}
+uint32_t uart_room(void) { return 1024u; }
 
 /* ---- flash (the real addresses), writes / erases per page. 0.6.4: the stores are core/flashrec.c's themselves;
  * this is hal/hw.c's flash_op: the main loop waits (an erase 16 ms, a half-word 100 us: test durations), the tick runs
  * on as the SRAM path does (flash_poll_isr: the time bases, the fast trip) */
 #define FL_BASE 0x08000000u
+#define FL_SIZE (RECORDS_END - FL_BASE)       /* (0.6.5) the 64 KB and the record sectors above */
 static uint8_t *fl;
-static uint32_t fl_writes[256], fl_erases[256];
+static uint32_t fl_writes[FL_SIZE / 256u], fl_erases[FL_SIZE / 256u];
 static uint32_t load_raw(void);
 
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
     uint32_t i, us = 100u * halfwords;
-    CHECK(addr >= FL_BASE && addr + 2u * halfwords <= FL_BASE + 0x10000u, "flash write outside the chip: %08x", addr);
+    CHECK(addr >= FL_BASE && addr + 2u * halfwords <= FL_BASE + FL_SIZE, "flash write outside the chip: %08x", addr);
     if (addr >= UPD_APP_DESC && addr < UPD_APP_DESC + UPD_PAGE_BYTES && halfwords != 0u) {
         CHECK(halfwords == 1u && addr >= UPD_APP_DESC + UPD_DESC_BYTES && (addr & 1u) == 0u,
               "the confirm record at %08x: outside the status records", addr);
     }
     if (erase_addr != 0u) {
-        CHECK(erase_addr >= FL_BASE + 0x2000u && erase_addr < FL_BASE + 0x10000u && (erase_addr & 0xFFu) == 0u,
+        CHECK(erase_addr >= FL_BASE + 0x2000u && erase_addr < FL_BASE + FL_SIZE && (erase_addr & 0xFFu) == 0u,
               "flash erase at %08x", erase_addr);
         memset(fl + (erase_addr - FL_BASE), 0xFF, 256u);
         fl_erases[(erase_addr - FL_BASE) / 256u]++;
@@ -596,6 +613,8 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
 }
 uint32_t uart_busy(void) { return 0; }
 void hw_flash_trip(void) { pwm_force_off(1); }
+static uint32_t sim_window;                              /* (0.6.5) the boot window for the record reads: opened */
+void hw_records_window(uint32_t open) { sim_window += open; }
 
 static uint32_t page_of(uint32_t addr) { return (addr - FL_BASE) / 256u; }
 static uint32_t writes_in(uint32_t addr, uint32_t pages)
@@ -604,6 +623,7 @@ static uint32_t writes_in(uint32_t addr, uint32_t pages)
     for (i = 0; i < pages; i++) {
         n += fl_writes[page_of(addr) + i];
     }
+#define W_FX() (writes_in(SCENE_FX_ADDR, 2u) + (SCENE_FX_B_ADDR != SCENE_FX_ADDR ? writes_in(SCENE_FX_B_ADDR, 2u) : 0u))
     return n;
 }
 
@@ -626,19 +646,19 @@ static void random_fill(uint8_t *p, uint32_t n)
 
 static void flash_map(void)
 {
-    fl = (uint8_t *)VirtualAlloc((void *)(uintptr_t)FL_BASE, 0x10000u, 0x3000u, 0x04u);
+    fl = (uint8_t *)VirtualAlloc((void *)(uintptr_t)FL_BASE, FL_SIZE, 0x3000u, 0x04u);
     if (fl != (uint8_t *)(uintptr_t)FL_BASE) {
         printf("robust_fw: cannot map the flash model at 0x%08X\n", FL_BASE);
         exit(2);
     }
-    memset(fl, 0xFF, 0x10000u);
+    memset(fl, 0xFF, FL_SIZE);
 }
 
 static void flash_init(void)
 {
     uint32_t i, k;
     flash_map();
-    erased_fill(fl, 0x10000u);
+    erased_fill(fl, FL_SIZE);
     /* the bootloader info and the descriptor page (UPD_APP = 1) */
     if (chance(85)) {
         uint8_t *bl = fl + 0x10u, *dp = fl + 0x2000u;
@@ -704,10 +724,13 @@ static void flash_init(void)
                 s.fade = (uint8_t)rint_(40);
                 for (i = 0; i < 5u; i++) s.v[i] = (uint16_t)rnd();
                 scene_log_pack(&s, (uint16_t)(0xFFF0u + k), &rec);
-                memcpy(p + ((start + k) % SCENE_RECS) * 16u, &rec, k + 1u == n && chance(20) ? rrange(1, 15) : 16u);
+                i = (start + k) % SCENE_RECS;            /* (0.6.5: the B page in the other sector) */
+                memcpy(fl + ((i < SCENE_RECS_PAGE ? SCENE_LOG_ADDR : SCENE_B_ADDR) - FL_BASE) + (i % SCENE_RECS_PAGE) * 16u,
+                       &rec, k + 1u == n && chance(20) ? rrange(1, 15) : 16u);
             }
         } else if (kind < 7u) {
-            random_fill(p, SCENE_LOG_PAGES * 256u);
+            random_fill(p, 256u);
+            random_fill(fl + (SCENE_B_ADDR - FL_BASE), 256u);
         }
     }
     /* the calibration page */
@@ -1000,7 +1023,7 @@ static int regress_fx(void)
         sim_tick();
         pass();
     }
-    w0 = writes_in(SCENE_FX_ADDR, 2u);
+    w0 = W_FX();
     CHECK(w0 >= 3u && fx_mask == 0x03u, "regress fx: the two effects stored (%u writes, mask %x)", w0, fx_mask);
     /* new content for both whose head CRCs move by -16 and +1: the summed checksum stays the same */
     c0 = crc8_smbus((const uint8_t *)&ul.light[0], ULTRA_HEAD_BYTES);
@@ -1031,7 +1054,7 @@ static int regress_fx(void)
         sim_tick();
         pass();
     }
-    w1 = writes_in(SCENE_FX_ADDR, 2u);
+    w1 = W_FX();
     CHECK(w1 > w0, "regress fx: both power-on effects changed, nothing was written (%u writes before, %u after): the "
           "summed checksum of the head CRCs did not change", w0, w1);
     printf("regress fx: %s (%d failures)\n", g_fail ? "FAILED" : "passed", g_fail);
@@ -1136,10 +1159,10 @@ int main(int argc, char **argv)
     }
     /* the write budgets over the simulated time (plus the boot's sticky protocol / the hand-over) */
     settings_w = writes_in(SETTINGS_ADDR, 1u) + writes_in(SETTINGS_B_ADDR, 1u);
-    scene_w = writes_in(SCENE_LOG_ADDR, SCENE_LOG_PAGES);
+    scene_w = writes_in(SCENE_LOG_ADDR, 1u) + writes_in(SCENE_B_ADDR, 1u);
     cal_w = writes_in(CAL_PAGE_ADDR, 1u) + writes_in(CAL_B_ADDR, 1u);
     energy_w = writes_in(LIFE_PAGE0_ADDR, 1u) + writes_in(LIFE_PAGE1_ADDR, 1u);
-    fx_w = writes_in(SCENE_FX_ADDR, 2u);
+    fx_w = W_FX();
     {
         uint32_t s = (uint32_t)(sim_ns / 1000000000u) + 1u;
         CHECK(settings_w <= STORE_BUDGET_CAP + s / (STORE_REFILL_MS / 1000u) + 2u, "settings writes %u in %u s",

@@ -963,12 +963,14 @@ static char cli_out[1 << 16];
 static uint32_t cli_out_n;
 static settings_t cli_set;
 static config_rx_t cli_rx;
+static volatile uint16_t cli_hwd[HW_DIAG_N];             /* (0.6.5, D6) */
 static scene_t cli_scene;
 static cli_status_t cli_st;
 static vdip_t cli_dip;
 static pwrev_t cli_pw;
 static health_t cli_hl;
 static vsense_t cli_vs;
+static evlog_t cli_ev;                                   /* (0.6.5, D2) */
 
 static void cli_write(const char *s)
 {
@@ -993,6 +995,7 @@ static void cli_save(void) {}
 
 static energy_t cli_en;                                  /* (0.6.3) the energy / lifetime record the status shows */
 
+static uint32_t cli_ovr[3];                              /* (0.6.5 D4) the overrun counters */
 static void rnd_status(void)
 {
     uint8_t *b = (uint8_t *)&cli_st;
@@ -1015,9 +1018,31 @@ static void rnd_status(void)
     cli_st.dip = chance(80) ? &cli_dip : 0;
     cli_st.pw = chance(80) ? &cli_pw : 0;
     cli_st.hl = chance(80) ? &cli_hl : 0;
+    for (i = 0; i < 3u; i++) {
+        cli_ovr[i] = chance(50) ? 0u : (uint32_t)rnd();
+    }
+    cli_st.ovr = chance(80) ? cli_ovr : 0;
+    for (i = 0; i < HW_DIAG_N; i++) {                    /* (0.6.5, D6) the ADC / DMA counters: mostly 0 */
+        cli_hwd[i] = (uint16_t)(chance(70) ? 0u : rnd());
+    }
+    cli_st.hwd = chance(80) ? cli_hwd : 0;
     cli_st.dip_vs = &cli_vs;
     for (i = 0; i < sizeof cli_en; i++) ((uint8_t *)&cli_en)[i] = (uint8_t)rnd();
     cli_st.en = &cli_en;                                 /* (0.6.3: always set, as main.c does) */
+    for (i = 0; i < EVLOG_N; i++) {                      /* (0.6.5, D2) the event log: any times, its types */
+        cli_ev.e[i].t_s = (uint32_t)rnd();
+        cli_ev.e[i].ma = (uint16_t)rnd();
+        cli_ev.e[i].type = (uint8_t)rint_(EVL_CAL + 1u);
+    }
+    cli_ev.head = (uint8_t)rint_(EVLOG_N);
+    cli_st.ev = chance(80) ? &cli_ev : 0;
+    {
+        static uint32_t uid[3];                          /* (0.6.5 D10) the chip's id: always set too */
+        for (i = 0; i < 3u; i++) {
+            uid[i] = (uint32_t)rnd();
+        }
+        cli_st.uid = uid;
+    }
 }
 
 static const char *const cli_words[] = { "help", "?", "status", "get", "set", "period", "save", "defaults", "identify",
@@ -1070,12 +1095,16 @@ static void case_cli(void)
         cli_out_n = 0;
         if (chance(50)) {
             cli_exec(&c, line);
+            while (cli_poll(&c)) {
+            }
         } else {                                         /* through the line buffer, byte by byte */
             for (k = 0; k < len; k++) {
                 cli_feed(&c, line[k]);
                 CHECK(c.len < sizeof c.line, "cli: line buffer %u", c.len);
             }
             cli_feed(&c, chance(50) ? '\r' : '\n');
+            while (cli_poll(&c)) {
+            }
         }
         CHECK(c.watch_ms == 0u || (c.watch_ms >= 100u && c.watch_ms <= 60000u), "cli: watch_ms %u", c.watch_ms);
         CHECK(cli_out_n < 8192u, "cli: %u bytes of output for one line", cli_out_n);

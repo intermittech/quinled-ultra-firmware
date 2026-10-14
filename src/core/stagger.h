@@ -55,6 +55,23 @@ void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t 
 /* spread spectrum period table: arr[k] = period length - 1 of entry k (len entries, len >= 2) */
 void stagger_spread_arr(uint32_t steps, uint32_t len, uint16_t *arr);
 
+/* C10's ripple load (0.6.5, display only; console `c10_load=`): the LED_+ ripple (mA rms, the adaptive stagger's
+ * estimate with the measured channel currents) against C10's rating at the PWM frequency, in %: ripple x K / 3.2 A,
+ * K per preset from the C10 ripple-limit study (the largest ratio of C10's heating-equivalent current to this
+ * ripple over 40,000 random mixes, adaptive + spread, a 2 m supply cable, the datasheet's frequency multipliers
+ * interpolated); a raw period takes the nearest preset at or above its frequency. Once a second: now, the rms over
+ * ~1 min (C10's thermal time constant: a filter of the square, 64 s) and its highest since boot. */
+typedef struct {
+    uint32_t heat;                        /* the load squared, filtered (x 64) */
+    uint16_t now, avg, peak;              /* %: now, the ~1 min rms, its highest since boot */
+} stagger_cap_t;
+void stagger_cap_second(stagger_cap_t *c, uint32_t ripple_ma, uint32_t steps);
+/* ... for a Diff-Power receiver's HEALTH page (core/health.h health_page first): byte STAGGER_CAP_PG = the ~1 min
+ * load, % (255: 255 % or more; 0: not known). Proposed for protocol 0.2.4 as ULTRA_HE_C10_LOAD; a 0.2.3 receiver
+ * ignores the byte (it was 0) */
+#define STAGGER_CAP_PG 23u
+void stagger_cap_page(const stagger_cap_t *c, uint8_t out[24]);
+
 /* edge gap as a fraction of the period: 0.5 us at a period of `steps` counts of 144 MHz */
 uint16_t stagger_gap_q16(uint32_t steps);
 

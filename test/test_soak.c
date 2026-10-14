@@ -77,6 +77,7 @@ soak_tim_t soak_tim4;
 soak_systick_t soak_systick;
 soak_adc_t soak_adc1;
 soak_gpio_t soak_gpiob = { 0xFFFFFFFFu };                /* TP9 pulled up: no test jig */
+const uint32_t soak_uid[3] = { 0x12345678u, 0x9ABCDEF0u, 0x0F1E2D3Cu };
 
 uint16_t pwm_tab1[PATTERN_MAX_LEN * 4], pwm_tab2[PATTERN_MAX_LEN * 6], pwm_tab3[PATTERN_MAX_LEN * 6];
 uint16_t din_ring[DIN_RING_WORDS], din_copy[DIN_COPY_WORDS];
@@ -96,6 +97,7 @@ static uint8_t sim_forced;                               /* pwm_force_off */
 static uint32_t sim_led_on, sim_rearms;                  /* D9 switched on; gate re-arms */
 static uint32_t short_ticks;                             /* ticks of a short still to come (the fast trip) */
 static uint32_t sim_stalls;                              /* flash writes (the CPU stops) */
+static uint64_t sim_stall_us;                            /* ... their time (r5cpu: busy, no WFI) */
 
 static uint64_t wf_fall(uint32_t i)
 {
@@ -159,7 +161,7 @@ static void wire_frame(const uint8_t *bytes, uint32_t nbits, uint64_t t0)
 }
 
 /* the load: logic 45 mA + each output's duty x its strip (a short: 4095, the fast trip) */
-static const uint32_t ld_ma[5] = { 1500, 1500, 1500, 1200, 1200 };
+static uint32_t ld_ma[5] = { 1500, 1500, 1500, 1200, 1200 };   /* (r5jig: an open / overloaded channel) */
 static uint32_t load_raw(void)
 {
     uint32_t ma = 45u, i, g = is.ma_per_lsb_q16 ? is.ma_per_lsb_q16 : 262410u, raw;
@@ -187,7 +189,8 @@ void hw_init(void) {}
 void stack_paint(void) {}
 uint32_t stack_used(void) { return 0x2A0u; }
 uint32_t hw_uid_hash(void) { return 0x5EED1234u; }
-uint32_t hw_reset_flags(void) { return 0x0C000000u; }   /* power-on + pin */
+static uint32_t soak_reset_flags = 0x0C000000u;          /* power-on + pin (0.6.5, D1: a scenario sets others) */
+uint32_t hw_reset_flags(void) { return soak_reset_flags; }
 void pwm_start(uint32_t s, uint8_t l, uint8_t st) { (void)s; (void)l; (void)st; }
 uint8_t pwm_right_aligned(uint8_t ch) { (void)ch; return 0; }
 void pwm_set_phase(uint16_t o2, uint16_t o3) { (void)o2; (void)o3; }
@@ -217,6 +220,8 @@ void hw_vsense_take(uint32_t sum2[2], uint32_t *n)
 }
 void hw_temp_start(void) { soak_temp_req = 1; }
 uint8_t hw_temp_read(uint32_t *ts2, uint32_t *vref2) { *ts2 = 2u * 1710u; *vref2 = 2u * 1489u; return 1; }
+volatile uint16_t hw_diag[HW_DIAG_N];                    /* (0.6.5, D6: hal/hw.c's counters, none here) */
+void hw_dma_check(void) {}
 void pwm_force_off(uint8_t off) { sim_forced = off; }
 void led_set(uint8_t on) { sim_led_on += on != 0u; }
 void watchdog_kick(void) { SwitchToFiber(fib_main); }   /* every main loop pass: back to the scenario */
@@ -225,10 +230,30 @@ void watchdog_kick(void) { SwitchToFiber(fib_main); }   /* every main loop pass:
 static char con_in[512], con_out[1u << 16];
 static uint32_t con_in_r, con_in_w, con_out_n;
 int uart_getc(void) { return con_in_r < con_in_w ? (int)(unsigned char)con_in[con_in_r++] : -1; }
+/* (0.6.5) the UART's 2 x 512-byte TX buffers draining at 115200 baud (11.52 bytes a ms, sim_tick): a write beyond
+ * them would make uart_write wait on the board (the main loop stalls): counted in tx_blocks */
+static uint32_t tx_q, tx_acc, tx_blocks;
+uint32_t uart_room(void) { return tx_q >= 1024u ? 0u : 1024u - tx_q; }
+static FILE *con_dump;                                   /* SOAK_CON_DUMP=<file>: every byte the console wrote */
 void uart_write(const char *s)
 {
-    while (*s && con_out_n + 1u < sizeof con_out) {
-        con_out[con_out_n++] = *s++;
+    static int con_dump_init;
+    if (!con_dump_init) {
+        const char *f = getenv("SOAK_CON_DUMP");
+        con_dump_init = 1;
+        con_dump = f ? fopen(f, "wb") : NULL;
+    }
+    if (con_dump) {
+        fputs(s, con_dump);
+        fflush(con_dump);
+    }
+    while (*s) {
+        tx_blocks += tx_q >= 1024u;
+        tx_q++;
+        if (con_out_n + 1u < sizeof con_out) {
+            con_out[con_out_n++] = *s;
+        }
+        s++;
     }
     con_out[con_out_n] = 0;
 }
@@ -240,10 +265,14 @@ void uart_kick(void) {}
  * Counted: erases / programs while an output is at or above the flash's "low" level (15 %), and half-words programmed
  * that were not erased (the chip would refuse them). */
 #define FL_BASE  0x08000000u
+#define FL_SIZE  (RECORDS_END - FL_BASE)      /* (0.6.5) the 64 KB and the record sectors above */
 #define FL_HW_US 100u                                    /* a test duration, not a measurement (BENCH) */
 static uint8_t *fl;
-static uint32_t fl_writes[256], fl_erases[256], fl_bad, fl_lit_erases, fl_bright_erases, fl_bright_progs;
+static uint32_t fl_writes[FL_SIZE / 256u], fl_erases[FL_SIZE / 256u], fl_bad, fl_lit_erases, fl_bright_erases, fl_bright_progs;
 static uint32_t fl_fail;                                 /* a test: the next operations on the settings pages fail */
+static int32_t fl_cut = -1;                              /* (0.6.5) units (an erase, a half-word) before the power goes */
+static uint8_t sim_vdd_low;                              /* (0.6.5) VDD below the PVD: flash_op starts nothing */
+static uint32_t fl_outside;                              /* (0.6.5) operations outside the records / status records */
 static void sim_stall(uint32_t us);
 
 static uint32_t fl_bright(void)
@@ -257,13 +286,22 @@ static uint32_t fl_bright(void)
 
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
-    uint32_t i, us = halfwords * FL_HW_US;
+    uint32_t i, us = halfwords * FL_HW_US, a = erase_addr ? erase_addr : addr;
+    if (sim_vdd_low) {
+        return FLASH_ERR_VDD;                            /* (hw.c: the PVD checked first) */
+    }
+    fl_outside += !((a >= RECORDS_BASE && a + 2u * halfwords <= RECORDS_END) ||
+                    (a >= UPD_APP_DESC + UPD_DESC_BYTES && a + 2u * halfwords <= UPD_APP_DESC + UPD_PAGE_BYTES));
     if (fl_fail && (((addr | erase_addr) & ~0xFFu) == SETTINGS_ADDR || ((addr | erase_addr) & ~0xFFu) == SETTINGS_B_ADDR)) {
         fl_fail--;
         sim_stall(FL_HW_US);
         return FLASH_ERR_WRP;
     }
     if (erase_addr != 0u) {
+        if (fl_cut == 0) {
+            return FLASH_ERR_EOP;                        /* (0.6.5) the power is gone: nothing more changes */
+        }
+        fl_cut -= fl_cut > 0;
         memset(fl + (erase_addr - FL_BASE), 0xFF, 256u);
         fl_erases[(erase_addr - FL_BASE) / 256u]++;
         us += 16000u;
@@ -271,6 +309,10 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
         fl_bright_erases += fl_bright();
     }
     for (i = 0; i < halfwords; i++) {
+        if (fl_cut == 0) {
+            return FLASH_ERR_EOP;
+        }
+        fl_cut -= fl_cut > 0;
         fl_bad += ((uint16_t *)(uintptr_t)addr)[i] != 0xFFFFu;   /* (the chip would refuse it) */
         ((uint16_t *)(uintptr_t)addr)[i] = src[i];
     }
@@ -284,6 +326,8 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
 
 uint32_t uart_busy(void) { return 0; }
 void hw_flash_trip(void) { pwm_force_off(1); }
+static uint32_t sim_window;                              /* (0.6.5) the boot window for the record reads: opened */
+void hw_records_window(uint32_t open) { sim_window += open; }
 
 static uint32_t page_of(uint32_t addr) { return (addr - FL_BASE) / 256u; }
 static uint32_t writes_in(uint32_t addr, uint32_t pages)
@@ -295,8 +339,8 @@ static uint32_t writes_in(uint32_t addr, uint32_t pages)
     return n;
 }
 #define W_SETTINGS() (writes_in(SETTINGS_ADDR, 1u) + writes_in(SETTINGS_B_ADDR, 1u))
-#define W_SCENE()    writes_in(SCENE_LOG_ADDR, SCENE_LOG_PAGES)
-#define W_FX()       writes_in(SCENE_FX_ADDR, 2u)
+#define W_SCENE()    (writes_in(SCENE_LOG_ADDR, 1u) + writes_in(SCENE_B_ADDR, 1u))
+#define W_FX()       (writes_in(SCENE_FX_ADDR, 2u) + (SCENE_FX_B_ADDR != SCENE_FX_ADDR ? writes_in(SCENE_FX_B_ADDR, 2u) : 0u))
 #define W_LIFE()     (writes_in(LIFE_PAGE0_ADDR, 1u) + writes_in(LIFE_PAGE1_ADDR, 1u))
 #define W_CAL()      (writes_in(CAL_PAGE_ADDR, 1u) + writes_in(CAL_B_ADDR, 1u))
 
@@ -476,6 +520,9 @@ static void sim_tick(void)
 {
     sim_ns += 50000u;
     sim_ticks++;
+    for (tx_acc += 576u; tx_acc >= 1000u; tx_acc -= 1000u) {   /* 11.52 bytes a ms */
+        tx_q -= tx_q != 0u;
+    }
     wave_to(sim_ns);
     soak_tim4.CNT = (uint16_t)(edges_total - edges_rearm);
     if (soak_adc_held) {
@@ -493,6 +540,7 @@ static void sim_tick(void)
 static void sim_stall(uint32_t us)
 {
     sim_stalls++;
+    sim_stall_us += us / 50u * 50u;
     for (; us >= 50u; us -= 50u) {                     /* (0.6.4: the tick runs from SRAM meanwhile) */
         sim_ns += 50000u;
         sim_ticks++;
@@ -506,10 +554,29 @@ static void sim_stall(uint32_t us)
     }
 }
 
+/* the main loop's WFI (soak/ch32v20x.h CPU_SLEEP): nothing (a pass ends, the next tick comes before the next one),
+ * or with soak_wfi (0.6.5 D3, scenario r5cpu) the sleep itself: the next tick runs inside it, SysTick's count is
+ * soak_busy at the WFI (the pass's work after its tick) and 120 after it (the tick's interrupt) */
+static int soak_wfi;
+static uint32_t soak_busy, soak_slept;
+void soak_sleep(void)
+{
+    if (soak_wfi) {
+        sim_tick();
+        soak_systick.CNT = 120u;
+        soak_slept = 1;                                  /* (run_ticks: this tick is done) */
+    }
+}
+
 static void run_ticks(uint64_t n)
 {
     while (n--) {
-        sim_tick();
+        if (soak_slept) {
+            soak_slept = 0;                              /* (the last pass slept through it) */
+        } else {
+            sim_tick();
+        }
+        soak_systick.CNT = soak_busy;
         pass();
         if (sim_ticks % 20u == 0u) {
             win_sample();
@@ -575,6 +642,9 @@ static void console(const char *cmd)
     }
     con_in[con_in_w++] = '\r';
     run_ms(50);
+    while (cli.st_part) {
+        run_ms(10);                                      /* (0.6.5) a status in parts: to its end */
+    }
 }
 
 static void __stdcall fw_entry(void *p)
@@ -599,12 +669,12 @@ static void boot(uint32_t ms0, uint32_t tick0, uint64_t host0)
 
 static void flash_init(void)
 {
-    fl = (uint8_t *)VirtualAlloc((void *)(uintptr_t)FL_BASE, 0x10000u, 0x3000u, 0x04u);   /* RESERVE|COMMIT, RW */
+    fl = (uint8_t *)VirtualAlloc((void *)(uintptr_t)FL_BASE, FL_SIZE, 0x3000u, 0x04u);   /* RESERVE|COMMIT, RW */
     if (fl != (uint8_t *)(uintptr_t)FL_BASE) {
         printf("soak: cannot map the flash model at 0x%08X\n", FL_BASE);
         exit(2);
     }
-    memset(fl, 0xFF, 0x10000u);
+    memset(fl, 0xFF, FL_SIZE);
 }
 
 /* the console's `uptime=` in s (-1: none) */
@@ -699,6 +769,8 @@ static void sc_wrap(void)
     CHECK(con_uptime() >= 80 && con_uptime() <= (int64_t)now_s() + 1, "wrap: uptime %d s (sim %u s)",
           (int)con_uptime(), (uint32_t)now_s());
 }
+
+#include "test_r5_cpu_soak.c"                   /* (0.6.5 D3: r5cpu) */
 
 /* long: 52 days */
 static void sc_long(void)
@@ -977,6 +1049,8 @@ static void sc_fx(void)
           "%u)", W_SETTINGS() + W_SCENE() + W_FX() + W_CAL(), W_LIFE());
 }
 
+#include "test_r5_ovr_soak.c"                   /* (0.6.5 D4: r5ovr) */
+
 /* cfg: an automation flipping a stored setting; calibrations on a schedule */
 static void sc_cfg(void)
 {
@@ -1089,6 +1163,7 @@ static void sc_cfg(void)
 #include "test_r4_rx.c"                         /* (gpt-bugs: its own regressions, besides gpt-verify's) */
 #include "test_r4_reset.c"
 #include "test_r4_gate.c"
+#include "test_r5.c"                             /* (0.6.5: the upper flash, dip writes) */
 
 /* spec (review round 4): main.c behaviours of README / ULTRA_PROTOCOL.md that had no test. The power-on scene's
  * take-over 3 s after the first Ultra header without a light command (SCENE_TAKEOVER_MS); CONFIG 22 written only when
@@ -1237,6 +1312,33 @@ static void sc_race(void)
           "settings and console state intact");
 }
 
+/* d1 (0.6.5): the reset breadcrumbs (main.c bcrumb). The block as the run before left it (a watchdog reset after a
+ * load access fault, 1d 1:02:03 up, the faulting PC), the reset flags a watchdog's: `status` shows that run's line,
+ * and this run's breadcrumbs start again (the magic, the uptime every second, the tick's PC every ms, no fault). */
+static void sc_d1(void)
+{
+    const char *p;
+    printf("soak d1: the reset breadcrumbs after a watchdog reset\n");
+    bcrumb.magic = BC_MAGIC;
+    bcrumb.up_s = 90123u;
+    bcrumb.pc = 0x00004A2Eu;
+    bcrumb.cause = 5u;
+    soak_reset_flags = 0x20000000u;                      /* IWDGRSTF */
+    boot(0, 0, 0);
+    CHECK(bcrumb.magic == BC_MAGIC && bcrumb.up_s == 0u && bcrumb.cause == 0u, "d1: this run's block starts (magic "
+          "%08X, up %u, cause %u)", bcrumb.magic, bcrumb.up_s, bcrumb.cause);
+    run_ms(3500);
+    printf("  after 3.5 s: up %u s (uptime %u), pc %08X, cause %u\n", bcrumb.up_s, up_s, bcrumb.pc, bcrumb.cause);
+    CHECK(bcrumb.up_s == up_s && up_s == 3u && bcrumb.pc == 0x00003A1Cu && bcrumb.cause == 0u, "d1: the uptime every "
+          "second, the tick's PC (%u %u %08X)", bcrumb.up_s, up_s, bcrumb.pc);
+    console("status");
+    p = strstr(con_out, "before_reset=");
+    printf("  status: %.47s", p ? p : "(no before_reset line)\n");
+    CHECK(p && strncmp(p, "before_reset=1d 1:02:03 up, pc 18990, fault 5\r\n", 47) == 0, "d1: the last run's line");
+    CHECK(strstr(con_out, "reset=watchdog") != NULL, "d1: the reset line says watchdog");
+}
+#include "test_r5_jig_soak.c"                    /* (0.6.5 D10: r5jig) */
+
 /* tripreset (r4): a factory reset while a trip holds the outputs off (a short; the retry 1 s later). The reset sets the
  * current sense up again (isense_setup): 0.6.2 cleared the trip there, but the outputs stayed forced off (only the
  * retry releases them, and there was no trip left to retry): the board stayed dark, `status` said ok, until a power
@@ -1265,6 +1367,69 @@ static void sc_tripreset(void)
     run_ms(3000);
     CHECK(!sim_forced && is.tripped == ISENSE_TRIP_NONE, "tripreset: a later trip retries as before (forced %u)",
           sim_forced);
+}
+
+/* d2 (0.6.5): the event log (main.c ev_add, core/cli.h evlog_t), fed by what counts the events already: a short (the
+ * fast trip: pwrev's short trip with its current; its retry comes back with the limiter's feedback factor still low
+ * from the short's sample, so pwrev counts a limit event too, as in 0.6.4), a supply dip (24 V -> 19 V for 40 ms:
+ * vdip's count, with the board current then), a calibration (`set ical 50`: its end). `status` ends with them, newest
+ * first, with their ages: one line per counted event. */
+static const char *d2_line(const char *s, uint32_t n)    /* the n-th line (1..) of s */
+{
+    while (s && --n) {
+        s = strstr(s, "\r\n");
+        s = s ? s + 2 : 0;
+    }
+    return s;
+}
+
+static void sc_d2(void)
+{
+    char want[80];
+    uint32_t t_short, t_dip, t_cal, now, cal0;
+    const char *l, *ev;
+    printf("soak d2: the event log from a short, a supply dip and a calibration\n");
+    boot(0, 0, 0);
+    run_ms(2000);
+    console("status");
+    CHECK(strstr(con_out, "event ") == NULL, "d2: nothing logged yet");
+    short_ticks = 3;                                     /* a short: the fast trip, the retry 1 s later */
+    expect_trips = 1;
+    t_short = up_s;
+    run_ms(4000);
+    supply_mv = 19000u;
+    t_dip = up_s;
+    run_ms(40);
+    supply_mv = 24000u;
+    run_ms(2000);
+    cal0 = cal_cnt;
+    console("set ical 50");
+    run_ms(isense_cal_ms((uint16_t)(50u * 65535u / 100u)) + 200u);
+    t_cal = up_s;
+    jump_ms(1000);
+    run_ms(1500);
+    CHECK(is.cal_step == 0u && cal_cnt == cal0 + 1u, "d2: the calibration ran and was stored (%u -> %u)", cal0,
+          cal_cnt);
+    console("status");
+    now = up_s;
+    ev = strstr(con_out, "event 1=");
+    printf("%s", ev ? ev : "(no event lines)\n");
+    CHECK(pw.short_trips == 1u && vdip.count == 1u && pw.limit_events == 1u, "d2: pwrev / vdip counted one trip, one "
+          "dip, one limit event (%u %u %u)", (uint32_t)pw.short_trips, (uint32_t)vdip.count, (uint32_t)pw.limit_events);
+    snprintf(want, sizeof want, "event 1=0:00:%02u ago, calibration, %u.%02u A\r\n", now - t_cal,
+             (clim.connected_ma + 5u) / 1000u, (clim.connected_ma + 5u) / 10u % 100u);
+    CHECK(ev && strncmp(d2_line(ev, 1), want, strlen(want)) == 0, "d2: 1 the calibration, the connected load (%s)",
+          want);
+    snprintf(want, sizeof want, "event 2=0:00:%02u ago, supply dip, ", now - t_dip);
+    CHECK((l = d2_line(ev, 2)) && strncmp(l, want, strlen(want)) == 0, "d2: 2 the dip, with the current (%s)",
+          want);
+    CHECK((l = d2_line(ev, 3)) && strncmp(l, "event 3=", 8) == 0 && strstr(l, " ago, limit, ") == l + 15,
+          "d2: 3 the retry's limit event");
+    snprintf(want, sizeof want, "event 4=0:00:%02u ago, short, %u.%02u A\r\n", now - t_short,
+             ((uint32_t)pw.trip_ma + 5u) / 1000u, ((uint32_t)pw.trip_ma + 5u) / 10u % 100u);   /* (as cf rounds) */
+    CHECK((l = d2_line(ev, 4)) && strncmp(l, want, strlen(want)) == 0, "d2: 4 the short with its current (%s)",
+          want);
+    CHECK((l = d2_line(ev, 5)) && *l == 0, "d2: nothing else, the end of status");
 }
 
 /* longws (r4): WS frames longer than the 16-bit edge counter (TIM4) counts. A WS2805 line of 1,700 chips (68,000 bits,
@@ -1318,6 +1483,67 @@ static void sc_longws(void)
           "follows, no false events");
 }
 
+/* d5 (0.6.5): the flash state line. Before the boot: a settings record and one cut after it (a power loss while it
+ * was programmed), an effect store whose header lists two lights with wrong CRCs. `status`: both rejected, no error;
+ * a setting changed: "settings pending" until the debounced write; a write that fails (write protection): its error
+ * and code, the change still pending, then written by the retry. */
+static const char *d5_line(void)
+{
+    const char *p = strstr(con_out, "flash:");
+    static char l[160];
+    size_t n = p ? strcspn(p, "\r") : 0;
+    memcpy(l, p ? p : "", n);
+    l[n] = 0;
+    return l;
+}
+
+static void sc_d5(void)
+{
+    settings_t s;
+    store_ext_t e;
+    uint8_t *fx = fl + (SCENE_FX_ADDR - FL_BASE);
+    uint32_t k;
+    printf("soak d5: the flash state: rejected records, a pending save, a failed write\n");
+    settings_default(&s);
+    store_ext_clear(&e);
+    store_pack_ext(&s, &e, 5u, (store_slot_t *)(fl + (SETTINGS_ADDR - FL_BASE)));
+    memset(fl + (SETTINGS_ADDR - FL_BASE) + STORE_SLOT_BYTES, 0x5A, 10);   /* the next record, cut */
+    fx[0] = (uint8_t)(ULTRA_FX_MAGIC & 0xFFu);           /* (little endian, as hw.c writes the word) */
+    fx[1] = (uint8_t)((ULTRA_FX_MAGIC >> 8) & 0xFFu);
+    fx[2] = (uint8_t)((ULTRA_FX_MAGIC >> 16) & 0xFFu);
+    fx[3] = (uint8_t)(ULTRA_FX_MAGIC >> 24);
+    fx[4] = 0x03;                                        /* lights 0 and 1 listed; their heads (erased) fail the CRC */
+    fx[5] = 0x11;
+    fx[6] = 0x22;
+    boot(0, 0, 0);
+    run_ms(1000);
+    console("status");
+    printf("  boot: %s\n", d5_line());
+    CHECK(strcmp(d5_line(), "flash: settings rejected 1, power-on effect rejected 2, errors 0 (-)") == 0, "d5: the "
+          "rejected records (%s)", d5_line());
+    console("set dither 1");
+    run_ms(500);
+    console("status");
+    printf("  a setting changed: %s\n", d5_line());
+    CHECK(strcmp(d5_line(), "flash: settings pending, settings rejected 1, power-on effect rejected 2, errors 0 "
+                            "(-)") == 0, "d5: pending (%s)", d5_line());
+    run_ms(3000);
+    console("status");
+    CHECK(!settings_dirty && strstr(d5_line(), "pending") == NULL, "d5: written after the debounce (%s)", d5_line());
+    fl_fail = 1;                                         /* the next settings operation fails: write protection */
+    console("set dither 2");
+    for (k = 0; k < 100u && fl_fail != 0u; k++) {
+        run_ms(100);                                     /* (the debounce, the acknowledge blink's end) */
+    }
+    console("status");
+    printf("  a failed write: %s\n", d5_line());
+    CHECK(fl_fail == 0u && stat.fl_errs == 1u && strstr(d5_line(), "errors 1 (WRP)") != NULL,
+          "d5: the error and its code (%s)", d5_line());
+    run_ms(3000);
+    console("status");
+    CHECK(!settings_dirty && set.dither_mode == 2u && strstr(d5_line(), "pending") == NULL, "d5: the retry wrote it");
+}
+
 /* minmax (r4): the console's `supply=... (min, max)` covers the time since the last command (the console's snapshot is
  * taken at a command's line end). Typed key by key (a person, ~150 ms a key), 0.6.2 restarted the min / max at every
  * key (the snapshot on any byte), so a dip before the typing never showed. */
@@ -1332,6 +1558,9 @@ static void console_typed(const char *cmd, uint32_t ms_per_key)
     }
     con_in[con_in_w++] = '\r';
     run_ms(50);
+    while (cli.st_part) {
+        run_ms(10);                                      /* (0.6.5) a status in parts: to its end */
+    }
 }
 
 /* the min / max of the `supply=` line, mV (-1: not found) */
@@ -1371,15 +1600,23 @@ int main(int argc, char **argv)
 {
     const char *sc = argc > 1 ? argv[1] : "wrap";
     flash_init();
-    if (verify_scenario(sc) || r4_scenario(sc)) {
+    if (verify_scenario(sc) || r4_scenario(sc) || r5_scenario(sc)) {
     } else if (strcmp(sc, "wrap") == 0) {
         sc_wrap();
+    } else if (strcmp(sc, "r5cpu") == 0) {
+        sc_r5cpu();
+    } else if (strcmp(sc, "d1") == 0) {
+        sc_d1();
     } else if (strcmp(sc, "long") == 0) {
         sc_long();
     } else if (strcmp(sc, "fx") == 0) {
         sc_fx();
+    } else if (strcmp(sc, "r5ovr") == 0) {
+        sc_r5ovr();
     } else if (strcmp(sc, "cfg") == 0) {
         sc_cfg();
+    } else if (strcmp(sc, "d2") == 0) {
+        sc_d2();
     } else if (strcmp(sc, "spec") == 0) {
         sc_spec();
     } else if (strcmp(sc, "r4rx") == 0) {
@@ -1388,8 +1625,12 @@ int main(int argc, char **argv)
         sc_r4reset();
     } else if (strcmp(sc, "r4gate") == 0) {
         sc_r4gate();
+    } else if (strcmp(sc, "d5") == 0) {
+        sc_d5();
     } else if (strcmp(sc, "race") == 0) {
         sc_race();
+    } else if (strcmp(sc, "r5jig") == 0) {
+        sc_r5jig();
     } else if (strcmp(sc, "tripreset") == 0) {
         sc_tripreset();
     } else if (strcmp(sc, "longws") == 0) {
@@ -1401,6 +1642,8 @@ int main(int argc, char **argv)
         return 2;
     }
     CHECK(fl_bad == 0u, "%s: no half-word programmed that wasn't erased (%u)", sc, fl_bad);
+    CHECK(fl_outside == 0u, "%s: flash operations only on the record pages and the update status records (%u)", sc,
+          fl_outside);
     CHECK(fl_bright_erases == 0u, "%s: erases only while every output is below 15 %% (%u erases while brighter, %u "
           "while lit)", sc, fl_bright_erases, fl_lit_erases);
     printf("soak %s: %s (%d failures), %u s simulated\n", sc, g_fail ? "FAILED" : "passed", g_fail, (uint32_t)now_s());

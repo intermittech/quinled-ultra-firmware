@@ -928,8 +928,113 @@ static void test_energy_powercut_all(void)
            g_fail == fails ? "the newest complete record every time" : "FAILED");
 }
 
+/* 0.6.5: energy per channel. ms ms of the outputs `o` (or, with flip, R alternating 0 / o[0] every ms), the board
+ * current = the zero + the model's current x (1 + extra) (the model's gain off by `extra`), at mv; a second each */
+static void ech_run(energy_t *e, const isense_t *is, uint32_t secs, const uint16_t o[5], double extra, int flip,
+                    uint32_t mv)
+{
+    uint32_t s, t, k;
+    for (s = 0; s < secs; s++) {
+        for (t = 0; t < 1000u; t++) {
+            uint16_t v[5];
+            double ma = is->zero_ma;
+            for (k = 0; k < 5u; k++) {
+                v[k] = (uint16_t)(k == 0u && flip && (t & 1u) ? 0u : o[k]);
+                ma += isense_ch_ma(is, k, v[k]) * (1.0 + extra);
+            }
+            energy_ms(e, t, mv, (int32_t)(ma + 0.5), 1);
+            energy_ch_ms(e, v, (int32_t)(ma + 0.5));
+        }
+        energy_ch_second(e, is, mv);
+    }
+}
+
+static void test_energy_ch(void)
+{
+    static const uint16_t i100[5] = { 3000, 3000, 2500, 0, 5000 };
+    static const uint16_t r_full[5] = { 65535, 0, 0, 0, 0 };
+    static const uint16_t mix[5] = { 32768, 0, 0, 0, 16384 };
+    isense_cal_t c;
+    isense_t is;
+    energy_t e;
+    uint32_t k, sum;
+    cli_t cl;
+    cli_status_t st;
+
+    printf("energy per channel: the split by the channel model, effects, no model, the console\n");
+    memset(&c, 0, sizeof c);
+    c.levels = ISENSE_LEVELS;
+    c.pct[0] = 25; c.pct[1] = 50; c.pct[2] = 75; c.pct[3] = 100;
+    c.zero_ma = 30;
+    for (k = 0; k < 5u; k++) {
+        uint32_t l;
+        for (l = 0; l < ISENSE_LEVELS; l++) {
+            c.ma[k][l] = (uint16_t)(i100[k] * (l + 1u) / 4u);
+        }
+    }
+    isense_init(&is, 1, 10000, 8000);
+    isense_cal_set(&is, &c);
+    /* an hour of R at 100 %, 24 V: R 72.00 Wh (24 V x 3 A), the others 0; the logic's 0.72 Wh in energy= only */
+    energy_init(&e, 0, 0, 0, 0);
+    ech_run(&e, &is, 3600, r_full, 0, 0, 24000);
+    CHECK(e.ch_mwh[0] >= 71950u && e.ch_mwh[0] <= 72050u && e.ch_mwh[1] + e.ch_mwh[2] + e.ch_mwh[3] + e.ch_mwh[4] == 0u,
+          "R 100 %% for 1 h: %u mWh (72000)", e.ch_mwh[0]);
+    CHECK(e.boot_mwh >= e.ch_mwh[0] + 700u && e.boot_mwh <= e.ch_mwh[0] + 740u, "the zero's 0.72 Wh: in the total only "
+          "(%u - %u mWh)", e.boot_mwh, e.ch_mwh[0]);
+    /* R 50 % + W2 25 %, the measured current 10 % above the model: shared 1500 : 1250, the sum is what was measured */
+    energy_init(&e, 0, 0, 0, 0);
+    ech_run(&e, &is, 3600, mix, 0.10, 0, 24000);
+    sum = e.ch_mwh[0] + e.ch_mwh[4];
+    CHECK(sum + 800u >= e.boot_mwh && sum + 640u <= e.boot_mwh, "mix: the channels %u + the zero = the total %u mWh",
+          sum, e.boot_mwh);
+    CHECK(e.ch_mwh[0] * 1250u >= e.ch_mwh[4] * 1500u - 3000u * 1250u && e.ch_mwh[0] * 1250u <= e.ch_mwh[4] * 1500u +
+          3000u * 1250u && e.ch_mwh[0] > 39000u, "mix: R %u : W2 %u mWh (1500 : 1250)", e.ch_mwh[0], e.ch_mwh[4]);
+    /* an effect (R 0 / 100 % every other ms): R gets the LED energy, at the mean: 36 Wh */
+    energy_init(&e, 0, 0, 0, 0);
+    ech_run(&e, &is, 3600, r_full, 0, 1, 24000);
+    CHECK(e.ch_mwh[0] >= 35950u && e.ch_mwh[0] <= 36050u && e.ch_mwh[4] == 0u, "effect: R %u mWh (36000)",
+          e.ch_mwh[0]);
+    /* a small load for a long time: no loss below a mWh a second (0.2 % of B: the model's 4 mA, 0.1 W) */
+    {
+        static const uint16_t dim[5] = { 0, 0, 131, 0, 0 };      /* 0.2 % of 2.5 A = 5 mA */
+        energy_init(&e, 0, 0, 0, 0);
+        ech_run(&e, &is, 12u * 3600u, dim, 0, 0, 24000);
+        k = isense_ch_ma(&is, 2, 131) * 24u * 12u;       /* (the model's 4 mA: 1152 mWh) */
+        CHECK(e.ch_mwh[2] >= k - 2u && e.ch_mwh[2] <= k + 2u, "%u mA on B for 12 h: %u mWh (%u)",
+              isense_ch_ma(&is, 2, 131), e.ch_mwh[2], k);
+    }
+    /* no usable model (nothing learned yet): nothing shared out */
+    isense_init(&is, 1, 10000, 8000);
+    energy_init(&e, 0, 0, 0, 0);
+    for (k = 0; k < 1000u; k++) {
+        energy_ch_ms(&e, r_full, 3030);
+    }
+    energy_ch_second(&e, &is, 24000);
+    CHECK(e.ch_mwh[0] == 0u && e.ch_mj[0] == 0u && e.ch_n == 0u, "no model: nothing (%u)", e.ch_mwh[0]);
+    energy_ch_second(&e, &is, 24000);                     /* (a second without any ms: nothing, no division) */
+
+    /* the console */
+    memset(&cl, 0, sizeof cl);
+    memset(&st, 0, sizeof st);
+    settings_default(&cli_set);
+    st.version = "test";
+    st.steps = 5760;
+    st.en = &e;
+    cl.write = cap_write;
+    cl.apply = cap_apply;
+    cl.save_now = cap_save;
+    cl.set = &cli_set;
+    cl.st = &st;
+    e.boot_mwh = 76540;
+    e.ch_mwh[0] = 72000; e.ch_mwh[1] = 5; e.ch_mwh[2] = 1440; e.ch_mwh[3] = 0; e.ch_mwh[4] = 123456;
+    run_cli(&cl, "status\r");
+    CHECK(strstr(cli_out, "energy=76.54 Wh since boot\r\nenergy R/G/B/W1/W2=72.00/0.01/1.44/0.00/123.46 Wh\r\n") != NULL,
+          "status: energy per channel");
+}
+
 static void test_energy(void)
 {
+    test_energy_ch();
     test_energy_rules();
     test_energy_record();
     test_energy_powercut_all();

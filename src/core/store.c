@@ -13,6 +13,14 @@ static uint8_t slot_crc(const store_slot_t *sl)
     return crc8_smbus((const uint8_t *)&sl->seq, 4u + (uint32_t)sizeof(settings_t) + (uint32_t)sizeof(store_ext_t));
 }
 
+/* (0.6.5) the CRC byte is programmed last: a record cut short leaves it erased (0xFF, or 0xE3 with 0xE339 erased
+ * flash), which a CRC-8 would match 1 time in 256 (found by test r5dip). store_pack_ext never writes those values (a
+ * reserved byte takes another value instead), so a record whose CRC byte reads erased was never completed. */
+static int crc_erased(uint32_t c)
+{
+    return UPPER_RECORDS && (c == 0xFFu || c == 0xE3u);   /* (0.6.4's layout: 0.6.4's rule, its records as before) */
+}
+
 void store_ext_clear(store_ext_t *e)
 {
     uint32_t i;
@@ -32,7 +40,9 @@ void store_pack_ext(const settings_t *s, const store_ext_t *e, uint32_t seq, sto
     slot->seq = seq;
     slot->s = *s;
     slot->ext = *e;
-    slot->crc = slot_crc(slot);
+    while (crc_erased(slot->crc = slot_crc(slot))) {
+        slot->ext.reserved[0]--;                         /* (reserved: nothing reads it) */
+    }
 }
 
 void store_pack(const settings_t *s, uint32_t seq, store_slot_t *slot)
@@ -45,7 +55,7 @@ void store_pack(const settings_t *s, uint32_t seq, store_slot_t *slot)
 int store_valid(const uint8_t *r)
 {
     const store_slot_t *sl = (const store_slot_t *)r;
-    return sl->magic == STORE_MAGIC && sl->crc == slot_crc(sl);
+    return sl->magic == STORE_MAGIC && !crc_erased(sl->crc) && sl->crc == slot_crc(sl);
 }
 
 int store_find_ext(const uint8_t *page, settings_t *out, store_ext_t *ext, uint32_t *seq)

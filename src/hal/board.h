@@ -85,15 +85,43 @@
 #define DIN_COPY_WORDS   1792u      /* copied per frame: up to 796 us (Ultra: 60 us + 320 bits + latency) */
 #define POLL_HZ          20000u     /* poll tick: frame-end detection (core/frame_track.h), ring copy, 1 ms time base */
 
+#ifndef __ASSEMBLER__                        /* (isr.S includes this file: the record map is C only) */
+#include "../core/ultra_update.h"           /* UPPER_RECORDS: the layout */
+#if UPPER_RECORDS
+/* 0.6.5 (Quindor 2026-10-14): the records in the upper CodeFlash (DS table 2-1: 160 KB
+ * non-zero-wait at 0x08010000-0x08037FFF), every one an A/B pair: the A pages in the 4 KB sector 0x08010000, the B
+ * pages in 0x08011000 (nothing else in either sector). Read only in hw.c's boot window (hw_records_window: HCLK / 2,
+ * DS table 4-17's 60 MHz flash clock), the values kept in RAM; written through hw.c's flash_op (HCLK / 2 as well). */
+#define SETTINGS_ADDR    0x08010000u   /* the settings (core/flashrec.h), page A */
+#define CAL_PAGE_ADDR    0x08010100u   /* the current calibration (core/calstore.h), page A */
+#define SCENE_LOG_ADDR   0x08010200u   /* the power-on scene log (core/scene.h), page A */
+#define LIFE_PAGE0_ADDR  0x08010300u   /* the lifetime record (core/energy.h), page A */
+#define SCENE_FX_ADDR    0x08010400u   /* the power-on effects (core/ultra.h ULTRA_FX_*), bank A: two pages */
+#define SETTINGS_B_ADDR  0x08011000u   /* ... their B pages / bank B, the same offsets in the next sector */
+#define CAL_B_ADDR       0x08011100u
+#define SCENE_B_ADDR     0x08011200u
+#define LIFE_PAGE1_ADDR  0x08011300u
+#define SCENE_FX_B_ADDR  0x08011400u
+#define RECORDS_BASE     0x08010000u   /* the record area: [RECORDS_BASE, RECORDS_END) */
+#define RECORDS_END      0x08012000u
+#else
+/* 0.6.4's layout (the bench fallback): the top of the 64 KB flash; the power-on effects in one bank */
 #define SETTINGS_ADDR    0x0800FF00u   /* the settings (core/flashrec.h): an A/B page pair (0.6.4), page A the last */
 #define SETTINGS_B_ADDR  0x0800F900u   /* 256-byte page of the 64 KB flash (0.6.0-0.6.3's single page), page B */
 #define SCENE_LOG_ADDR   0x0800F700u   /* power-on scene log: SCENE_LOG_PAGES (2) pages, to 0x0800F8FF */
+#define SCENE_B_ADDR     0x0800F800u
 #define CAL_B_ADDR       0x0800FA00u   /* the current calibration's page B (page A: CAL_PAGE_ADDR) */
 #define LIFE_PAGE0_ADDR  0x0800FB00u   /* the lifetime record (core/energy.h, 0.6.3): two pages, this one (the scene */
 #define LIFE_PAGE1_ADDR  0x0800FE00u   /* log's 5th until 0.6.2) and the 0.6.0-0.6.2 energy log's */
-#define SCENE_FX_ADDR    0x0800FC00u   /* the power-on effect (0.6.0): two pages */
+#define SCENE_FX_ADDR    0x0800FC00u   /* the power-on effect (0.6.0): two pages, one bank */
+#define SCENE_FX_B_ADDR  SCENE_FX_ADDR
 #define CAL_PAGE_ADDR    0x0800F600u   /* current calibration (core/calstore.h): the top page of the app slot. The
-                                          linker scripts end the code area here (vendor/wch/Link.ld, Link_app.ld); a
-                                          firmware update erases only the new app's length, so the page survives */
+                                          linker scripts end the code area here (vendor/wch/Link_lower.ld,
+                                          Link_app_lower.ld); a firmware update erases only the new app's length */
+#define RECORDS_BASE     0x0800F600u
+#define RECORDS_END      0x08010000u
+#endif
+typedef char records_outside_the_slot[(RECORDS_BASE >= UPD_APP_END - (UPPER_RECORDS ? 0u : 0x100u)) ? 1 : -1];
+#endif
 
 #endif

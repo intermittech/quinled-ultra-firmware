@@ -15,9 +15,14 @@ const uint8_t *pp_find(const pp_desc_t *d, const uint8_t *page0, const uint8_t *
     uint32_t p, k, at = 0, after = 0, bytes = (uint32_t)d->recs * d->bytes;   /* the page and entry after the newest */
     pg[0] = page0;
     pg[1] = page1;
+    pos->bad = 0;
     for (p = 0; p < 2u; p++) {
         for (k = 0, s = pg[p]; k < d->recs; k++, s += d->bytes) {
-            if (d->valid(s) && (!best || (int32_t)(seq_of(d, s) - seq_of(d, best)) > 0)) {
+            if (!d->valid(s)) {
+#if MON_EXTRA
+                pos->bad = (uint8_t)(pos->bad + !store_erased(s, d->bytes));   /* (0.6.5, D5) rejected */
+#endif
+            } else if (!best || (int32_t)(seq_of(d, s) - seq_of(d, best)) > 0) {
                 best = s;
                 at = p;
                 after = k + 1u;

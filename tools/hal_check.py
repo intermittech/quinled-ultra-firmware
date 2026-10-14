@@ -14,6 +14,10 @@ V2.5), not of timing: bench items stay bench items. Checks:
   flash  flash_op: the state during every erase / half-word (the SRAM tick through VTF, HCLK / 2, PCLK2
        kept, SysTick rescaled with its phase, mtvec, the other interrupts off), restored after, the result
        codes (write protection, no EOP, no unlock), the console's dropped bytes, the SRAM tick's trip;
+  records  (0.6.5) the boot window for the upper record pages (HCLK / 2, then back), the PVD on at 2.9 V, flash_op
+           starting nothing while VDD is below it.
+  vectors  (0.6.5) no vector table: the startup sets mtvec to trap_entry (unified mode); every exception code
+           and interrupt number reaches its handler (SysTick, TIM4, TIM2, TIM3) or the fault loop.
   ramtext  every call / jump of the SRAM code stays in SRAM (OBJDUMP=<riscv objdump>).
 Exit status 1 on a failed check."""
 import os
@@ -291,7 +295,7 @@ class FlashHal(Hal):
     mtvec and the interrupt enable CSR 0x800, USART2's status"""
     def __init__(self, elf):
         super().__init__(elf)
-        self.csr = {0x800: 0x88, 0x305: 0x2103}          # interrupts on; the app's vector table
+        self.csr = {0x800: 0x88, 0x305: self.addr("trap_entry")}   # interrupts on; the app's entry (0.6.5)
         self.ops = []                                    # (kind, address, state) per erase / half-word
         self.no_eop = self.wrp = self.no_unlock = False
         self.keys = []
@@ -408,7 +412,7 @@ def flash(elf):
           "touched %s" % (bad[:3] or ""))
     after = e.state()
     check(after["cfgr"] == 0x0002 | (4 << 11) and after["cmp"] == 7199 and after["vtfaddr"] == 0 and
-          after["mtvec"] == 0x2103 and e.mmio.get(PFIC_B + 0x104, 0) == (7 << 12) and after["irq_on"] and
+          after["mtvec"] == e.addr("trap_entry") and e.mmio.get(PFIC_B + 0x104, 0) == (7 << 12) and after["irq_on"] and
           e.mmio.get(FLASH + 0x10, 0) & 0x8080 == 0x8080,
           "after: the clocks, SysTick, VTF, mtvec, the interrupts and the locks as before (%s)" % after)
     check(e.mmio.get(SYST + 0x08, 0) in (2999, 3000, 3001), "SysTick's phase kept across the two clock changes (%d)"
@@ -449,6 +453,67 @@ def flash(elf):
           "the SRAM tick: two samples over the trip level force every output low (after one: %d)" % one)
 
 
+def records(elf):
+    print("records (0.6.5): the boot window for the upper record pages, the PVD before every flash operation")
+    base = 0x0002 | (4 << 11)
+    e = FlashHal(elf)
+    e.call("hw_records_window", [1])
+    c1 = e.mmio.get(RCC_CFGR0, 0)
+    e.call("hw_records_window", [0])
+    c0 = e.mmio.get(RCC_CFGR0, 0)
+    check(c1 == base | (0x8 << 4) and c0 == base, "the window: HCLK / 2 (CFGR0 %04x), then back (%04x)" % (c1, c0))
+    h = FlashHal(elf)
+    h.call("hw_init")
+    pwr = h.mmio.get(0x40007000, 0)
+    check(pwr & 0x10 and pwr & 0xE0 == 0xE0, "hw_init: the PVD on at 2.9 V (PWR CTLR %04x)" % pwr)
+    f = FlashHal(elf)
+    f.mmio[0x40007004] = 0x04                            # PVDO: VDD below the threshold
+    f.call("flash_op", [0x08010000, 0x20004000, 4, 0x08010000])
+    check(f.ret == 6 and not f.ops and f.mmio.get(RCC_CFGR0, 0) == base and f.mmio.get(FLASH + 0x10, 0) & 0x8080 == 0x8080,
+          "VDD below the PVD: FLASH_ERR_VDD (%d), no operation, the clock and the locks untouched" % f.ret)
+
+
+def vectors(elf):
+    """0.6.5: no vector table; the startup's mtvec and trap_entry's dispatch on mcause"""
+    print("vectors (0.6.5): mtvec = trap_entry in unified mode, each mcause to its handler, anything else to the loop")
+    e = FlashHal(elf)
+    e.csr.pop(0x305)
+    x = [0] * 32
+    pc, n = e.addr("_start"), 0
+    while 0x305 not in e.csr and n < 200000:             # through the data copy / bss clear to the mtvec write
+        h = e.rd(pc, 2)
+        pc, _ = e._c(h, pc, x) if h & 3 != 3 else e._i(e.rd(pc, 4), pc, x)
+        x[0] = 0
+        n += 1
+    entry = e.addr("trap_entry")
+    mt = e.csr.get(0x305)
+    check(mt == entry and entry & 3 == 0, "the startup: mtvec %s = trap_entry %08x, mode 0 (unified)"
+          % ("%08x" % mt if mt is not None else "not written", entry))
+    handlers = {e.addr(f): f for f in ("poll_isr", "gate_isr", "slew2_isr", "slew3_isr")}
+    want = {0x8000000C: "poll_isr", 0x8000002E: "gate_isr", 0x8000002C: "slew2_isr", 0x8000002D: "slew3_isr"}
+    bad = []
+    # every exception code (0-11: the privileged spec's below the page faults; QingKe V4 has no MMU), every interrupt
+    # number of the CH32V203 (0-69; above 63 the low 6 bits alias 0-5)
+    for cause in list(range(12)) + [0x80000000 | i for i in range(70)]:
+        e.csr[0x342] = cause
+        x = [0] * 32
+        pc, seen, got = entry, set(), None
+        for _ in range(40):
+            if pc in handlers:
+                got = handlers[pc]
+                break
+            if pc in seen:                               # the fault loop: the watchdog resets
+                break
+            seen.add(pc)
+            h = e.rd(pc, 2)
+            pc, _ = e._c(h, pc, x) if h & 3 != 3 else e._i(e.rd(pc, 4), pc, x)
+            x[0] = 0
+        if got != want.get(cause) or (got is None and pc not in seen):
+            bad.append("%08x -> %s" % (cause, got))
+    check(not bad, "SysTick / TIM4 / TIM2 / TIM3 to poll / gate / slew2 / slew3, the other 78 causes to the loop %s"
+          % (bad[:4] or ""))
+
+
 def ramtext(elf):
     """every call / jump from the SRAM code stays in SRAM (nothing is fetched from the flash during an operation)"""
     import re
@@ -471,8 +536,9 @@ def ramtext(elf):
 if __name__ == "__main__":
     elf = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "build", "target-lto0",
                                                              "fw.elf")
-    which = sys.argv[2:] or ["h2", "h6", "adc", "flash", "ramtext"]
+    which = sys.argv[2:] or ["h2", "h6", "adc", "flash", "records", "vectors", "ramtext"]
     for w in which:
-        {"h2": h2, "h6": h6, "adc": adc, "flash": flash, "ramtext": ramtext}[w](elf)
+        {"h2": h2, "h6": h6, "adc": adc, "flash": flash, "records": records, "vectors": vectors,
+         "ramtext": ramtext}[w](elf)
     print("hal_check: %s (%d failed)" % ("FAILED" if fails else "passed", fails))
     sys.exit(1 if fails else 0)

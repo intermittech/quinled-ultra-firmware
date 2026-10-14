@@ -16,7 +16,11 @@ extern "C" {
 #endif
 
 #ifndef BL_VERSION
+#if UPPER_RECORDS
+#define BL_VERSION 2u                          /* 0.6.5: the app slot to 0x08010000 (ultra_update.h UPPER_RECORDS) */
+#else
 #define BL_VERSION 1u
+#endif
 #endif
 #ifndef BL_HW_ID
 #define BL_HW_ID UPD_HW_ID_D2A_ULTRA_5CH

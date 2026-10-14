@@ -19,6 +19,7 @@ void pwrev_init(pwrev_t *p, uint32_t now)
 
 void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
 {
+    uint8_t ev = (uint8_t)(in->dips != p->in.dips ? ULTRA_PW_EV_SUPPLY_DIP : 0u);   /* (0.6.5, D2) counted now */
     /* the ages, in whole seconds (PWREV_AGE_NONE stays; 0xFFFFFE = 194 days or more) */
     while (now - p->sec_ms >= 1000u) {
         p->sec_ms += 1000u;
@@ -36,6 +37,7 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
             p->limit_events++;
             p->limit_age_s = 0;
             p->event_ma = in->i_ma;
+            ev |= ULTRA_PW_EV_LIMITED;
         }
         p->limit_on = 1;
         p->limit_seen_ms = now;
@@ -54,8 +56,10 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
         if (p->in.trip_cause == ULTRA_PW_CAUSE_NONE) {
             if (in->trip_cause == ULTRA_PW_CAUSE_SHORT) {
                 p->short_trips++;
+                ev |= ULTRA_PW_EV_SHORT;
             } else {
                 p->ovl_trips++;
+                ev |= ULTRA_PW_EV_OVERLOAD;
             }
             p->last_cause = in->trip_cause;
             p->trip_age_s = 0;
@@ -65,6 +69,7 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
             p->trip_ma = in->trip_ma;      /* a short's peak sample can land in the next ms' take */
         }
     }
+    p->ev = ev;                            /* (before the copy: it stays the tail call it was) */
     p->in = *in;
 }
 

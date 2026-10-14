@@ -23,6 +23,7 @@
 #include "../core/cli.h"
 #include "../core/climit.h"
 #include "../core/config.h"
+#include "../core/cpuload.h"
 #include "../core/dark.h"
 #include "../core/dither.h"
 #include "../core/frame_rx.h"
@@ -31,9 +32,11 @@
 #include "../core/gamma.h"
 #include "../core/health.h"
 #include "../core/isense.h"
+#include "../core/scratch.h"
 #include "../core/lto.h"
 #include "../core/mcutemp.h"
 #include "../core/ocled.h"
+#include "../core/perf.h"
 #include "../core/pwrev.h"
 #include "../core/vsense.h"
 #include "../core/proto.h"
@@ -48,7 +51,7 @@
 #include "../core/ws_decode.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.4"   /* release builds: the release version (tools/build_release.sh) */
+#define FW_VERSION       "0.6.5"   /* release builds: the release version (tools/build_release.sh) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -91,9 +94,19 @@ static uint32_t poll_sub;                  /* ticks into the ms (poll_isr, flash
                                               every tick) */
 static uint8_t adc_hold;                   /* the next tick's PA7 sample is held (the temperature sequence) */
 static volatile uint32_t frames;
+/* overruns (0.6.5 D4; console `status` / `watch`, display only): [0] captures dropped (the last one not decoded yet),
+ * [1] frame ends not handled (the last one still pending), both counted by the tick; [2] render ms late: the main loop's
+ * ms came this many ms after the one before, not counted after a flash operation (ovr_on = 0: housekeeping) */
+static volatile uint32_t ovr[3];
+static uint8_t ovr_on;
 /* board current sense (core/isense.h): the tick sums the ADC samples and trips; the main loop limits (isense_apply
  * in outputs_update), calibrates and retries */
 static isense_t is;
+/* (0.6.5, D1) the reset breadcrumbs (core/cli.h bcrumb_t): RAM no reset clears (Link_sections.ld .noinit). Plain
+ * stores, no read-modify-write: the tick writes pc, the main loop up_s, isr.S's fault handler pc / cause; read only at
+ * boot, before the tick starts */
+bcrumb_t bcrumb __attribute__((section(".noinit")));
+typedef char bcrumb_offsets[(offsetof(bcrumb_t, pc) == 8u && offsetof(bcrumb_t, cause) == 12u) ? 1 : -1];   /* isr.S */
 
 #define HINT_WORDS 135u                    /* 60 us at 36 MHz, 16 samples per word */
 #define TAIL_WORDS 576u                    /* 256 us up to the frame's last edge: 64 bits at 1.5 us + hiccups + tick */
@@ -165,6 +178,8 @@ static NOINLINE void poll_events(uint32_t ev, uint16_t c)
             cap_proto = (uint8_t)proto_active(&frx.ps);
             cap_frame = frames;
         }
+    } else if ((ev & (FT_CAP_START | FT_CAP_DATA)) == FT_CAP_START) {
+        ovr[0]++;                          /* a frame's capture dropped: the last one not decoded yet */
     }
     if (ev & (FT_FRAME_END | FT_BOOT_ARM)) {
         const gate_plan_t *g = &plan_buf[plan_idx];   /* (the main loop writes only the other one) */
@@ -184,6 +199,8 @@ static NOINLINE void poll_events(uint32_t ev, uint16_t c)
                                       edge_pos + TAIL_PAST, TAIL_WORDS)
                 : 0u;
             fe_ready = 1;
+        } else if ((ev & (FT_FRAME_END | FT_PARTIAL)) == FT_FRAME_END) {
+            ovr[1]++;                          /* the last frame end still pending: this one is not classified */
         }
         gate_rearm(g);                     /* the next frame starts >= 280 us after the last edge */
         plan.start_open = g->start_open;   /* (field by field: a struct copy is a memcpy call) */
@@ -200,6 +217,7 @@ static NOINLINE void poll_events(uint32_t ev, uint16_t c)
 void poll_isr(void);                       /* 20 kHz tick, entered via isr.S (HPE + mret) */
 void poll_isr(void)
 {
+    PERF_T(pt);                            /* (a PERF build: core/perf.h; first, before the acknowledge) */
     uint32_t c = DIN_EDGES(), own, ev;
 
     POLL_ACK();
@@ -217,11 +235,13 @@ void poll_isr(void)
     if (++poll_sub >= POLL_HZ / 1000u) {
         poll_sub = 0;
         ms_now++;
+        bcrumb.pc = TRAP_PC();             /* (0.6.5, D1) where the main loop is, once a ms */
         adc_hold = (uint8_t)hw_adc_ms();   /* the ADC's injected group: voltage channels / MCU temperature */
     }
     /* (fable-algo) an idle line: ftrack_tick would return no event and change nothing (no edges, the count at 0
      * without wraps, no copy due, armed) */
     if (!rx_ready || (c == 0u && ft.last_cnt == 0u && ft.wraps == 0u && ft.cap_state != 2u && ft.armed)) {
+        PERF_ADD(PERF_POLL, pt);
         return;
     }
     /* a provisional (stored) protocol captures an Ultra slot too: a different protocol locks at once (an update
@@ -238,7 +258,43 @@ void poll_isr(void)
     if (ev & ~FT_EDGE) {
         poll_events(ev, (uint16_t)c);
     }
+    PERF_ADD(PERF_POLL, pt);
 }
+
+#if PERF_BUILD
+/* `perf` (core/perf.h, a bench build): the counts, the clock and the tick count at the last `perf` */
+perf_t perf[PERF_N];
+static uint32_t perf_clock0, perf_tick0;
+#if PERF_BUILD == 2
+/* the SysTick clock: ticks x cycles per tick + SysTick's count; a tick due but not counted yet (its flag up, the count
+ * just past 0: the poll ISR before its acknowledge, or interrupts off) counts */
+uint32_t perf_systick(void)
+{
+    uint32_t k = tick_now, c = *(volatile uint32_t *)&SysTick->CNT;
+    if ((SysTick->SR & 1u) && c < 144000000u / POLL_HZ / 2u) {
+        k++;
+    }
+    return k * (144000000u / POLL_HZ) + c;
+}
+#endif
+
+void perf_take(perf_t *dst, uint32_t *clock, uint32_t *ticks)
+{
+    uint32_t i, now;
+    __disable_irq();
+    now = PERF_NOW();
+    *clock = now - perf_clock0;
+    *ticks = tick_now - perf_tick0;
+    perf_clock0 = now;
+    perf_tick0 = tick_now;
+    for (i = 0; i < PERF_N; i++) {
+        dst[i] = perf[i];
+        perf[i].n = perf[i].max = 0;
+        perf[i].sum = 0;
+    }
+    __enable_irq();
+}
+#endif
 
 /* The tick during a flash operation (0.6.4, hw.c flash_op: through VTF, from SRAM, the HCLK halved and SysTick's
  * compare with it): the time bases and the fast trip, as poll_isr (the same state: a high sample before the operation
@@ -315,6 +371,19 @@ static dark_t dk;                          /* dark hold of the pin's calibration
 static ocled_t ocl;
 static uint8_t led_now;
 static pwrev_t pw;
+/* (0.6.5, D2) the event log (core/cli.h evlog_t): main loop only */
+static evlog_t evl;
+typedef char evl_pw_bits[(EVL_OVERLOAD == EVL_LIMIT + 1 && EVL_SHORT == EVL_LIMIT + 2 && EVL_DIP == EVL_LIMIT + 3 &&
+                          ULTRA_PW_EV_LIMITED == 1u && ULTRA_PW_EV_OVERLOAD == 2u && ULTRA_PW_EV_SHORT == 4u &&
+                          ULTRA_PW_EV_SUPPLY_DIP == 8u) ? 1 : -1];
+
+static void ev_add(uint32_t type, uint32_t ma)
+{
+    evl_ev_t *e = &evl.e[evl.head = (uint8_t)((evl.head + 1u) & (EVLOG_N - 1u))];
+    e->t_s = up_s;
+    e->ma = (uint16_t)ma;
+    e->type = (uint8_t)type;
+}
 /* MCU temperature (core/mcutemp.h): mt.c10 / mt.valid / mt.vdda_mv for the console and the telemetry (STATUS) */
 static mcutemp_t mt;
 static uint32_t temp_ms;
@@ -355,6 +424,12 @@ static uint32_t flash_stall_end(uint32_t r);
 #define FLASH_LOW_LEVEL  9830u             /* 15 % of 65535 */
 #define FLASH_LOW_MS     500u              /* every output below it this long: an effect's peaks reset it */
 #define FLASH_BRIGHT_MS  3600000u          /* brighter: one write per hour */
+/* dip writes (Quindor 2026-10-14): a program into an erased entry of an A/B store, the check written last, never an
+ * erase, only with VDD above the PVD's 2.9 V (hw.c flash_op); a cut leaves the previous record (test r5dip). 0: no
+ * write at all during a dip (when the bench finds the hold-up shorter than a record's write: README, bench). */
+#ifndef FLASH_DIP_WRITES
+#define FLASH_DIP_WRITES 1
+#endif
 #define FM_LOW    1u                       /* flash_may: low (or boot): erases too */
 #define FM_PROG   2u                       /* a program into erased flash (a dip, the console's save) */
 #define FM_BRIGHT 3u                       /* ... brighter: with the hour's token */
@@ -377,7 +452,10 @@ static uint32_t flash_may(uint32_t need_erase, uint32_t prog)
     if (need_erase) {
         return 0;
     }
-    if (prog == FM_PROG || vdip.in_dip) {
+    if (vdip.in_dip) {
+        return FLASH_DIP_WRITES ? FM_PROG : 0u;          /* a dip: programs only (or nothing) */
+    }
+    if (prog == FM_PROG) {
         return FM_PROG;
     }
     return budget_avail(&flash_bright, ms_now) ? FM_BRIGHT : 0u;
@@ -418,7 +496,7 @@ static uint32_t life_admit(void)
     if (m == FM_BRIGHT && life_room() < 2u) {
         m = 0;                                           /* brighter: the last erased entry stays for a dip write */
     }
-    return life_pending() == 2u ? 0u : ENERGY_DUE_DIP | (m != 0u ? ENERGY_DUE_SAVE : 0u);
+    return life_pending() == 2u ? 0u : (FLASH_DIP_WRITES ? ENERGY_DUE_DIP : 0u) | (m != 0u ? ENERGY_DUE_SAVE : 0u);
 }
 
 /* every ms: the injected group's voltage pairs of that ms; the supply dips; the energy and the lifetime record */
@@ -429,6 +507,7 @@ static void vsense_service(void)
     vsense_add(&vs_sup, sum2[0], n);
     vsense_add(&vs_aux, sum2[1], n);
     vdip_ms(&vdip, ms_now, up_s, sum2[0], n, is.i_ms);
+    vdip_z(&vdip, &vs_sup, (uint32_t)is.i_ms);            /* the supply / cable impedance (0.6.5; i_ms >= 0) */
     for (i = 0; i < 5u; i++) {
         lit |= out_now[i];
         hi |= out_now[i] >= FLASH_LOW_LEVEL || (!ultra_on && sm.dur != 0u && sm.to[i] >= FLASH_LOW_LEVEL);
@@ -437,6 +516,9 @@ static void vsense_service(void)
         flash_hi_ms = ms_now;                            /* the flash: the outputs are not low (see above) */
     }
     energy_ms(&en, ms_now, vs_sup.mv, is.i_ms, (uint8_t)(lit != 0u));
+#if MON_EXTRA
+    energy_ch_ms(&en, is.applied, is.i_ms);              /* (0.6.5) energy per channel */
+#endif
     n = energy_due(&en, ms_now, vdip.count, life_admit());
     if (n != ENERGY_DUE_NONE) {
         flash_stall_begin(n == ENERGY_DUE_DIP ? FM_PROG : flash_may(0u, 0u));
@@ -455,6 +537,9 @@ static void temp_service(void)
         return;
     }
     temp_ms = ms_now;
+#if MON_EXTRA
+    hw_dma_check();                        /* (0.6.5, D6) the DMA's transfer errors, once a second */
+#endif
     if (temp_started && !hw_temp_read(&ts2, &vref2)) {
         ts2 = vref2 = 0;                   /* not done: counts as a bad sample */
     }
@@ -474,6 +559,11 @@ static void temp_service(void)
     if (temp_started) {
         hw_temp_start();
     }
+#if MON_EXTRA
+    if (stagger_is_adaptive(eff.stagger) && isense_model_ok(&is)) {
+        stagger_cap_second(&stat.cap, stat.ripple_ma, steps);   /* (0.6.5) C10's ripple load: the weights measured */
+    }
+#endif
 }
 
 /* Ultra CONFIG values (host-managed, RAM only) over the stored settings */
@@ -570,7 +660,7 @@ static void isense_service(void)
     __disable_irq();
     isense_take(&is, &sum, &n, &peak);
     __enable_irq();
-    ev = isense_ms(&is, sum, n, peak);
+    ev = PERF_CALL(PERF_ISENSE, isense_ms(&is, sum, n, peak));
     if (ev & ISENSE_EV_TRIP) {
         pwm_force_off(1);                  /* overload the limit could not hold */
     }
@@ -592,6 +682,7 @@ static void isense_service(void)
         limit_update();                    /* the connected load is known now */
         (void)isense_cal_get(&is, &c);
         code = health_test_done(&hl, &c);
+        ev_add(EVL_CAL, clim.connected_ma);   /* (0.6.5, D2) with the connected load it found */
         if (code != 0u) {
             ack_start(&ack, ACK_P_FAULT, code);   /* D9: the first abnormal channel, or 6 = current while dark */
         }
@@ -681,7 +772,7 @@ static void outputs_update(uint8_t ack_on)
                         : ss_factor(&ss, ms_now, (uint8_t)((v[0] | v[1] | v[2] | v[3] | v[4]) != 0u),
                                     (uint8_t)(sext.opts & STORE_OPT_SOFT_START));
     isense_apply(&is, v, v);               /* board limit (all channels scaled together), or the calibration pattern */
-    build_all(v, built_ok);
+    PERF_DO(PERF_TABLES, build_all(v, built_ok));
     built_ok = 1;
 }
 
@@ -835,6 +926,7 @@ static cfg_result_t cli_apply(uint8_t cmd, uint8_t arg)
  * progress is dropped. The time bases run on (0.6.4; 0.6.3 added an estimate). */
 static void flash_stall_begin(uint32_t may)
 {
+    ovr_on = 0;                                          /* (the render ms it delays: not an overrun) */
     if (may == FM_BRIGHT) {
         (void)budget_take(&flash_bright, ms_now, 1u);    /* the hour's write while brighter */
     }
@@ -855,7 +947,11 @@ static uint32_t flash_stall_end(uint32_t r)
     if (r == FLASH_OK) {
         stat.saves++;
     } else if (r != FLASH_NONE) {
-        uart_write("flash: error\r\n");                 /* (the record stays pending; its budget asks again) */
+        cli_say(&cli, Z(m_flash_err, "flash: error\r\n"));   /* (the record stays pending; its budget asks again) */
+#if MON_EXTRA
+        stat.fl_err = (uint8_t)r;                        /* (0.6.5, D5) */
+        stat.fl_errs++;
+#endif
     }
     return r == FLASH_OK;
 }
@@ -884,7 +980,8 @@ static void save_now(void)
         watchdog_kick();
     }
     may = flash_may(settings_pending() == 2u, FM_PROG);
-    uart_write(may == 0u ? "pending\r\n" : settings_write(may) ? "ok\r\n" : "failed\r\n");
+    cli_say(&cli, may == 0u ? Z(m_pending, "pending\r\n") : settings_write(may) ? Z(ok_crlf, "ok\r\n")
+                                                          : Z(m_failed, "failed\r\n"));
 }
 
 static void scene_save_now(uint32_t may)
@@ -1136,7 +1233,7 @@ static void upd_action(uint32_t a)
         uint32_t t0 = ms_now;
         HO->request = UPD_REQ_ENTER;       /* the bootloader checks the ANNOUNCE again and installs it */
         upd_ho_seal(HO);
-        uart_write("firmware update: into the bootloader\r\n");
+        cli_say(&cli, Z(m_update, "firmware update: into the bootloader\r\n"));
         while (ms_now - t0 < 10u) {        /* the host's lead-in is >= 500 ms: time to send the line */
             uart_kick();
             watchdog_kick();
@@ -1276,7 +1373,7 @@ static void process_capture(void)
         cap_ready = 0;
         return;
     }
-    n = ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)want, &ws_tm, bits);
+    n = PERF_CALL(PERF_DECODE, ws_decode_frame(din_copy, (uint32_t)cap_words * 16u, (uint16_t)want, &ws_tm, bits));
     if (n != (int)want) {
         BARRIER();
         cap_ready = 0;
@@ -1301,7 +1398,8 @@ static void process_frame_end(void)
     frx_end_t e;
     uint32_t end_tick = fe_tick, total = fe_bits;
     BARRIER();                             /* tail_copy: read after fe_ready */
-    if (tail_words != 0u && ws_decode_last(tail_copy, (uint32_t)tail_words * 16u, &ws_tm, tail) >= (int)ULTRA_HDR_BITS) {
+    if (tail_words != 0u &&
+        PERF_CALL(PERF_HEADER, ws_decode_last(tail_copy, (uint32_t)tail_words * 16u, &ws_tm, tail)) >= (int)ULTRA_HDR_BITS) {
         t8 = tail;                         /* the frame's last 64 bits: an Ultra header? */
     }
     frx_frame_end(&frx, fe_frame, total, t8, &e);
@@ -1374,8 +1472,8 @@ static void stagger_adapt(void)
             peak[i] = (uint16_t)(on > 65535u ? 65535u : on);
         }
     }
-    stagger_choose_max(out_now, peak, stagger_gap_q16(steps), st_o2, st_o3,
-                       (uint16_t)(stagger_is_spread(eff.stagger) ? STAGGER_SPREAD_OMAX : 0u), &r);
+    PERF_DO(PERF_STAGGER, stagger_choose_max(out_now, peak, stagger_gap_q16(steps), st_o2, st_o3,
+                       (uint16_t)(stagger_is_spread(eff.stagger) ? STAGGER_SPREAD_OMAX : 0u), &r));
     stat.ripple_ma = r.move ? r.ripple_best : r.ripple_now;
     if (r.move) {
         st_o2 = r.o2;
@@ -1422,6 +1520,7 @@ static void power_service(uint8_t ack_on)
 {
     pwrev_in_t in;
     uint8_t lv;
+    uint32_t k;
     in.limit_ma = clim.limit_ma;
     in.limit_src = pwrev_src(clim.src);
     in.ch_limiting = (uint8_t)(ultra_on && ul.ch_limited);
@@ -1433,6 +1532,12 @@ static void power_service(uint8_t ack_on)
     in.retry_ms = isense_retry_left_ms(&is);
     in.dips = vdip.count;
     pwrev_update(&pw, ms_now, &in);
+    for (k = 0, lv = pw.ev; lv != 0u; k++, lv >>= 1) {   /* (0.6.5, D2) the events it counted: limit, overload,
+                                                             short, dip */
+        if (lv & 1u) {
+            ev_add(EVL_LIMIT + k, in.trip_ma);   /* (the board current; a short's: its peak = pwrev's) */
+        }
+    }
     ocled_update(&ocl, ms_now, up_s, in.limiting, in.trip_cause);
     lv = ocled_led(&ocl, ms_now, ack.active, ack_on);
     if ((tj.active || tj.rst >= TJ_RST_ARMED) && ocl.show == OCLED_OFF && !ack.active) {
@@ -1451,11 +1556,11 @@ static void testjig_service(void)
 {
     uint8_t ev = tj_pad(&tj, ms_now, TESTJIG_PAD_LOW());
     if (ev & TJ_EV_MODE) {
-        uart_write(tj.active ? "test mode: on (TP9 grounded)\r\n" : "test mode: off\r\n");
+        cli_say(&cli, tj.active ? Z(m_tj_on, "test mode: on (TP9 grounded)\r\n") : Z(m_tj_off, "test mode: off\r\n"));
         outputs_dirty = 1;
     }
     if (ev & TJ_EV_RESET) {
-        uart_write("factory reset (TP9)\r\n");
+        cli_say(&cli, Z(m_tj_reset, "factory reset (TP9)\r\n"));
         (void)cli_apply(CMD_FACTORY_RESET, 0xA5u);     /* as the console's `defaults` */
     }
     if (!tj.active) {
@@ -1464,6 +1569,23 @@ static void testjig_service(void)
     outputs_dirty = 1;
     if (tj_measure(&tj, ms_now, is.i_ms, is.zero_ma)) {
         cli_test_report(&cli, tj.ma, TJ_PEAK_PCT, tj.cycles, vs_sup.valid ? vs_sup.mv : 0u);
+    }
+}
+
+/* CPU load (core/cpuload.h, 0.6.5 D3): the cycles asleep in the idle WFI since cpu_t0 (tick_now then), the busiest
+ * second since the last status (permille). Once a second: the second that ended into stat.cpu_pm. */
+#define POLL_CYC (144000000u / POLL_HZ)   /* HCLK cycles per poll tick: SysTick's period (hw.c) */
+static uint32_t cpu_idle, cpu_t0;
+static uint16_t cpu_peak;
+
+static void cpu_second(void)
+{
+    uint32_t t = tick_now, pm = cpu_permille(cpu_idle, t - cpu_t0, POLL_CYC);
+    cpu_idle = 0;
+    cpu_t0 = t;
+    stat.cpu_pm = (uint16_t)pm;
+    if (pm > cpu_peak) {
+        cpu_peak = (uint16_t)pm;
     }
 }
 
@@ -1521,21 +1643,34 @@ static inline __attribute__((always_inline)) void status_snapshot(void)
     stat.oc_tripped = (uint8_t)(ocl.trip_cause != 0u);
     stat.oc_since_s = ocl.since_s;
     stat.oc_hold_ms = ocled_hold_left(&ocl, ms_now);
+#if MON_EXTRA
+    stat.fl_pend = (uint8_t)(settings_dirty | (cal_save_pend != 0u) << 1 |   /* (0.6.5, D5) */
+                             !scene_equal(&scene_want, &scene_stored) << 2 | (fx_pend == 2u || fx_clear_pend) << 4);
+#endif
 
 }
 
 static void status_begin(void)
 {
+    stat.cpu_peak = cpu_peak;              /* the busiest second since the last status; again from the last one */
+    cpu_peak = stat.cpu_pm;
     vsense_report(&vs_sup, &stat.vs_supply_min_mv, &stat.vs_supply_max_mv);
 }
 
 int main(void)
 {
-    uint32_t last_ms = 0, fps_ms = ms_now, fps_frames = 0, watch_t = 0, may;
+    uint32_t last_ms = 0, fps_ms = ms_now, fps_frames = 0, watch_t = 0, may, life_found;
     uint8_t ack_on = 0, was_active = 0;
-    int ch;
+    int ch, cal_ok;
 
     stack_paint();                         /* the high-water mark in `status` */
+    stat.bc = bcrumb;                      /* (0.6.5, D1) the last run's breadcrumbs (before the tick runs; cli.c shows
+                                              them unless the reset flags say power-on), then this run's */
+    bcrumb.magic = BC_MAGIC;
+    bcrumb.up_s = bcrumb.cause = 0;    /* (pc: the tick writes it every ms) */
+    /* (0.6.5) every record read in one window, before hw_init (nothing runs on the clocks yet): HCLK / 2 for the upper
+     * CodeFlash (hw.c hw_records_window); the values stay in RAM from here on */
+    hw_records_window(1);
     if (settings_load(&set, &sext) != 0) {
         settings_default(&set);            /* (the extension is cleared too) */
     } else {
@@ -1547,7 +1682,15 @@ int main(void)
     scene_want = scene_stored;
     scene_boot(&srun, &scene_stored);
     ultra_init(&ul, hw_uid_hash());        /* (a seed per board: the power-on effects' randomness) */
-    fx_mask = ultra_fx_load(&ul, (const uint8_t *)SCENE_FX_ADDR, fx_crc);   /* the power-on effects: from here on */
+    fx_mask = scene_fx_load(&ul, fx_crc);  /* the power-on effects: from here on */
+    cal_ok = cal_load((isense_cal_t *)core_scratch, &cal_cnt);   /* (into the scratch until isense_setup: nothing
+                                                                    else uses it before) */
+    life_found = life_load(&en.lt);        /* (energy_init takes it from en.lt below) */
+    hw_records_window(0);
+#if MON_EXTRA
+    stat.fl_rej = flash_rejected() | (uint32_t)ultra_fx_rejected << 24;   /* (0.6.5, D5) the records the loaders
+                                              rejected, the effect heads the store lists that did not load */
+#endif
     ultra_scene_fx_start(&ul, fx_mask, tick_now);
     for (ch = 0; ch < (int)ULTRA_LIGHTS; ch++) {
         if (fx_mask & (1u << ch)) {
@@ -1559,14 +1702,12 @@ int main(void)
     budget_init(&fx_budget, ms_now, FX_BUDGET_CAP, FX_REFILL_MS);   /* (the time bases: any start value, any wrap) */
     budget_init(&set_budget, ms_now, STORE_BUDGET_CAP, STORE_REFILL_MS);
     budget_init(&cal_budget, ms_now, CAL_BUDGET_CAP, CAL_REFILL_MS);
-    dark_init(&dk);
-    ocled_init(&ocl);
+    dark_init(&dk);                        /* (ocl, sm: zero in .bss at boot, as their inits leave them) */
     tj_init(&tj, TJ_CYCLE_MS);
     pwrev_init(&pw, ms_now);
     scene_budget_init(&sbudget, ms_now);
     config_rx_init(&rx);
     frx_init(&frx, (proto_mode_t)set.protocol, (proto_t)set.last_proto);
-    smooth_init(&sm);
     hw_init();
     mcutemp_init(&mt);
     health_init(&hl);
@@ -1575,12 +1716,9 @@ int main(void)
     vsense_init(&vs_aux, VSENSE_AUX_RT, VSENSE_AUX_RB, VSENSE_VREF_MV);
     hw_adc_init();                         /* PA7 continuously, the injected group from the poll tick */
     isense_setup();
-    {
-        isense_cal_t c;
-        if (cal_load(&c, &cal_cnt) == 0) {
-            isense_cal_set(&is, &c);       /* the last test with its curves wins */
-            cal_present = 1;
-        }
+    if (cal_ok == 0) {
+        isense_cal_set(&is, (const isense_cal_t *)core_scratch);   /* the last test with its curves wins */
+        cal_present = 1;
     }
     stat.reset_flags = hw_reset_flags();
     upd_boot();                            /* UPD_APP: the reset flags from the hand-over, the bootloader's result */
@@ -1590,9 +1728,10 @@ int main(void)
     fw_version = fwver_parse(FW_VERSION);
 #endif
     fwver_format(fw_version, fw_version_text);
-    energy_init(&en, life_load(&en.lt), ms_now, fw_version, stat.reset_flags & RCC_IWDGRSTF);
+    energy_init(&en, life_found, ms_now, fw_version, stat.reset_flags & RCC_IWDGRSTF);
     stat.version = fw_version != 0u ? fw_version_text : FW_VERSION " (development build)";
     stat.bl_version = upd.info.bl_version;
+    stat.uid = HW_UID;                     /* (the test jig's line) */
     stat.hw_id = upd.info.hw_id;
     stat.hw_rev = upd.info.hw_rev;
     stat.app_state = upd.info.bl_version == 0u ? 0u : upd.info.confirmed ? 2u : 1u;
@@ -1615,9 +1754,14 @@ int main(void)
     cli.st = &stat;
     stat.dip = &vdip;
     stat.pw = &pw;
+    stat.ev = &evl;                        /* (0.6.5, D2) */
     stat.hl = &hl;
     stat.dip_vs = &vs_sup;
     stat.en = &en;
+    stat.ovr = ovr;
+#if MON_EXTRA
+    stat.hwd = hw_diag;                    /* (0.6.5, D6) */
+#endif
     ultra_on = (uint8_t)(proto_active(&frx.ps) == PROTO_ULTRA);
     apply_settings();
     {
@@ -1634,7 +1778,7 @@ int main(void)
     flash_boot = 0;
     budget_init(&flash_bright, ms_now, 1u, FLASH_BRIGHT_MS);
     cli_banner(&cli);
-    uart_write("type help\r\n");
+    cli_say(&cli, Z(m_type_help, "type help\r\n"));
 
     for (;;) {
         watchdog_kick();
@@ -1650,12 +1794,15 @@ int main(void)
         if (ultra_on != (uint8_t)(proto_active(&frx.ps) == PROTO_ULTRA)) {
             protocol_changed(ultra_on ? PROTO_ULTRA : PROTO_NONE, proto_active(&frx.ps));   /* console mode change */
         }
-        ch = uart_getc();
+        ch = cli.st_part ? -1 : uart_getc();   /* (0.6.5) a `status` in progress: input waits in the RX ring */
         if (ch == -2) {
             cli.len = 0;                   /* a flash operation dropped received bytes: the line being typed goes */
             ch = uart_getc();
         }
-        if (ch >= 0 || (cli.watch_ms && ms_now - watch_t >= cli.watch_ms)) {
+        if (cli.st_part && uart_room() >= CLI_PART_ROOM) {
+            (void)cli_poll(&cli);          /* the next part of a `status`: the UART takes it without a wait */
+        }
+        if (ch >= 0 || (!cli.st_part && cli.watch_ms && ms_now - watch_t >= cli.watch_ms)) {
             status_snapshot();             /* live values; extrema are consumed only by status_begin */
             if (ch < 0) {
                 watch_t = ms_now;
@@ -1671,7 +1818,12 @@ int main(void)
         }
         uart_kick();
         if (ms_now != last_ms) {
-            last_ms = ms_now;
+            uint32_t m = ms_now;
+            if (ovr_on) {
+                ovr[2] += m - last_ms - 1u;    /* the ms late (not after a flash operation, nor the first) */
+            }
+            ovr_on = 1;
+            last_ms = m;
             if (ack_tick(&ack, &ack_on) || was_active) {
                 outputs_dirty = 1;
             }
@@ -1692,7 +1844,7 @@ int main(void)
             stagger_adapt();
             ultra_clock_tend(&ul, tick_now);   /* the engine's time: continuous without headers, across the wrap */
             if (ultra_on || fx_ch) {       /* (the power-on effect: also before a protocol is there) */
-                if (ultra_render(&ul, tick_now, uout)) {
+                if (PERF_CALL(PERF_RENDER, ultra_render(&ul, tick_now, uout))) {
                     outputs_dirty = 1;     /* 1 kHz updates: every PWM period after this uses the new value */
                 }
                 if (fx_ch) {
@@ -1708,7 +1860,12 @@ int main(void)
                 fps_frames = frames;
                 fps_ms += 1000u;           /* (whole seconds: the uptime) */
                 up_s++;
+                bcrumb.up_s = up_s;        /* (0.6.5, D1) */
                 energy_second(&en, ms_now, up_s, (uint32_t)pw.short_trips << 16 | pw.ovl_trips, is.i_avg, temp_peak);
+#if MON_EXTRA
+                energy_ch_second(&en, &is, vs_sup.mv);
+#endif
+                cpu_second();
             }
             flash_erase_ahead();           /* while low: the stores' next pages */
             /* save 2 s after the last change, not while a pattern is blinking (except its final dark pause), with a
@@ -1753,9 +1910,12 @@ int main(void)
          * ADC and the UART run on (RM 2.3.2; AHBPCENR SRAMEN = 1 from reset), and a debugger keeps it awake. Not during
          * a flash operation (flash_op runs inside this pass), so its SRAM tick is unaffected. ~4 mA less at 3.3 V
          * (datasheet tables 4-6-1 / 4-7-1: 11.4 -> 7.1 mA at 144 MHz), wake-up 1.4 us. BENCH: the current, the
-         * debugger, the slew interrupt's budget at 100 kHz. */
+         * debugger, the slew interrupt's budget at 100 kHz. The CPU load (0.6.5): stamps before and after it. */
         if (!cap_ready && !fe_ready && ms_now == last_ms) {
+            uint32_t k = tick_now, c0 = POLL_CNT(), c1;
             CPU_SLEEP();
+            c1 = POLL_CNT();
+            cpu_idle += cpu_slept(k != tick_now, c0, c1, POLL_CYC);
         }
     }
 }

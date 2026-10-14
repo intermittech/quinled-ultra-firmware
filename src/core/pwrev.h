@@ -48,6 +48,8 @@ typedef struct {
     uint16_t event_ma;                /* board current when the last limit event started, mA */
     uint16_t trip_ma;                 /* current at the last trip, mA */
     uint8_t  last_cause;              /* ULTRA_PW_CAUSE_* of the last trip */
+    uint8_t  ev;                      /* (0.6.5, D2) the events the last update counted (ULTRA_PW_EV_*: a limit event,
+                                         a trip, a new supply dip from in.dips): main.c's event log */
     uint32_t trip_ms;                 /* ms of the last trip (its peak can land in the next ms' samples) */
     uint32_t sec_ms;                  /* the ages count whole seconds from here */
 } pwrev_t;

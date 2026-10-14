@@ -38,7 +38,13 @@ static uint32_t rnd(void)
 
 /* =============================================================================================== flash model */
 #define FL_BASE 0x08000000u
+#if UPPER_RECORDS
+#define FL_SIZE 0x12000u                       /* (0.6.5) the zero-wait 64 KB + the record sectors above it */
+#define FL_REC  0x10000u                       /* the record pages: must survive every update */
+#else
 #define FL_SIZE 0x10000u
+#define FL_REC  0xF700u                        /* 0.6.4's layout: scene log + settings (the calibration: test_bl_r4.c) */
+#endif
 static uint8_t fl[FL_SIZE];
 static uint8_t fl_prog[FL_SIZE / 2u];     /* half-word programmed since its erase (or torn) */
 static uint32_t fl_ops, fl_cut_at;        /* power cut when fl_ops reaches fl_cut_at (0 = never) */
@@ -209,7 +215,7 @@ static void factory(const image_t *im)
     fl[UPD_APP_DESC - FL_BASE + 67] = (uint8_t)(UPD_ST_CONFIRMED >> 8);
     fl_prog[(UPD_APP_DESC - FL_BASE) / 2u + 32u] = 1;
     fl_prog[(UPD_APP_DESC - FL_BASE) / 2u + 33u] = 1;
-    memset(&fl[0xF700], 0x77, 0x900);                 /* scene log + settings: must survive */
+    memset(&fl[FL_REC], 0x77, FL_SIZE - FL_REC);      /* the record pages: must survive */
 }
 
 static int flash_has(const image_t *im)
@@ -226,7 +232,7 @@ static int keep_areas_intact(void)
             return 0;
         }
     }
-    for (i = 0xF700; i < FL_SIZE; i++) {
+    for (i = FL_REC; i < FL_SIZE; i++) {
         if (fl[i] != 0x77) {
             return 0;
         }

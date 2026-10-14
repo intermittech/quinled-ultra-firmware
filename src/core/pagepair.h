@@ -34,6 +34,8 @@ typedef struct {                        /* where the next record goes */
     uint8_t next;                       /* page << 4 | entry */
     uint8_t erase;                      /* its page must be erased first */
     uint8_t ahead;                      /* the other page reads erased (erased ahead) */
+    uint8_t bad;                        /* (0.6.5, D5) pp_find: entries neither erased nor valid (a record cut by a
+                                           power loss, a corrupted one, one of another layout) */
 } pp_pos_t;
 #define PP_NONE 0xFFu
 #define PP_PAGE(at)  ((uint32_t)(at) >> 4)   /* a position's page (0 / 1) */
