@@ -16,12 +16,13 @@ typedef struct { volatile uint32_t INDR; } soak_gpio_t;
 extern soak_tim_t soak_tim4;
 extern soak_systick_t soak_systick;
 extern soak_adc_t soak_adc1;
-extern soak_gpio_t soak_gpiob;
+extern soak_gpio_t soak_gpiob, soak_gpioa;
 #define TIM4    (&soak_tim4)
 #define SysTick (&soak_systick)
 #define ADC1    (&soak_adc1)
 #define RAMCODE                                  /* (hal/hw.h: SRAM code on the chip) */
 #define GPIOB   (&soak_gpiob)
+#define GPIOA   (&soak_gpioa)                    /* (0.6.7: PA3, the jig's TP6) */
 #define HW_UID  soak_uid                         /* (hal/hw.h: the chip's unique id) */
 extern const uint32_t soak_uid[3];
 

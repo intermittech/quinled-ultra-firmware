@@ -53,6 +53,7 @@ soak_tim_t soak_tim4;
 soak_systick_t soak_systick;
 soak_adc_t soak_adc1;
 soak_gpio_t soak_gpiob = { 0xFFFFFFFFu };
+soak_gpio_t soak_gpioa = { 0xFFFFFFFFu };                /* (0.6.7: TP6 high) */
 void soak_sleep(void) {}                                 /* (soak/ch32v20x.h CPU_SLEEP: the WFI) */
 
 /* the PWM tables exactly as hal/hw.c sizes them (ASan sees a table built past them) */
@@ -567,6 +568,7 @@ void uart_write(const char *s)
 }
 void uart_kick(void) {}
 uint32_t uart_room(void) { return 1024u; }
+uint32_t uart_rx_pos(void) { return con_in_w; }       /* (0.6.7: the jig's TP6 check) */
 
 /* ---- flash (the real addresses), writes / erases per page. 0.6.4: the stores are core/flashrec.c's themselves;
  * this is hal/hw.c's flash_op: the main loop waits (an erase 16 ms, a half-word 100 us: test durations), the tick runs
@@ -612,6 +614,7 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     return FLASH_OK;
 }
 uint32_t uart_busy(void) { return 0; }
+uint32_t hw_vdd_low(void) { return 0; }                   /* (r6) the PVD: VDD fine here */
 void hw_flash_trip(void) { pwm_force_off(1); }
 static uint32_t sim_window;                              /* (0.6.5) the boot window for the record reads: opened */
 void hw_records_window(uint32_t open) { sim_window += open; }
@@ -1175,6 +1178,7 @@ int main(int argc, char **argv)
     }
     if (!sim_crash && !sim_reset) {                      /* the console still answers */
         uint32_t t;
+#if CONSOLE_FULL
         con_in_r = con_in_w = 0;
         con_out_n = 0;
         memcpy(con_in, "\rstatus\r", 8);                 /* (the first key ends a `watch` the random input may have started) */
@@ -1184,6 +1188,17 @@ int main(int argc, char **argv)
             pass();
         }
         CHECK(strstr(con_out, "uptime=") != 0, "the console's status after the run");
+#else
+        sim_pad_low = 0;                                 /* (the random pad may have left the test mode on: the */
+        con_out_n = 0;                                   /* stream pauses there) (0.6.7) the release console still */
+        con_out[0] = 0;                                  /* sends: within 1.25 s a live line or a status part (or the */
+        for (t = 0; t < 25000u; t++) {                   /* test mode's end) */
+            sim_tick();
+            pass();
+        }
+        CHECK(strstr(con_out, "  k ") != 0 || strstr(con_out, "uptime=") != 0 || strstr(con_out, "jig cycle=") != 0 ||
+              strstr(con_out, "test mode") != 0, "the release console still sends after the run (%u bytes)", con_out_n);
+#endif
     }
     printf("seed %llx: %u s, %u passes, chain %u pos %u, proto %d, frames %u decoded %u headers %u, flash writes s%u c%u "
            "k%u e%u f%u%s%s: %s (%d failures)\n", g_seed, (uint32_t)(sim_ns / 1000000000u), sim_passes, chain_n, chain_pos,

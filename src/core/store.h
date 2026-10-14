@@ -27,8 +27,17 @@
 typedef struct {
     uint8_t ilimit50;          /* board current limit, x 50 mA (0 / 0xFF = the board rating) */
     uint8_t opts;              /* STORE_OPT_*, 0xFF = the defaults (on) */
-    uint8_t reserved[5];       /* 0xFF */
+    uint8_t reserved[5];       /* 0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS) */
 } store_ext_t;
+/* (0.6.7, review round 6 F10) a factory reset's clears not stored yet: a bit 0 = that store is void, its records from
+ * before the reset don't load at power-up (main.c records_load) and its clear is due again; the bit goes back to 1
+ * with the store's next write. 0xFF (every record before 0.6.7): none. So a power cut at any moment after a reset
+ * never brings back what it cleared, though the clears wait for a low moment (an erase) */
+#define STORE_VOIDS(e)    ((e)->reserved[1])
+#define STORE_VOID_SCENE  0x01u
+#define STORE_VOID_CAL    0x02u
+#define STORE_VOID_FX     0x04u
+#define STORE_VOID_HIST   0x08u
 
 typedef struct {
     uint32_t    magic;

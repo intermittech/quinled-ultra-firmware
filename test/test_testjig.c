@@ -76,74 +76,57 @@ static void test_testjig(void)
     }
     CHECK(!t.active && ch == 2, "a short bounce on release: stays off");
 
-    /* the pattern: one channel at a time, R -> G -> B -> W1 -> W2, up / hold / down, at 1, 1.5 and 2 s */
+    /* (0.6.7) the pads: TP6 low counts only while no byte arrives; TP9 always */
+    {
+        uint32_t rx = 1234, n6 = 0, n9 = 0, ntr = 0, nbr = 0, nun = 0;
+        tj_init(&t, TJ_CYCLE_MS);
+        for (ms = 0; ms < 100u; ms++) {
+            nun += tj_pads(&t, 0, rx, 0);                /* unconnected: the pull-up */
+        }
+        for (ms = 0; ms < 1000u; ms++) {                 /* console traffic: a 0x00 stream reads low, bytes arriving */
+            rx += 11u;
+            ntr += tj_pads(&t, 1, rx, 0);
+        }
+        rx++;                                            /* a break: its one 0x00, then the line held low */
+        nbr += tj_pads(&t, 1, rx, 0);
+        for (ms = 0; ms < 100u; ms++) {
+            n6 += tj_pads(&t, 1, rx, 0);
+        }
+        for (ms = 0; ms < 100u; ms++) {                  /* TP9 grounded, whatever the console does */
+            rx += (ms & 1u);
+            n9 += tj_pads(&t, 0, rx, 1);
+        }
+        CHECK(!nun && !ntr && !nbr && n6 == 100u && n9 == 100u, "pads: unconnected %u, traffic %u, the break's byte "
+              "%u, a held break / grounded TP6 %u of 100, TP9 %u of 100", nun, ntr, nbr, n6, n9);
+    }
+
+    /* the pattern (0.6.7): all off for TJ_GAP_MS, then one channel at a time at the peak, R -> G -> B -> W1 -> W2, each
+     * for its slot, at 1, 1.5 and 2 s */
     {
         static const uint32_t cyc_ms[3] = { 1000u, 1500u, 2000u };
         for (cyc = 0; cyc < 3u; cyc++) {
-            uint32_t slot = cyc_ms[cyc] / 5u, ramp = (slot - TJ_HOLD_MS) / 2u;
-            uint32_t full_ms[5] = { 0 }, lit_first[5], lit_last[5], peak_at[5];
-            uint16_t prev[5] = { 0 };
-            uint8_t up_bad = 0, two = 0;
-            for (ch = 0; ch < 5u; ch++) {
-                lit_first[ch] = ~0u;
-                lit_last[ch] = peak_at[ch] = 0;
-            }
+            uint32_t slot = (cyc_ms[cyc] - TJ_GAP_MS) / 5u;
             tj_init(&t, cyc_ms[cyc]);
             for (ms = 0; ms < 100u; ms++) {
                 tj_pad(&t, ms, 1);
             }
+            bad = 0;
             for (ms = t.t0; ms < t.t0 + 3u * cyc_ms[cyc]; ms++) {
-                uint32_t ph = (ms - t.t0) % cyc_ms[cyc], n = 0;
+                uint32_t ph = (ms - t.t0) % cyc_ms[cyc], want = ph < TJ_GAP_MS ? 5u : (ph - TJ_GAP_MS) / slot;
                 tj_outputs(&t, ms, v);
                 for (ch = 0; ch < 5u; ch++) {
-                    if (v[ch] != 0u) {
-                        n++;
-                        if (ms < t.t0 + cyc_ms[cyc]) {
-                            if (lit_first[ch] == ~0u) lit_first[ch] = ph;
-                            lit_last[ch] = ph;
-                        }
-                    }
-                    if (v[ch] == TJ_PEAK && ms < t.t0 + cyc_ms[cyc]) {
-                        if (full_ms[ch] == 0u) peak_at[ch] = ph;
-                        full_ms[ch]++;
-                    }
-                    /* rising before the hold, falling after it */
-                    if (ph >= ch * slot && ph < ch * slot + ramp && ms > t.t0 && v[ch] < prev[ch]) up_bad = 1;
-                    if (ph > ch * slot + ramp + TJ_HOLD_MS && ph < (ch + 1u) * slot && v[ch] > prev[ch]) up_bad = 1;
-                    prev[ch] = v[ch];
+                    bad += v[ch] != (ch == want ? TJ_PEAK : 0u);
                 }
-                two |= (uint8_t)(n > 1u);
             }
-            bad = 0;
-            for (ch = 0; ch < 5u; ch++) {
-                bad += full_ms[ch] != TJ_HOLD_MS || peak_at[ch] != ch * slot + ramp ||
-                       lit_first[ch] < ch * slot + 1u || lit_first[ch] > ch * slot + 2u || lit_last[ch] + 1u < (ch + 1u) * slot - 2u;
-            }
-            CHECK(!bad && !two && !up_bad, "%u ms cycle: each channel alone, in order, %u ms up, %u ms at %u %%, "
-                  "down (bad %u, overlap %u, not monotonic %u)", cyc_ms[cyc], ramp, TJ_HOLD_MS, TJ_PEAK_PCT, bad, two,
-                  up_bad);
+            CHECK(!bad && slot == (cyc_ms[cyc] - 100u) / 5u, "%u ms cycle: %u ms dark, then each channel alone, in "
+                  "order, %u ms at %u %% (bad %u)", cyc_ms[cyc], TJ_GAP_MS, slot, TJ_PEAK_PCT, bad);
         }
-        /* the ramp's shape: square law, half way in time = a quarter */
-        tj_init(&t, 1500u);
-        for (ms = 0; ms < 50u; ms++) {
-            tj_pad(&t, ms, 1);
-        }
-        tj_outputs(&t, t.t0 + t.ramp_ms / 2u, v);
-        CHECK(v[0] > TJ_PEAK * 48u / 100u && v[0] < TJ_PEAK * 52u / 100u, "half way up: %u (half the peak, the "
-              "breathe curve)", v[0]);
-        bad = 0;
-        for (ms = t.t0; ms < t.t0 + 1500u; ms++) {
-            tj_outputs(&t, ms, v);
-            for (ch = 0; ch < 5u; ch++) {
-                bad += v[ch] > TJ_PEAK;
-            }
-        }
-        CHECK(!bad && TJ_PEAK == 21627u, "never above the peak: %u %% = %u", TJ_PEAK_PCT, (unsigned)TJ_PEAK);
         tj_init(&t, 500u);
+        CHECK(TJ_PEAK == 21627u + (t.cycle_ms - 1000u), "the level: %u %% = %u", TJ_PEAK_PCT, (unsigned)TJ_PEAK);
         CHECK(t.cycle_ms == 1000u, "cycle clamped to 1..2 s");
     }
 
-    /* the current report: the board current over the end of each hold, minus the zero */
+    /* the current report: the board current over each slot's last TJ_MEAS_MS, minus the zero */
     {
         static const int32_t want[5] = { 412, 398, 1205, 2410, 4990 };
         uint32_t reports = 0;
@@ -182,24 +165,48 @@ static void test_testjig(void)
         CHECK(reports >= 2 && t.ma[4] == 1000, "every 7th ms only: reports %u", reports);
     }
 
-    /* D9: on, off for the first 100 ms of each cycle */
-    tj_init(&t, 1500u);
-    for (ms = 0; ms < 50u; ms++) {
-        tj_pad(&t, ms, 1);
+    /* D9 (0.6.7): on, off in each cycle's gap until the first verdict; then PASS steady, FAIL 5 Hz; the verdict:
+     * each channel within TJ_PASS_MIN_MA .. TJ_PASS_MAX_MA */
+    {
+        static const int32_t ok[5] = { 136, 131, 398, 795, 50 }, bad1[5] = { 136, 131, 398, 795, 49 };
+        static const int32_t hi[5] = { 3000, 3001, 1000, 1000, 1000 };
+        const int32_t *cur = ok;
+        uint32_t k;
+        tj_init(&t, 1500u);
+        for (ms = 0; ms < 50u; ms++) {
+            tj_pad(&t, ms, 1);
+        }
+        bad = 0;
+        for (ms = t.t0; ms < t.t0 + 1000u; ms++) {
+            bad += tj_led(&t, ms) != ((ms - t.t0) % 1500u >= TJ_GAP_MS);
+        }
+        CHECK(!bad && !tj_led(&t, t.t0) && tj_led(&t, t.t0 + 100u), "D9 before the first verdict");
+        for (k = 0; k < 3u; k++) {                       /* a cycle of each: PASS, FAIL (W2 49 mA), FAIL (G 3,001 mA) */
+            cur = k == 0u ? ok : k == 1u ? bad1 : hi;
+            for (ms = t.t0 + 1u + k * 1500u; ms <= t.t0 + (k + 1u) * 1500u; ms++) {
+                int32_t i_ma = 0;
+                tj_outputs(&t, ms - 1u, v);
+                for (ch = 0; ch < 5u; ch++) {
+                    i_ma += v[ch] ? cur[ch] : 0;
+                }
+                (void)tj_measure(&t, ms, i_ma, 0);
+            }
+            bad = 0;
+            for (ms = t.t0 + (k + 1u) * 1500u + 1u; ms < t.t0 + (k + 1u) * 1500u + 400u; ms++) {
+                bad += tj_led(&t, ms) != (k == 0u ? 1u : (ms / 100u) & 1u);
+            }
+            CHECK(t.cycles == k + 1u && t.fail == (k == 0u ? 0u : k == 1u ? 16u : 2u) && !bad,
+                  "cycle %u: fail=%u, D9 %s", k + 1u, t.fail, k == 0u ? "steady" : "5 Hz");
+        }
     }
-    bad = 0;
-    for (ms = t.t0; ms < t.t0 + 3000u; ms++) {
-        bad += tj_led(&t, ms) != ((ms - t.t0) % 1500u >= TJ_LED_GAP_MS);
-    }
-    CHECK(!bad && !tj_led(&t, t.t0) && tj_led(&t, t.t0 + 100u), "D9 in test mode");
 
-    /* the console lines: the report, then (0.6.5 D10) the jig PC's line with pass / fail, the id and the version */
+    /* the console (0.6.7): the jig PC's line only, its format unchanged (0.6.5 D10): pass / fail, the currents, the
+     * supply, the chip's id and the version */
     {
         cli_t cc;
         cli_status_t cst;
         static const uint32_t uid[3] = { 0x01234567u, 0x89ABCDEFu, 0xFEDCBA98u };
         static const int32_t ma[5] = { 136, 131, 398, 795, -3 };
-        static const int32_t lim[6] = { 3000, 50, 49, 3001, 1000, 0 };
         memset(&cc, 0, sizeof cc);
         memset(&cst, 0, sizeof cst);
         cst.uid = uid;
@@ -207,22 +214,15 @@ static void test_testjig(void)
         cc.st = &cst;
         cc.write = cap_write;
         cli_out[0] = 0;
-        cli_test_report(&cc, ma, 33, 7, 24012);
-        CHECK(strcmp(cli_out, "test @33%: R 0.14 A, G 0.13 A, B 0.40 A, W1 0.80 A, W2 0.00 A; "
-                              "est. @100%: R 0.41, G 0.40, B 1.21, W1 2.41, W2 0.00 A; supply 24.01 V (cycle 7)\r\n"
-                              "jig cycle=7 FAIL fail=16 a=0.14/0.13/0.40/0.80/0.00 supply=24.01 "
-                              "uid=19088743,2309737967,4275878552 fw=0.6.5-beta.1\r\n") == 0, "report lines: %s", cli_out);
+        cli_test_report(&cc, ma, 16, 7, 24012);
+        CHECK(strcmp(cli_out, "jig cycle=7 FAIL fail=16 a=0.14/0.13/0.40/0.80/0.00 supply=24.01 "
+                              "uid=19088743,2309737967,4275878552 fw=0.6.5-beta.1\r\n") == 0,
+              "the jig line: %s", cli_out);
         cli_out[0] = 0;
-        cli_test_report(&cc, ma, 33, 1, 0);
-        CHECK(strstr(cli_out, "supply n/a (cycle 1)\r\njig cycle=1 FAIL fail=16 ") && strstr(cli_out, " supply=0.00 "),
-              "report lines without the supply: %s", cli_out);
-        cli_out[0] = 0;
-        cli_test_report(&cc, lim, 33, 2, 24000);
-        CHECK(strstr(cli_out, "jig cycle=2 FAIL fail=12 a=3.00/0.05/0.05/3.00/1.00 ") != NULL,
-              "the limits pass, 49 / 3001 fail (bits 4 / 8): %s", cli_out);
-        cli_out[0] = 0;
-        cli_test_report(&cc, lim + 1, 33, 3, 24000);
-        CHECK(strstr(cli_out, "jig cycle=3 FAIL fail=22 ") != NULL, "fail bits per channel: %s", cli_out);
+        cli_test_report(&cc, ma, 0, 1, 0);
+        CHECK(strcmp(cli_out, "jig cycle=1 PASS fail=0 a=0.14/0.13/0.40/0.80/0.00 supply=0.00 "
+                              "uid=19088743,2309737967,4275878552 fw=0.6.5-beta.1\r\n") == 0,
+              "the jig line without the supply: %s", cli_out);
     }
 }
 

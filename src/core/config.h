@@ -99,6 +99,18 @@ uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);    /* = ultra_crc16 (CRC
 /* (0.6.5) the monitoring that fits only in the upper layout's room: D5 the flash state line, M5 C10's ripple load, M3
  * the energy per channel, D6 the ADC / DMA counters. 0.6.4's layout (UPPER_RECORDS=0, the bench fallback) builds
  * without them: its app slot has no room (README "New in 0.6.5"). Their console texts are ZU(...) (core/cz.h). */
+/* (0.6.7, Quindor) CONSOLE_FULL 0, the release: the console only sends (TP5): the banner at boot, a line of live
+ * values every second, the full status once the live values are valid (~3 s) and every minute, the firmware's
+ * messages, the test jig's lines; it takes no input (USART2 RX and its DMA off: TP6 is the test jig's pad alone).
+ * Every setting has its path on the data line (config frames, Ultra CONFIG / IDENTIFY). 1: the bench's console with
+ * its commands (tools/build_target.sh CONSOLE_FULL=1; a PERF build needs it: `perf`) */
+#ifndef CONSOLE_FULL
+#define CONSOLE_FULL 0
+#endif
+#if PERF_BUILD && !CONSOLE_FULL
+#error "a PERF build needs CONSOLE_FULL=1 (its `perf` command)"
+#endif
+
 #ifndef MON_EXTRA
 #define MON_EXTRA UPPER_RECORDS
 #endif

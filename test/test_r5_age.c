@@ -20,6 +20,9 @@ static void sc_r5age(void)
         run_ms(1);
     }
     t0 = stat.uptime_s;                                  /* the command's snapshot */
+    tx_q = 1024u;                                        /* the UART full (other output): the next parts wait ~44 ms,
+                                                            past the second, whatever the parts' lengths (0.6.7: the
+                                                            banner 92 bytes shorter let part 6 out before it) */
     while (up_s == t0) {
         run_ms(1);
     }

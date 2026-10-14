@@ -30,9 +30,22 @@ trap_entry:
     call    slew2_isr
     mret
 3:  addi    t0, t0, -1                      /* TIM3 (45) update: phase slew */
+#if BOARD_RETURN
+    bnez    t0, 4f
+#else
     bnez    t0, HardFault_Handler
+#endif
     call    slew3_isr
     mret
+#if BOARD_RETURN
+    /* (review r6) USART3 (55), the receiver's return channel: its entry is VTF slot 1 (hw.c rc_hw_init), which
+     * bypasses mtvec. Should the core take it through mtvec after all (BENCH: VTF with the unified mtvec), it lands
+     * here instead of the fault loop (a watchdog reset at the first burst: the outputs would go dark every poll). */
+4:  addi    t0, t0, -10
+    bnez    t0, HardFault_Handler
+    call    rc_uart_isr
+    mret
+#endif
 
     /* An exception, an NMI or anything unexpected (0.6.5, D1): its cause and PC into the reset breadcrumbs (main.c
      * bcrumb: pc at 8, cause at 12; Link_sections.ld keeps the block in one %hi page), then wait for the watchdog as

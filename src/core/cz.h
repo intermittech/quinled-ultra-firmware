@@ -23,5 +23,8 @@
 #define ZU(name, text) CZ_##name           /* (an upper-layout build's text, MON_EXTRA: --upper) */
 #define ZJ(name, text) CZ_##name           /* (the test jig's text: not with --no-jig, the receiver's build) */
 #define ZL(name, text) CZ_##name           /* (0.6.4's layout's instead: without --upper) */
+#define ZC(name, text) CZ_##name           /* (0.6.7: the full console's, CONSOLE_FULL: --full) */
+#define ZCU(name, text) CZ_##name          /* (... and the upper layout's: --full --upper) */
+#define ZCL(name, text) CZ_##name          /* (... and 0.6.4's layout's: --full without --upper) */
 
 #endif

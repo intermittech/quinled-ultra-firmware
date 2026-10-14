@@ -237,7 +237,7 @@ static void r5_dip(void)
     sim_vdd_low = 1;
     con_out_n = 0;
     console("save");
-    CHECK(W_SETTINGS() == t && settings_dirty && strstr(con_out, "failed") != 0,
+    CHECK(W_SETTINGS() == t && settings_dirty && strstr(con_out, "pending") != 0,   /* (r6: flash_may says so) */
           "dip: VDD below the PVD: the console's save starts nothing, stays pending (%u)", W_SETTINGS() - t);
     sim_vdd_low = 0;
     console("save");

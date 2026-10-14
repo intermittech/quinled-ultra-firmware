@@ -265,9 +265,13 @@ change, within a write budget that averages at most 96 writes a day.
 - The board computes the outputs with the light's LIGHT_DEF (gamma, constant brightness, min / max power) and the
   power limit (CONFIG 11-21). This is the same code path as rendering, so a controller that restores the same state
   gives identical outputs.
-- **fade:** after power-up, the first SET or EFFECT the board receives starts a cross-fade from the scene to the
-  rendered outputs over `fade` × 100 ms (smoothstep). With no light command, the cross-fade starts 3 s after the first
-  Ultra header. A same-state restore shows no change; a different state fades in.
+- **fade:** after power-up, a light's SET (once the light is defined) starts the cross-fade of that light's channels
+  from the scene to the rendered outputs over `fade` × 100 ms (smoothstep), at the SET's start time (each light its
+  own cross-fade); the other lights keep their scene until
+  their own SET (an EFFECT runs on the light's state and doesn't take over). Channels without a SET cross-fade 15 s
+  after the board's first slot (the start-up preamble's DARK slots don't count). A same-state restore shows no change;
+  a different state fades in. (Firmware 0.6.6: every channel at the first SET or EFFECT of any light, at the latest
+  3 s after the first header.)
 - Channels of a defined light whose SCENE has not arrived yet keep their stored value. Channels of no defined light
   are dropped.
 
@@ -293,8 +297,9 @@ a slow colour loop, a sunrise when the power comes on.
 - **The host sends SCENE_EFFECT for every light**, `none` for the ones without, after their SCENE, and with a new SEQ
   when it changes (own SEQ space, like every type). The board takes the lights a SCENE_EFFECT reached since its
   start-up as the complete set.
-- **Take-over:** as for a plain scene. The first SET or EFFECT the board receives (or WS data, or 3 s after the first
-  header without one) ends the effect; the outputs then cross-fade from where it was over the SCENE fade.
+- **Take-over:** as for a plain scene. The light's SET (or WS data, or 15 s after the board's first slot without one)
+  ends the effect; the outputs then cross-fade from where it was over the SCENE fade. A host EFFECT ends it at once
+  (the plain SCENE values show until the light's SET).
 - A board before 0.2.3 ignores the slot (an unknown type) and shows the plain SCENE values.
 
 ESPHome YAML (the ESPHome side follows this spec): a `power_on_effect:` per light, naming one of the light's effects,
@@ -493,13 +498,14 @@ For **QuinLED Diff-Power ultra receivers only** (their RS-485 pair turns around)
 never reports back, in any revision: its data line is one-way, and what it measures (current, voltage, temperature,
 calibration) stays on the board.
 
-Not implemented. These values are reserved so later firmware and hosts can add it without another change to the
-frame layout. Constants: `ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTRA_RW_*`, `ULTRA_RSP_*`,
+Implemented by the Diff-Power ultra receiver's firmware build since firmware 0.6.6 (`BOARD=2`, `core/rc.h`); the
+dig2analog-ultra's build has none of it. The values were reserved so firmware and hosts could add it without another
+change to the frame layout. Constants: `ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTRA_RW_*`, `ULTRA_RSP_*`,
 `ULTRA_PAGE_*`). Background: wiki, Reserved extensions.
 
 | FLAGS bit | Name | Meaning | What a board of this firmware does |
 |---|---|---|---|
-| 0x01 | RW | A response window follows this frame; every slot is a POLL | Clock sync from the header; ignores every slot; keeps its lock (an RW frame is a normal Ultra frame for auto-detect) |
+| 0x01 | RW | A response window follows this frame; every slot is a POLL | Clock sync from the header; ignores every slot; keeps its lock (an RW frame is a normal Ultra frame for auto-detect). A Diff-Power receiver (0.6.6) also answers its POLL in the window |
 | 0x02 | HINT | Optional frame-level hint ([Compatibility rules](#compatibility-rules)); none defined yet | Processes the frame as usual |
 | 0x04 | EXT | Must understand: the frame uses an extension; none defined yet | Clock sync from the header; ignores every slot; keeps its lock |
 | 0x08 | UPD | Firmware update frame, see [Firmware update frames](#firmware-update-frames) | No clock sync, no slot; keeps its lock |
@@ -507,8 +513,8 @@ frame layout. Constants: `ultra_protocol.h` (`ULTRA_HDR_RW`, `ULTRA_POLL`, `ULTR
 RW and UPD are never set together: the host never sends that, and a board ignores such a frame (as an UPD frame).
 
 - **Slot type 7, POLL:** valid only in an RW frame. Payload: answer index 0-15 (0xFF = relay only), R = response
-  slots in the window (1-16), page, return rate, page arguments. A board of this firmware drops POLL slots in any
-  frame.
+  slots in the window (1-16), page, return rate, page arguments. A dig2analog-ultra drops POLL slots in any frame; a
+  Diff-Power receiver (0.6.6) answers a valid POLL of an RW frame and drops one in any other frame.
 - **Response window timing** is defined from **t0 = the frame end**: the falling edge of the RW frame's last bit (the
   header's last bit), as each board sees it. With the header as a trailer, t0 is also the moment the board can read
   RW. Its own POLL slot was decoded earlier, from the frame start.
@@ -673,7 +679,8 @@ RW and UPD are never set together: the host never sends that, and a board ignore
   - The header follows from the tail copy (in the poll ISR, at t0 + 100-150 µs) and its decode (130 µs). That is
     less work after t0 than format 1's whole-capture decode.
   - It is tight anyway: the adaptive stagger search blocks the main loop for up to ~0.5 ms. Firmware with the return
-    channel must hold that search back while a frame end is pending (not done yet: a follow-up for that firmware).
+    channel must hold that search back while a frame end is pending (0.6.6's receiver build does, and every flash
+    write too, from the POLL's capture to the window's end).
 
 ## Firmware update frames
 

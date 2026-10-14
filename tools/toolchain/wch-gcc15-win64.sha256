@@ -1,0 +1,15 @@
+# WCH GCC 15.2 ("RISC-V Embedded GCC15", MounRiver Studio 2.5.0, riscv32-wch-elf-gcc (g5115c7e44-dirty) 15.2.0), Windows x64.
+# The archive inside the installer (7z), then the files a build uses from its extracted folder (tools/toolchain/README.md).
+dc3a86f33354fde834d8bc51c91b4e60477efda3236c9f91411b67bdeb5f9450  RISC-V Embedded GCC15.7z
+5010c7b513f20c19632fa7306429c305046bd4146d966ad282f98a5aae2f42d1  bin/riscv32-wch-elf-gcc.exe
+2ffdae61f53704a30d59eb7fe1418088bc6a6609c26d0ec12184ec1fb9f5b2e5  bin/riscv32-wch-elf-objcopy.exe
+f5be84389101d02bcb41fdcd8c408c46b8de5190f0eaa82d181b792a772c393f  bin/riscv32-wch-elf-objdump.exe
+35524fdae7d6f79f1d0caaee0e450bbb3b2d3dcf9557785d4b52b1ca24c39119  bin/riscv32-wch-elf-size.exe
+0c13d31b09193cbf76d4a862818e14f9b87ed0ec569a26fb7b332921ce5a846e  libexec/gcc/riscv32-wch-elf/15.2.0/cc1.exe
+58e794f27e838313ed290e8c16727d6f5b1df1495d7ff88d1611daeb27f2d301  libexec/gcc/riscv32-wch-elf/15.2.0/lto1.exe
+81b7adef99f0991dcc9201c0ea76cd3b01d1d87b3e10ab6b990ce9a4530cd14c  libexec/gcc/riscv32-wch-elf/15.2.0/lto-wrapper.exe
+f5770ea313b054c677990983441f72ba5d3bd765300e94dc907d7c2f57887d06  libexec/gcc/riscv32-wch-elf/15.2.0/collect2.exe
+9538a84b2ed363db87f10d1882dd9e541b28c3c8491f7976d91475925b61327d  libexec/gcc/riscv32-wch-elf/15.2.0/liblto_plugin.dll
+ecde958da7a9c1e3d897a954629af44b5b54429a674eee5745661fa956faa25e  riscv32-wch-elf/bin/as.exe
+e312bd91d1279e57a9beb1d30bd52e86f7e533d412a727950d3aaeea8d204786  riscv32-wch-elf/bin/ld.exe
+ac0e7cf9390f1071ca684f3928e364b3af2f8ace0647098c2883321a7d0c18ca  lib/gcc/riscv32-wch-elf/15.2.0/rv32imc_xw/ilp32/libgcc.a

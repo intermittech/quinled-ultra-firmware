@@ -22,15 +22,18 @@ rem Sequential host execution cannot expose compiler reordering across ISR hand-
 rem Python 3 checks the documented source contracts as a separate safety guard.
 python "%HERE%test_shared_contract.py"
 if %errorlevel% neq 0 exit /b 1
+rem (review round 6, gpt-protocol) the return channel's ISR hand-overs: their barriers
+python "%HERE%test_r6_rc_contract.py"
+if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%" mkdir "%OUT%"
 rem the console's compressed text (core/cz.h): tools/gen_console_text.py writes %OUT%\gen\cz_text.h (--upper: the
 rem default record layout's texts; genlow: 0.6.4's layout, UPPER_RECORDS=0)
-python "%HERE%..\tools\gen_console_text.py" "%OUT%\gen" --upper
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\gen" --upper --full
 if %errorlevel% neq 0 exit /b 1
-python "%HERE%..\tools\gen_console_text.py" "%OUT%\genlow"
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\genlow" --full
 if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%\isense" mkdir "%OUT%\isense"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /I "%OUT%\gen" /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /I "%OUT%\gen" /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
    "%HERE%test_main.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /Fe:"%OUT%\isense_tests.exe" /Fo:"%OUT%\isense\\" ^
@@ -38,9 +41,9 @@ cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /Fe:"%OUT%\isense_tests.exe" /Fo:"%OU
 if %errorlevel% neq 0 exit /b 1
 rem 0.6.5 D7: the core as a PERF=2 bench build (core/perf.h): the counting and the console's `perf` (test_r5_perf.c)
 if not exist "%OUT%\perf" mkdir "%OUT%\perf"
-python "%HERE%..\tools\gen_console_text.py" "%OUT%\genperf" --perf --upper
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\genperf" --perf --upper --full
 if %errorlevel% neq 0 exit /b 1
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DPERF_BUILD=2 /I "%OUT%\genperf" /Fe:"%OUT%\perf_tests.exe" /Fo:"%OUT%\perf\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DPERF_BUILD=2 /I "%OUT%\genperf" /Fe:"%OUT%\perf_tests.exe" /Fo:"%OUT%\perf\\" ^
    "%HERE%test_r5_perf.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\perf_tests.exe"
@@ -53,18 +56,19 @@ if %errorlevel% neq 0 exit /b 1
 rem the time-warp soak (0.6.2, test/test_soak.c): src\app\main.c itself on a model of the hardware, past every
 rem counter's wrap; each scenario in its own process (a fresh boot), ~30 s together
 if not exist "%OUT%\soak" mkdir "%OUT%\soak"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /I "%HERE%soak" /I "%OUT%\gen" /Fe:"%OUT%\soak_tests.exe" /Fo:"%OUT%\soak\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /I "%HERE%soak" /I "%OUT%\gen" /Fe:"%OUT%\soak_tests.exe" /Fo:"%OUT%\soak\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 rem the same as the Diff-Power ultra receiver (BOARD=2): its return channel (test_soak_rc.c) and every scenario above;
 rem built as the receiver builds (tools/build_target.sh): no MON_EXTRA monitoring, 0.6.4 layout's texts (genlow), the
-rem three 0.2.4-only pages UNSUPPORTED (RC_PAGES_024 0); soak_rc024: the same with those pages (rcpages, for the review)
+rem three 0.2.4-only pages built in (RC_PAGES_024 1, 0.6.7); soak_rc024: the same without them (RC_PAGES_024 0: rcpages,
+rem they answer UNSUPPORTED)
 if not exist "%OUT%\soak_rc" mkdir "%OUT%\soak_rc"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc_tests.exe" /Fo:"%OUT%\soak_rc\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=1 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc_tests.exe" /Fo:"%OUT%\soak_rc\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%\soak_rc024" mkdir "%OUT%\soak_rc024"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=1 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc024_tests.exe" /Fo:"%OUT%\soak_rc024\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_rc024_tests.exe" /Fo:"%OUT%\soak_rc024\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\soak_rc024_tests.exe" rcpages
@@ -74,6 +78,9 @@ if %errorlevel% neq 0 exit /b 1
 rem 0.6.5 D3: the CPU load from the WFI stamps, on the soak's model of the sleep (test_r5_cpu_soak.c)
 "%OUT%\soak_tests.exe" r5cpu
 if errorlevel 1 exit /b 1
+rem (review round 6) LIGHT_DEF gamma 0: linear, as ESPHome's gamma_correct: 0
+"%OUT%\soak_tests.exe" r6gamma0
+if errorlevel 1 exit /b 1
 rem (0.6.5, D1) the reset breadcrumbs after a watchdog reset (test_soak.c d1)
 "%OUT%\soak_tests.exe" d1
 if %errorlevel% neq 0 exit /b 1
@@ -82,29 +89,109 @@ if %errorlevel% neq 0 exit /b 1
 rem (0.6.5, D2) the event log: a short, a supply dip, a calibration (test_soak.c d2)
 "%OUT%\soak_tests.exe" d2
 if %errorlevel% neq 0 exit /b 1
+rem (review round 6) the power-on scene's take-over against the hub's start-up (50 boards) and refresh order
+for %%s in (r6takeover r6takeover0 r6takeover5 r6takeover5d r6rejoin5 r6fxtake) do (
+  "%OUT%\soak_tests.exe" %%s
+  if errorlevel 1 exit /b 1
+)
 rem 0.6.5 D4: the overrun counters on main.c (test_r5_ovr_soak.c)
 "%OUT%\soak_tests.exe" r5ovr
+if errorlevel 1 exit /b 1
+rem (review round 6) a power-on candle past 2^31 ms of effect time
+"%OUT%\soak_tests.exe" r6candle
 if errorlevel 1 exit /b 1
 "%OUT%\isense_tests_g50.exe"
 if %errorlevel% neq 0 exit /b 1
 rem (0.6.5, D5) the flash state: rejected records at boot, a pending save, a failed write (test_soak.c d5)
 "%OUT%\soak_tests.exe" d5
 if %errorlevel% neq 0 exit /b 1
+rem (review round 6) signal loss hold: the host's SET after a gap that took its SEQ round by 256
+"%OUT%\soak_tests.exe" r6seqwrap
+if %errorlevel% neq 0 exit /b 1
 rem (0.6.5) 0.6.4's flash layout (UPPER_RECORDS=0, the bench fallback): the soak's flash scenarios on its record map
 if not exist "%OUT%\soak_lower" mkdir "%OUT%\soak_lower"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DUPPER_RECORDS=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_tests_lower.exe" /Fo:"%OUT%\soak_lower\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DUPPER_RECORDS=0 /I "%HERE%soak" /I "%OUT%\genlow" /Fe:"%OUT%\soak_tests_lower.exe" /Fo:"%OUT%\soak_lower\\" ^
    "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 for %%s in (wrap fx cfg r4flash r5console r5retry r5age) do (
   "%OUT%\soak_tests_lower.exe" %%s
   if errorlevel 1 exit /b 1
 )
-for %%s in (wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax r5dip r5fx r5console r5jig r5retry r5age) do (
+for %%s in (wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax r5dip r5fx r5console r5jig r5retry r5age r5jig6 r5jig6p) do (
   "%OUT%\soak_tests.exe" %%s
   if errorlevel 1 exit /b 1
 )
-rem (the receiver: every scenario but r5jig, the test pad it doesn't have, and d5, MON_EXTRA's flash state line)
-for %%s in (rcpages rcpower rcfail wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax r5dip r5fx r5console r5cpu r5ovr d1 d2 r5retry r5age) do (
+rem (the receiver: every scenario but r5jig, TP9 it doesn't have (r5jig6: its TP6 jig), and d5, MON_EXTRA's flash state line)
+for %%s in (rcpages rcpower rcfail wrap fx cfg long spec vunit vultra vrx vlong vreset vgate vconsole vclockback r4h7 r4wraps r4flash r4rx r4reset r4gate race tripreset longws minmax r5dip r5fx r5console r5cpu r5ovr d1 d2 r5retry r5age r5jig6 r5jig6p) do (
   "%OUT%\soak_rc_tests.exe" %%s
   if errorlevel 1 exit /b 1
 )
+rem (0.6.5, D9) backup, factory reset, restore: the values back, saved by the stores (test_soak.c d9)
+"%OUT%\soak_tests.exe" d9
+if %errorlevel% neq 0 exit /b 1
+rem (review round 6) the reviewers' tests: host programs with their own main (test_r6_host_<t>.c with src\core) and
+rem soak scenarios (test_r6_*.c in test_soak.c) on the main board, the receiver and 0.6.4's layout
+if not exist "%OUT%\r6" mkdir "%OUT%\r6"
+for %%t in (pagepair calhist rc) do (
+  cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /I "%OUT%\gen" /Fe:"%OUT%\r6_%%t.exe" /Fo:"%OUT%\r6\\" ^
+     "%HERE%test_r6_host_%%t.c" "%HERE%..\src\core\*.c"
+  if errorlevel 1 exit /b 1
+  "%OUT%\r6_%%t.exe"
+  if errorlevel 1 exit /b 1
+)
+set "R6=r6vdd r6erase r6fxclear r6erasef r6flashfail r6e2e r6ws2ultra r6boot r6boot5"
+for %%s in (%R6% r6gcut r6gadmit r6gretry r6race r6hist) do (
+  "%OUT%\soak_tests.exe" %%s
+  if errorlevel 1 exit /b 1
+)
+for %%s in (%R6% r6rcdim r6rc r6takeover r6takeover0 r6takeover5 r6takeover5d r6rejoin5 r6fxtake r6candle r6seqwrap r6gamma0) do (
+  "%OUT%\soak_rc_tests.exe" %%s
+  if errorlevel 1 exit /b 1
+)
+for %%s in (%R6%) do (
+  "%OUT%\soak_tests_lower.exe" %%s
+  if errorlevel 1 exit /b 1
+)
+rem (0.6.7, F10) the factory reset like a reboot: by the pad, with the host lit, from the console; a power cut at any ms
+for %%v in (tp9 host console) do (
+  "%OUT%\soak_tests.exe" r6fxreset %%v
+  if errorlevel 1 exit /b 1
+  "%OUT%\soak_rc_tests.exe" r6fxreset %%v
+  if errorlevel 1 exit /b 1
+  "%OUT%\soak_tests_lower.exe" r6fxreset %%v
+  if errorlevel 1 exit /b 1
+)
+rem (0.6.7) the release console (CONSOLE_FULL 0: it only sends; the builds above: the full console, the bench's): the
+rem main board and the receiver with the release's texts; the console's own scenarios (test_r6_console.c: the
+rem stream and its golden, typed bytes ignored, the jig pausing it, a dip write mid-line) and every scenario that
+rem types no command
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\genrel" --upper
+if %errorlevel% neq 0 exit /b 1
+python "%HERE%..\tools\gen_console_text.py" "%OUT%\genrellow"
+if %errorlevel% neq 0 exit /b 1
+if not exist "%OUT%\soak_rel" mkdir "%OUT%\soak_rel"
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=0 /I "%HERE%soak" /I "%OUT%\genrel" /Fe:"%OUT%\soak_rel_tests.exe" /Fo:"%OUT%\soak_rel\\" ^
+   "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
+if %errorlevel% neq 0 exit /b 1
+if not exist "%OUT%\soak_rc_rel" mkdir "%OUT%\soak_rc_rel"
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=0 /DBOARD=2 /DMON_EXTRA=0 /DRC_PAGES_024=1 /I "%HERE%soak" /I "%OUT%\genrellow" /Fe:"%OUT%\soak_rc_rel_tests.exe" /Fo:"%OUT%\soak_rc_rel\\" ^
+   "%HERE%test_soak.c" "%HERE%..\src\core\*.c"
+if %errorlevel% neq 0 exit /b 1
+set "REL=conout conin conjig condip fx long spec vunit vultra vrx vlong vreset vgate vclockback r4h7 r4wraps r4rx r4reset r4gate tripreset longws r5fx r5retry r5age r5jig6p r6erase r6erasef r6ws2ultra r6boot r6boot5 r6takeover r6takeover0 r6takeover5 r6takeover5d r6rejoin5 r6fxtake r6candle r6seqwrap r6gamma0"
+for %%s in (%REL% r5jig r6gcut r6gadmit r6gretry) do (
+  "%OUT%\soak_rel_tests.exe" %%s
+  if errorlevel 1 exit /b 1
+)
+for %%s in (%REL% rcpages rcpower rcfail r6rc) do (
+  "%OUT%\soak_rc_rel_tests.exe" %%s
+  if errorlevel 1 exit /b 1
+)
+for %%v in (tp9 host) do (
+  "%OUT%\soak_rel_tests.exe" r6fxreset %%v
+  if errorlevel 1 exit /b 1
+  "%OUT%\soak_rc_rel_tests.exe" r6fxreset %%v
+  if errorlevel 1 exit /b 1
+)
+rem (fable-sys) the wall-switch pattern: 12 power cycles, each its own process (test_r6_sys.c r6wall)
+call "%HERE%run_r6wall.cmd" "%OUT%\soak_tests.exe" 12
+if errorlevel 1 exit /b 1

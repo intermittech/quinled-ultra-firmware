@@ -178,22 +178,26 @@ uint8_t ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS])
 /* ----------------------------------------------------------------------------------------------- runtime */
 void scene_boot(scene_run_t *r, const scene_t *s)
 {
+    uint32_t i;
     r->sc = *s;
     r->hold = (uint8_t)(s->mask & 0x1Fu);
     r->fading = 0;
-    r->t0 = 0;
-    r->dur = 0;
+    r->dur = (uint32_t)s->fade * 100u;               /* (the scene's fade: the same for every channel) */
+    for (i = 0; i < 5u; i++) {
+        r->t0[i] = 0;
+    }
 }
 
+/* each channel's cross-fade from its own take-over (r6: the lights of a board take over one by one, at their own
+ * SET; 0.6.6 had one start for all, so a channel taken over later jumped to the fade's progress) */
 void scene_takeover(scene_run_t *r, uint8_t mask, uint32_t now_ms)
 {
     uint8_t m = (uint8_t)(r->hold & mask);
-    if (m == 0u) {
-        return;
-    }
-    if (r->fading == 0u) {
-        r->t0 = now_ms;
-        r->dur = (uint32_t)r->sc.fade * 100u;
+    uint32_t i;
+    for (i = 0; i < 5u; i++) {
+        if (m & (1u << i)) {
+            r->t0[i] = now_ms;
+        }
     }
     r->hold = (uint8_t)(r->hold & ~m);
     r->fading = (uint8_t)(r->fading | m);
@@ -201,24 +205,24 @@ void scene_takeover(scene_run_t *r, uint8_t mask, uint32_t now_ms)
 
 uint8_t scene_mix(scene_run_t *r, uint32_t now_ms, uint16_t *v)
 {
-    uint32_t i, s = 65536u, el;
+    uint32_t i;
     if ((r->hold | r->fading) == 0u) {
         return 0;
-    }
-    if (r->fading) {
-        el = now_ms - r->t0;
-        if (r->dur == 0u || el >= r->dur) {
-            r->fading = 0;
-        } else {
-            s = ultra_smoothstep((el << 16) / r->dur);  /* dur <= 25.5 s: el << 16 fits */
-        }
     }
     for (i = 0; i < 5u; i++) {
         uint32_t bit = 1u << i, sv = (r->sc.mask & bit) ? r->sc.v[i] : 0u;
         if (r->hold & bit) {
             v[i] = (uint16_t)sv;
         } else if (r->fading & bit) {
-            v[i] = (uint16_t)((int32_t)sv + (int32_t)((((int64_t)v[i] - (int64_t)sv) * (int64_t)s) >> 16));
+            uint32_t el = now_ms - r->t0[i];
+            if ((int32_t)el < 0) {
+                v[i] = (uint16_t)sv;                     /* its state starts later (a SET for later): the scene */
+            } else if (r->dur == 0u || el >= r->dur) {
+                r->fading = (uint8_t)(r->fading & ~bit);   /* done: the controller's value */
+            } else {
+                uint32_t s = ultra_smoothstep((el << 16) / r->dur);   /* dur <= 25.5 s: el << 16 fits */
+                v[i] = (uint16_t)((int32_t)sv + (int32_t)((((int64_t)v[i] - (int64_t)sv) * (int64_t)s) >> 16));
+            }
         }
     }
     return r->fading != 0u;

@@ -172,6 +172,7 @@ def main():
     emu.mmio[RCC + 0x04] = 0x08                # CFGR0: SWS = PLL
     emu.mmio[0x40004400] = 0x40                # USART2 STATR: TC (nothing on the line)
     emu.mmio[0x40010C08] = 1 << 10             # GPIOB INDR: TP9 (PB10) high: the test pad not grounded
+    emu.mmio[0x40010808] = 1 << 3              # GPIOA INDR: TP6 (PA3, the console's RX) high: idle (0.6.7)
     # find the WFI in main
     text = open(os.path.splitext(elf)[0] + ".lst", encoding="utf-8", errors="replace").read().splitlines()
     wfi = None

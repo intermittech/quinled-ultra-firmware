@@ -45,14 +45,11 @@
  * moved from PA5 the same day, so SPI1's clock pin stays as it was), the receiver reads its bus there */
 #define VSENSE_SUPPLY_CH 4u
 
-/* test jig mode (core/testjig.h): TP9 = PB10 with the internal pull-up, grounded by the jig. PB10 because the
- * dig2analog-ultra never needs it otherwise (its data line is one-way: no return channel) and it is 5 V tolerant;
- * PA0 / TP8 stays the spare analog input. The receiver uses PB10 for its return channel's TX: no test pad there yet. */
-#if BOARD == BOARD_D2A_ULTRA
+/* test jig mode (core/testjig.h), both boards (0.6.7): TP6 = PA3, the console's RX, with the internal pull-up, held
+ * low by the jig (grounded, or a UART break); the dig2analog-ultra also TP9 = PB10 (pull-up; it never needs PB10
+ * otherwise: its data line is one-way, and it is 5 V tolerant). The receiver uses PB10 for its return channel's TX.
+ * PA0 / TP8 stays the spare analog input. */
 #define BOARD_TESTJIG    1
-#else
-#define BOARD_TESTJIG    0
-#endif
 
 /* the return channel (core/rc.h; ULTRA_PROTOCOL.md "Reserved: return channel"): the Diff-Power ultra receiver only.
  * Its RS-485 transceivers: input (towards the host) DE on PB14, output (towards the next receiver) DE on PA10, both

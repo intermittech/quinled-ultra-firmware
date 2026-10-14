@@ -143,7 +143,7 @@ static void test_cli060(void)
 
     /* softstart */
     run_cli(&c, "help\r");
-    CHECK(strstr(cli_out, "watch [ms]") && strstr(cli_out, "softstart: 0 off 1 on"), "help: watch, softstart");
+    CHECK(strstr(cli_out, "watch [ms]") && strstr(cli_out, " softstart\r\n"), "help: watch, softstart (0.6.7: the keys' names)");
     st.softstart = 1;
     run_cli(&c, "get\r");
     CHECK(strstr(cli_out, "softstart=1\r\n") != NULL, "get softstart");

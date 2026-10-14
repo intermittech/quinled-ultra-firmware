@@ -596,6 +596,10 @@ MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
             L->max_p[i] = (uint16_t)ultra_get16(p + 16 + 2 * i);
         }
         L->g_q16 = (ultra_get16(p + 3) * 65536u + 500u) / 1000u;
+        if (L->g_q16 == 0u) {
+            L->g_q16 = 65536u;                           /* gamma 0: linear, as ESPHome's gamma_correct: 0 (x^0 would
+                                                            show every level that is on at 100 %) */
+        }
         L->flags = (uint8_t)(p[5] & ULTRA_DEF_FLAGS);
         return ULTRA_EV_LIGHT | ULTRA_EV_DEF;
     case ULTRA_SET: {
@@ -967,8 +971,12 @@ static void light_values(ultra_light_t *L, uint32_t now, ultra_vals_t *v)
          * lasting phase jump (claude-bugs, gpt-verify vclockback). Within the int32 range: the rebase below keeps
          * el under 2^31 while the effect runs */
         now = L->fx_t0;
-    } else if (el >= FX_REBASE_MS && (per = fx_period(L)) != 0u) {
-        L->fx_t0 += el - el % per;
+    } else if (el >= FX_REBASE_MS) {
+        /* whole periods; an effect without one (candle, flicker, random: they never read fx_t0 else; sunrise /
+         * sunset ended long ago) to now. 0.6.6 skipped those: 2^31 ms after its start el read as negative above, and
+         * the flame froze for 24.86 days (a power-on candle without a host, or one the host left on) */
+        per = fx_period(L);
+        L->fx_t0 += per != 0u ? el - el % per : el;
         L->fx_k = 1;
     }
     switch (L->fx) {

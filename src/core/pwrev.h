@@ -12,8 +12,8 @@
  *  - LIMITING / CH_LIMITING: a reduction now, held ULTRA_PW_HOLD_MS (2 s) after the last one;
  *  - a limit event starts when the limiter reduces after 2 s without reducing (one long overload = one event);
  *  - TRIPPED: the outputs are off after a trip, until the retry;
- *  - a latch is set while its counter differs from the count the controller acknowledged (POLL of the POWER page
- *    with ULTRA_PW_ARG_ACK), so an event after the controller's read stays latched and a lost POLL loses nothing;
+ *  - each event sets a latch independently of counter wrap; an ACK clears it only when its count matches the
+ *    current count. Unmatched / delayed ACKs neither invent events nor acknowledge future ones;
  *  - everything is in RAM: a power cycle clears it.
  * Pure logic, host-tested (test/test_pwrev.c). */
 #ifndef PWREV_H
@@ -51,6 +51,7 @@ typedef struct {
     uint8_t  last_cause;              /* ULTRA_PW_CAUSE_* of the last trip */
     uint8_t  ev;                      /* (0.6.5, D2) the events the last update counted (ULTRA_PW_EV_*: a limit event,
                                          a trip, a new supply dip from in.dips): main.c's event log */
+    uint8_t  latched;                 /* sticky events, including a full unacknowledged u16 counter cycle */
     uint32_t trip_ms;                 /* ms of the last trip (its peak can land in the next ms' samples) */
     uint32_t sec_ms;                  /* the ages count whole seconds from here */
 } pwrev_t;

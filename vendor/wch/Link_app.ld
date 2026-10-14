@@ -11,7 +11,7 @@
 ENTRY( _start )
 
 /* the stack: 2 KB. tools/build_target.sh STACK_SIZE=<bytes> (QL_STACK_SIZE, 0.6.6): 1536 is ready (the static worst
- * case 832 B with the ISRs nested, tools/stack.py) and waits for the painted `stack=` of the bench's 30-day soak */
+ * case 880 B with the ISRs nested, tools/stack.py) and waits for the painted `stack=` of the bench's 30-day soak */
 __stack_size = DEFINED(QL_STACK_SIZE) ? QL_STACK_SIZE : 2048;
 
 PROVIDE( _stack_size = __stack_size );

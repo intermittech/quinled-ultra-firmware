@@ -64,7 +64,8 @@ typedef struct {
     scene_t  sc;
     uint8_t  hold;                    /* channels showing the scene (no data yet) */
     uint8_t  fading;                  /* channels cross-fading to the controller's values */
-    uint32_t t0, dur;                 /* cross-fade start / length, ms */
+    uint32_t dur;                     /* cross-fade length, ms */
+    uint32_t t0[5];                   /* each channel's cross-fade start, ms (r6: the lights take over one by one) */
 } scene_run_t;
 
 void    scene_clear(scene_t *s);
@@ -86,7 +87,8 @@ extern const pp_desc_t scene_pp;
 void    scene_log_pack(const scene_t *s, uint16_t seq, scene_rec_t *rec);
 
 void    scene_boot(scene_run_t *r, const scene_t *s);
-/* valid data: the channels in `mask` that still hold the scene start their cross-fade at now_ms */
+/* valid data: the channels in `mask` that still hold the scene start their cross-fade at now_ms (each its own; a
+ * time still to come: the scene shows until then) */
 void    scene_takeover(scene_run_t *r, uint8_t mask, uint32_t now_ms);
 /* v: the controller's outputs, replaced by the scene / mixed during the cross-fade. Returns 1 while the scene
  * still shows (hold or fade) and the outputs must be refreshed every ms during a fade. */

@@ -3,8 +3,10 @@
 #define CZ_TEXT_DATA                       /* (the compressed text's blob and tokens live here: core/cz.h) */
 #include <stdarg.h>
 #include <stddef.h>
+#include <string.h>
 #include "cli.h"
 #include "perf.h"
+#include "../hal/board.h"
 #include "climit.h"
 #include "ultra_protocol.h"
 #include "presets.h"
@@ -12,32 +14,21 @@
 #include "../hal/board.h"               /* BOARD_TESTJIG: the jig's report */
 #include "cz.h"
 
-/* The settings keys, one compressed string of records: the command byte, the key and its short help (the values;
- * README / wiki: Console have the details), each NUL-terminated; a 0 command byte ends it. key_name / key_help /
- * key_next walk the records on the compressed bytes (separators and command bytes stay plain: core/cz.h). */
-#define KEYS Z(keys,                                                                                                \
-    "\x01" "protocol\0"  "0 auto 1 WS2915 2 WS2805 3 Ultra\0"                /* CMD_PROTOCOL */                     \
-    "\x02" "preset\0"    "0..14 = 2.2..100 kHz, 8 = 25 kHz\0"                /* CMD_PWM_PRESET */                   \
-    "\x03" "dither\0"    "0 on 1 off-low 2 off\0"                            /* CMD_DITHER_MODE */                  \
-    "\x04" "thresh\0"    "1..255 x 0.1 %\0"                                  /* CMD_DITHER_THRESH */                \
-    "\x05" "feedback\0"  "0 red 1 all 2 off\0"                               /* CMD_FEEDBACK_CH */                  \
-    "\x06" "stagger\0"   "0 off 1 fixed 2 +spread 3 adaptive 4 +spread\0"    /* CMD_STAGGER */                      \
-    "\x07" "floor\0"     "0 skip 1 clamp 2 off\0"                            /* CMD_DIM_FLOOR */                    \
-    "\x0d" "minpulse\0"  "5..100 x 10 ns\0"                                  /* CMD_MIN_PULSE */                    \
-    "\x08" "loss\0"      "0 hold 1 off 2 fade off\0"                         /* CMD_SIGNAL_LOSS */                  \
-    "\x0b" "smooth\0"    "0 off 1 WS2805 2 all\0"                            /* CMD_SMOOTHING */                    \
-    "\x0c" "gamma\0"     "WS2805: 0 linear 1 2.2 2 2.8\0"                    /* CMD_GAMMA */                        \
-    "\x0e" "scene\0"     "power-on: 0 none 1 store now\0"                    /* CMD_SCENE */                        \
-    "\x0f" "scenefade\0" "0..255 x 100 ms\0"                                 /* CMD_SCENE_FADE */                   \
-    "\x12" "ilimit\0"    "x 50 mA, 0 = 8 A\0"                                /* CMD_ISENSE_LIMIT */                 \
-    "\x13" "ical\0"      "0 = 25/50/75/100 %, 5..100 = one level\0"          /* CMD_ISENSE_CAL */                   \
-    "\x14" "softstart\0" "0 off 1 on\0")                                     /* CMD_SOFT_START */
+#if CONSOLE_FULL
+/* The settings keys, one compressed string of records: the command byte and the key, NUL-terminated; a 0 command
+ * byte ends it (0.6.7: without the values' short help; README / wiki: Console list them). key_name / key_next walk
+ * the records on the compressed bytes (separators and command bytes stay plain: core/cz.h). */
+#define KEYS ZC(keys,                                                                                                \
+    "\x01" "protocol\0"  "\x02" "preset\0" "\x03" "dither\0" "\x04" "thresh\0" "\x05" "feedback\0" "\x06" "stagger\0"   \
+    "\x07" "floor\0" "\x0d" "minpulse\0" "\x08" "loss\0" "\x0b" "smooth\0" "\x0c" "gamma\0" "\x0e" "scene\0"           \
+    "\x0f" "scenefade\0" "\x12" "ilimit\0" "\x13" "ical\0" "\x14" "softstart\0")
 typedef char keys_match_config_h[(CMD_PROTOCOL == 0x01 && CMD_PWM_PRESET == 0x02 && CMD_DITHER_MODE == 0x03 &&
                                   CMD_DITHER_THRESH == 0x04 && CMD_FEEDBACK_CH == 0x05 && CMD_STAGGER == 0x06 &&
                                   CMD_DIM_FLOOR == 0x07 && CMD_MIN_PULSE == 0x0d && CMD_SIGNAL_LOSS == 0x08 &&
                                   CMD_SMOOTHING == 0x0b && CMD_GAMMA == 0x0c && CMD_SCENE == 0x0e &&
                                   CMD_SCENE_FADE == 0x0f && CMD_ISENSE_LIMIT == 0x12 && CMD_ISENSE_CAL == 0x13 &&
                                   CMD_SOFT_START == 0x14) ? 1 : -1];
+#endif
 
 /* ------------------------------------------------------------------------------------ compressed text (cz.h) */
 /* z: a Z(...) offset. The decoder's state: the next compressed byte and the right halves of the tokens being
@@ -78,11 +69,11 @@ static int nth(int z, uint32_t i)
     return z;
 }
 
+#if CONSOLE_FULL
 /* a key record k (at its command byte): its command, name, help, the record after it */
 #define key_cmd(k)  (*cz_at(k))
 #define key_name(k) ((k) + 1)
-#define key_help(k) skip((k) + 1)
-#define key_next(k) skip(skip((k) + 1))
+#define key_next(k) skip((k) + 1)
 
 /* a == the text z */
 static int cz_eq(const char *a, int z)
@@ -96,6 +87,7 @@ static int cz_eq(const char *a, int z)
     }
     return ch == (uint8_t)*a;
 }
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- output */
 /* The console's one formatter: f (a Z(...) text) with one argument per %-code. Readable units on the console (V, A,
@@ -289,23 +281,9 @@ void cli_say(cli_t *c, int z)
 
 /* ---------------------------------------------------------------------------------------------------- reports */
 #if BOARD_TESTJIG
-void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
+void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t fail, uint32_t cycle, uint32_t supply_mv)
 {
     const uint32_t *u = c->st->uid;
-    uint32_t i, k, fail = 0;
-    cf(c, ZJ(tr_head, "test @%u%%: "), pct);
-    for (k = 0; k < 2u; k++) {             /* as measured at pct %, then scaled to 100 % */
-        for (i = 0; i < 5u; i++) {
-            uint32_t v = clamp0(ma[i]);
-            fail |= (uint32_t)(v < TJ_PASS_MIN_MA || v > TJ_PASS_MAX_MA) << i;   /* (0.6.5: the jig line's) */
-            cf(c, ZJ(tr_ch, "%z%H%z"), nth(ZJ(tr_names, "R \0G \0B \0W1 \0W2 "), i),
-               k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u),
-               i < 4u ? (k == 0u ? ZJ(tr_a, " A, ") : ZJ(tr_comma, ", "))
-                      : (k == 0u ? ZJ(tr_est, " A; est. @100%: ") : ZJ(tr_supply, " A; supply ")));
-        }
-    }
-    cf(c, supply_mv != 0u ? ZJ(tr_v, "%v V (cycle %u)\r\n") : ZJ(tr_na, "n/a (cycle %u)\r\n"),
-       supply_mv != 0u ? supply_mv : cycle, cycle);
     cf(c, ZJ(jig, "jig cycle=%u %z fail=%u a=%A supply=%v uid=%u,%u,%u fw=%s\r\n"), cycle,
        fail ? ZJ(jig_fail, "FAIL") : ZJ(jig_pass, "PASS"), fail, ma, supply_mv, u[0], u[1], u[2], c->st->version);
 }
@@ -314,8 +292,14 @@ void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle
 void cli_banner(cli_t *c)
 {
     const cli_status_t *s = c->st;
-    cf(c, Z(banner, "QuinLED dig2analog-ultra firmware v%s, Copyright (C) 2026 QuinLED, GPL-3.0, source: "
-                    "github.com/intermittech/quinled-ultra-firmware\r\n"), s->version);
+#if CONSOLE_FULL
+    cf(c, ZC(banner, "QuinLED dig2analog-ultra v%s (GPL-3.0)\r\n"), s->version);   /* (0.6.7: the copyright and the
+                                                       source in the repository) */
+#else
+    cf(c, Z(banner_rel, "QuinLED %s v%s, (C) 2026 QuinLED, GPL-3.0, github.com/intermittech/quinled-ultra-firmware\r\n"),
+       BOARD == BOARD_DP_RX ? "Diff-Power ultra receiver" : "dig2analog-ultra", s->version);   /* (0.6.7: the release)
+                                                                                                   */
+#endif
     if (s->bl_version != 0u) {
         cf(c, Z(bl_line, "bootloader rev %u (build %s), hardware %u revision %u, "), s->bl_version, s->bl_build,
            s->hw_id, s->hw_rev);
@@ -325,6 +309,7 @@ void cli_banner(cli_t *c)
            s->app_state < 3u ? s->app_state : 0u));
 }
 
+#if CONSOLE_FULL
 /* a key's value: the settings field of its command (a table by command, 0.6.6: the switch was ~130 B more), else the
  * scene's / the status's (the commands main.c keeps outside settings_t) */
 static uint8_t get_key(const cli_t *c, uint8_t cmd)
@@ -371,9 +356,10 @@ static int32_t parse_u(const char **p)
 
 static void result(cli_t *c, cfg_result_t r)
 {
-    cf(c, r.event == CFG_ACK ? Z(ok_crlf, "ok\r\n") : r.event == CFG_SAME ? Z(ok_same, "ok (unchanged)\r\n")
-                                                   : Z(err_value, "error: invalid value\r\n"));
+    cf(c, r.event == CFG_ACK ? ZC(ok_crlf, "ok\r\n") : r.event == CFG_SAME ? ZC(ok_same, "ok (unchanged)\r\n")
+                                                   : ZC(err_value, "error: invalid value\r\n"));
 }
+#endif
 
 /* the overrun counters (main.c ovr) in format f (a Z text), when any is not 0 */
 static void ovr_out(cli_t *c, int f)
@@ -700,24 +686,27 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     return part < 9u;                      /* (the last: 9) */
 }
 
-/* `help` in parts too (0.6.5 D8: 672 bytes at once could wait for the UART): the commands and the first HELP_KEYS
- * keys, then the rest. Returns 1 while parts remain. */
-#define HELP_KEYS 9u
+#if CONSOLE_FULL
+/* `help` (0.6.7: one part, the commands and the keys' names; their values: README / wiki: Console). Returns 0: no part
+ * remains (cli_poll) */
 static uint32_t help_part(cli_t *c, uint32_t part)
 {
     int k;
-    uint32_t i = 0;
-    if (part == 0u) {
-        cf(c, Z(help, "status | get | set <key> <value> | period <steps> | save | defaults | identify | version | "
-                      "watch [ms]\r\n"));
+    (void)part;
+#if MON_EXTRA
+    cf(c, ZCU(help, "status | get | set <key> <value> | period <steps> | save | defaults | identify | version | "
+                    "watch [ms] | backup | restore <hex>\r\nkeys:"));
+#else
+    cf(c, ZCL(help, "status | get | set <key> <value> | period <steps> | save | defaults | identify | version | "
+                    "watch [ms]\r\nkeys:"));
+#endif
+    for (k = KEYS; key_cmd(k); k = key_next(k)) {
+        cf(c, ZC(help_key, " %z"), key_name(k));
     }
-    for (k = KEYS; key_cmd(k); k = key_next(k), i++) {
-        if (i / HELP_KEYS == part) {
-            cf(c, Z(help_key, "  %z: %z\r\n"), key_name(k), key_help(k));
-        }
-    }
-    return (part + 1u) * HELP_KEYS < i;
+    cf(c, Z(crlf, "\r\n"));
+    return 0;
 }
+#endif
 
 uint32_t cli_poll(cli_t *c)
 {
@@ -725,8 +714,12 @@ uint32_t cli_poll(cli_t *c)
     if (p-- == 0u) {
         return 0;
     }
+#if CONSOLE_FULL
     c->st_part = (p < STATUS_PARTS ? status_part(c, p) : help_part(c, p - STATUS_PARTS)) ? (uint8_t)(c->st_part + 1u)
                                                                                          : 0u;
+#else
+    c->st_part = status_part(c, p) ? (uint8_t)(c->st_part + 1u) : 0u;
+#endif
     return c->st_part != 0u;
 }
 
@@ -762,7 +755,24 @@ static void perf_print(cli_t *c)
     }
 }
 #endif
+#if MON_EXTRA && CONSOLE_FULL
+/* (0.6.7, D9) `backup`: the settings, their extension and the calibration as one `restore <hex>` line to paste back:
+ * BK_VERSION | BOARD | settings_t | store_ext_t | isense_cal_t (the structs as stored; levels 0: none) |
+ * CRC-16/CCITT-FALSE over the bytes before it, big-endian. `restore` checks the length, the CRC, the version and the
+ * board, main.c (cli_t.restore) the values. BK_VERSION changes with any of the three structs' layout. */
+#define BK_VERSION 1u
+#define BK_BYTES   (2u + 16u + 7u + 48u)                 /* without the CRC */
+typedef char bk_layout[(sizeof(settings_t) == 16u && sizeof(store_ext_t) == 7u && sizeof(isense_cal_t) == 48u) ? 1
+                                                                                                             : -1];
 
+static int32_t hexv(char ch)                             /* a hex digit's value, -1: none */
+{
+    uint32_t l = (uint32_t)(ch | 0x20) - 'a';
+    return (uint32_t)(ch - '0') < 10u ? ch - '0' : l < 6u ? (int32_t)l + 10 : -1;
+}
+#endif
+
+#if CONSOLE_FULL
 void cli_exec(cli_t *c, const char *line)
 {
     const char *p = line;
@@ -780,17 +790,17 @@ void cli_exec(cli_t *c, const char *line)
     if (n == 0u) {
         return;
     }
-    if (cz_eq(word, Z(w_help, "help")) || cz_eq(word, Z(qmark, "?"))) {
+    if (cz_eq(word, ZC(w_help, "help")) || cz_eq(word, ZC(qmark, "?"))) {
         c->st_part = (uint8_t)(STATUS_PARTS + 1u);   /* printed by cli_poll, as status (0.6.5 D8) */
-    } else if (cz_eq(word, Z(w_status, "status"))) {
+    } else if (cz_eq(word, ZC(w_status, "status"))) {
         if (c->status_begin) c->status_begin();
         c->st_part = 1;                    /* printed by cli_poll, part by part (0.6.5) */
-    } else if (cz_eq(word, Z(w_get, "get"))) {
+    } else if (cz_eq(word, ZC(w_get, "get"))) {
         for (k = KEYS; key_cmd(k); k = key_next(k)) {
-            cf(c, Z(get_key, "%z=%u\r\n"), key_name(k), (uint32_t)get_key(c, key_cmd(k)));
+            cf(c, ZC(get_key, "%z=%u\r\n"), key_name(k), (uint32_t)get_key(c, key_cmd(k)));
         }
-        cf(c, Z(get_period, "period=%u\r\n"), settings_steps(c->set));
-    } else if (cz_eq(word, Z(w_set, "set"))) {
+        cf(c, ZC(get_period, "period=%u\r\n"), settings_steps(c->set));
+    } else if (cz_eq(word, ZC(w_set, "set"))) {
         char key[12];
         int32_t v;
         n = 0;
@@ -805,37 +815,73 @@ void cli_exec(cli_t *c, const char *line)
         for (k = KEYS; key_cmd(k) && !cz_eq(key, key_name(k)); k = key_next(k)) {
         }
         if (key_cmd(k) == 0 || v < 0 || v > 255) {
-            cf(c, Z(err_set, "error: set <key> <value>, see help\r\n"));
+            cf(c, ZC(err_set, "error: set <key> <value>, see help\r\n"));
             return;
         }
         result(c, c->apply(key_cmd(k), (uint8_t)v));
-    } else if (cz_eq(word, Z(w_period, "period"))) {
+    } else if (cz_eq(word, ZC(w_period, "period"))) {
         int32_t v = parse_u(&p);
         if (v < (int32_t)PWM_STEPS_MIN || v > (int32_t)PWM_STEPS_MAX) {
-            cf(c, Z(err_period, "error: period 1440..65535\r\n"));
+            cf(c, ZC(err_period, "error: period 1440..65535\r\n"));
             return;
         }
         c->apply(CMD_PERIOD_HI, (uint8_t)(v >> 8));
         result(c, c->apply(CMD_PERIOD_LO, (uint8_t)(v & 0xFF)));
-    } else if (cz_eq(word, Z(w_save, "save"))) {
+    } else if (cz_eq(word, ZC(w_save, "save"))) {
         c->save_now();                     /* (it reports: ok / pending / failed; 0.6.4) */
-    } else if (cz_eq(word, Z(w_defaults, "defaults"))) {
+    } else if (cz_eq(word, ZC(w_defaults, "defaults"))) {
         result(c, c->apply(CMD_FACTORY_RESET, 0xA5));
-    } else if (cz_eq(word, Z(w_identify, "identify"))) {
+    } else if (cz_eq(word, ZC(w_identify, "identify"))) {
         c->apply(CMD_IDENTIFY, 0);
-        cf(c, Z(ok_crlf, "ok\r\n"));
-    } else if (cz_eq(word, Z(w_version, "version"))) {
+        cf(c, ZC(ok_crlf, "ok\r\n"));
+    } else if (cz_eq(word, ZC(w_version, "version"))) {
         cli_banner(c);
         c->apply(CMD_IDENTIFY, CFG_IDENTIFY_VERSION);   /* and blink it */
 #if PERF_BUILD
     } else if (cz_eq(word, ZP(w_perf, "perf"))) {
         perf_print(c);                     /* (a bench build: core/perf.h) */
 #endif
-    } else if (cz_eq(word, Z(w_watch, "watch"))) {
+#if MON_EXTRA && CONSOLE_FULL
+    } else if (cz_eq(word, ZCU(w_backup, "backup"))) {   /* (0.6.7, D9: the upper layout's console, not the receiver) */
+        static const char hx[] = "0123456789abcdef";
+        uint8_t r[BK_BYTES + 2u];
+        char t[3];
+        r[0] = BK_VERSION;
+        r[1] = BOARD;
+        memcpy(r + 2, c->set, 16u);
+        memcpy(r + 18, c->ext, 7u);
+        memcpy(r + 25, &c->st->cal, 48u);
+        n = crc16_ccitt(r, BK_BYTES);
+        r[BK_BYTES] = (uint8_t)(n >> 8);
+        r[BK_BYTES + 1u] = (uint8_t)n;
+        cf(c, ZCU(bk_head, "restore "));
+        t[2] = 0;
+        for (n = 0; n < sizeof r; n++) {
+            t[0] = hx[r[n] >> 4];
+            t[1] = hx[r[n] & 15u];
+            c->write(t);
+        }
+        cf(c, Z(crlf, "\r\n"));
+    } else if (cz_eq(word, ZCU(w_restore, "restore"))) {   /* (0.6.7, D9) */
+        uint8_t r[BK_BYTES + 2u];
+        int32_t h;
+        while (*p == ' ') {
+            p++;
+        }
+        for (n = 0; n < 2u * sizeof r && (h = hexv(*p)) >= 0; n++, p++) {   /* (n: nibbles) */
+            r[n >> 1] = (uint8_t)(n & 1u ? r[n >> 1] | h : h << 4);
+        }
+        n = *p || n != 2u * sizeof r ? 0u
+          : crc16_ccitt(r, BK_BYTES) != (uint32_t)(r[BK_BYTES] << 8 | r[BK_BYTES + 1u]) ? 1u
+          : r[0] != BK_VERSION ? 2u : r[1] != BOARD ? 3u : !c->restore || !c->restore(r + 2) ? 4u : 5u;
+        cf(c, n == 5u ? ZCU(rs_ok, "ok%z\r\n") : ZCU(rs_err, "error: restore: %z\r\n"),
+           nth(ZCU(rs_why, "length\0CRC\0version\0board\0values\0"), n));
+#endif
+    } else if (cz_eq(word, ZC(w_watch, "watch"))) {
         int32_t v = parse_u(&p);
         c->watch_ms = (uint16_t)(v < 0 ? 1000 : v < 100 ? 100 : v > 60000 ? 60000 : v);
     } else {
-        cf(c, Z(err_unknown, "error: unknown command\r\n"));
+        cf(c, ZC(err_unknown, "error: unknown command\r\n"));
     }
 }
 
@@ -854,7 +900,8 @@ void cli_feed(cli_t *c, char ch)
         c->len = 0;
     } else if (ch == 0x08 || ch == 0x7F) {
         c->len -= c->len != 0u;            /* backspace / delete: the last character goes (0.6.5) */
-    } else if (c->len + 1u < sizeof c->line) {
+    } else if (ch != 0 && c->len + 1u < sizeof c->line) {   /* (0.6.7: a UART break's 0x00, the jig's TP6: none) */
         c->line[c->len++] = ch;
     }
 }
+#endif

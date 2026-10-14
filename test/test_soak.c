@@ -26,7 +26,7 @@
  *          calibrations (IDENTIFY 2) every minute for 2 hours: the settings / calibration write budgets, and that the
  *          last value is the one stored; then a factory reset (console `defaults`): everything cleared but the
  *          lifetime record (0.6.3), whose pages it never touches
- *   spec   the scene's 3 s take-over, CONFIG 22's persistence rules, IDENTIFY 3 with argument 0 (60 s), signal
+ *   spec   the scene's take-over deadline (15 s), CONFIG 22's persistence rules, IDENTIFY 3 with argument 0 (60 s), signal
  *          loss "off" and the host's refresh afterwards (review round 4, fable-spec)
  *   race   (r4, claude-bugs) a capture the main loop takes late, after the next frame changed its tags: a glitch, then
  *          a WS2915 header pause (0.6.2: the decoder asked for 65,505 bits, ~8 KB of RAM zeroed on the chip)
@@ -77,6 +77,7 @@ soak_tim_t soak_tim4;
 soak_systick_t soak_systick;
 soak_adc_t soak_adc1;
 soak_gpio_t soak_gpiob = { 0xFFFFFFFFu };                /* TP9 pulled up: no test jig */
+soak_gpio_t soak_gpioa = { 0xFFFFFFFFu };                /* (0.6.7) TP6 (PA3) pulled up, the console's idle line */
 const uint32_t soak_uid[3] = { 0x12345678u, 0x9ABCDEF0u, 0x0F1E2D3Cu };
 
 uint16_t pwm_tab1[PATTERN_MAX_LEN * 4], pwm_tab2[PATTERN_MAX_LEN * 6], pwm_tab3[PATTERN_MAX_LEN * 6];
@@ -237,10 +238,20 @@ int uart_getc(void)
 {
     return con_in_r < (con_rx_paced ? con_in_due : con_in_w) ? (int)(unsigned char)con_in[con_in_r++] : -1;
 }
+/* (0.6.7) the jig's TP6: soak_tp6_low drives PA3 (main.c reads it through hal/hw.h HW_TP6_LOW); the UART's RX
+ * position: the console's input (con_in) plus soak_rx_extra, traffic the console doesn't see */
+static uint8_t soak_tp6_low;
+static uint32_t soak_rx_extra;
+uint32_t uart_rx_pos(void)
+{
+    return (con_rx_paced ? con_in_due : con_in_w) + soak_rx_extra;
+}
 /* (0.6.5) the UART's 2 x 512-byte TX buffers draining at 115200 baud (11.52 bytes a ms, sim_tick): a write beyond
- * them would make uart_write wait on the board (the main loop stalls): counted in tx_blocks */
+ * them would make uart_write wait on the board (the main loop stalls): counted in tx_blocks. (0.6.7) The release
+ * console's: 2 x 256 (hal/hw.c UART_TX_SIZE) */
+#define SOAK_TX_CAP (CONSOLE_FULL ? 1024u : 512u)
 static uint32_t tx_q, tx_acc, tx_blocks;
-uint32_t uart_room(void) { return tx_q >= 1024u ? 0u : 1024u - tx_q; }
+uint32_t uart_room(void) { return tx_q >= SOAK_TX_CAP ? 0u : SOAK_TX_CAP - tx_q; }
 static FILE *con_dump;                                   /* SOAK_CON_DUMP=<file>: every byte the console wrote */
 void uart_write(const char *s)
 {
@@ -255,7 +266,7 @@ void uart_write(const char *s)
         fflush(con_dump);
     }
     while (*s) {
-        tx_blocks += tx_q >= 1024u;
+        tx_blocks += tx_q >= SOAK_TX_CAP;
         tx_q++;
         if (con_out_n + 1u < sizeof con_out) {
             con_out[con_out_n++] = *s;
@@ -280,6 +291,10 @@ static uint32_t fl_fail;                                 /* a test: the next ope
 static int32_t fl_cut = -1;                              /* (0.6.5) units (an erase, a half-word) before the power goes */
 static uint8_t sim_vdd_low;                              /* (0.6.5) VDD below the PVD: flash_op starts nothing */
 static uint32_t fl_outside;                              /* (0.6.5) operations outside the records / status records */
+/* (review round 6) fl_ops: every flash_op call; fl_fault(addr, halfwords, erase_addr) != 0: that operation fails with
+ * that code (FLASH_ERR_*), the flash unchanged; fl_fail_all: every operation fails (write protection on the records) */
+static uint32_t fl_ops, fl_fail_all;
+static uint32_t (*fl_fault)(uint32_t addr, uint32_t halfwords, uint32_t erase_addr);
 static void sim_stall(uint32_t us);
 
 static uint32_t fl_bright(void)
@@ -297,14 +312,26 @@ static uint32_t rc_flash_in_window;                      /* flash operations whi
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
     uint32_t i, us = halfwords * FL_HW_US, a = erase_addr ? erase_addr : addr;
+    fl_ops++;
     if (sim_vdd_low) {
         return FLASH_ERR_VDD;                            /* (hw.c: the PVD checked first) */
+    }
+    if (fl_fault) {
+        uint32_t e = fl_fault(addr, halfwords, erase_addr);
+        if (e != 0u) {
+            sim_stall(erase_addr ? 16000u : FL_HW_US);   /* (the operation ran and failed) */
+            return e;
+        }
     }
     fl_outside += !((a >= RECORDS_BASE && a + 2u * halfwords <= RECORDS_END) ||
                     (a >= UPD_APP_DESC + UPD_DESC_BYTES && a + 2u * halfwords <= UPD_APP_DESC + UPD_PAGE_BYTES));
 #if BOARD_RETURN
     rc_flash_in_window += rc_state != RC_IDLE;
 #endif
+    if (fl_fail_all) {
+        sim_stall(FL_HW_US);                             /* (r6) refused at once (WRPRTERR), the clock switches' time */
+        return FLASH_ERR_WRP;
+    }
     if (fl_fail && (((addr | erase_addr) & ~0xFFu) == SETTINGS_ADDR || ((addr | erase_addr) & ~0xFFu) == SETTINGS_B_ADDR)) {
         fl_fail--;
         sim_stall(FL_HW_US);
@@ -337,7 +364,11 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     return FLASH_OK;
 }
 
-uint32_t uart_busy(void) { return 0; }
+/* (review round 6) soak_busy_model = 1: uart_busy() while TX bytes are queued (tx_q), as on the board; 0 (the
+ * default, as before): never busy */
+static uint8_t soak_busy_model;
+uint32_t uart_busy(void) { return soak_busy_model && tx_q != 0u; }
+uint32_t hw_vdd_low(void) { return sim_vdd_low; }         /* (r6) the PVD, as flash_op reads it */
 void hw_flash_trip(void) { pwm_force_off(1); }
 static uint32_t sim_window;                              /* (0.6.5) the boot window for the record reads: opened */
 void hw_records_window(uint32_t open) { sim_window += open; }
@@ -536,6 +567,7 @@ static void sim_tick(void)
 {
     sim_ns += 50000u;
     sim_ticks++;
+    soak_gpioa.INDR = soak_tp6_low ? 0xFFFFFFF7u : 0xFFFFFFFFu;   /* (0.6.7) TP6 = PA3 */
     for (tx_acc += 576u; tx_acc >= 1000u; tx_acc -= 1000u) {   /* 11.52 bytes a ms */
         tx_q -= tx_q != 0u;
     }
@@ -1072,6 +1104,7 @@ static void sc_fx(void)
 }
 
 #include "test_r5_ovr_soak.c"                   /* (0.6.5 D4: r5ovr) */
+#include "test_r6_takeover.c"                    /* (review round 6: r6takeover*, r6rejoin5, r6fxtake) */
 
 /* cfg: an automation flipping a stored setting; calibrations on a schedule */
 static void sc_cfg(void)
@@ -1175,7 +1208,9 @@ static void sc_cfg(void)
         e0p = fl_erases[page_of(LIFE_PAGE0_ADDR)];
         e1p = fl_erases[page_of(LIFE_PAGE1_ADDR)];
         console("defaults");
-        run_sparse(30u, 0);
+        /* Render the reset's acknowledgement at normal cadence: sparse 1 Hz sampling can
+         * keep presenting bright segments and never give flash admission a continuous low window. */
+        run_ms(30000);
         found = life_find((const uint8_t *)LIFE_PAGE0_ADDR, (const uint8_t *)LIFE_PAGE1_ADDR, &r, &p);
         printf("  factory reset: lifetime %u Wh, %u power-ups, %u writes, pages erased %u / %u times before, %u / %u "
                "after\n", energy_total_wh(&en), en.lt.ups, en.lt.writes, e0p, e1p, fl_erases[page_of(LIFE_PAGE0_ADDR)],
@@ -1198,15 +1233,17 @@ static void sc_cfg(void)
 }
 
 #include "test_verify.c"
+#include "test_r6_seqwrap.c"                     /* (review round 6: r6seqwrap) */
 #include "test_r4.c"
 #include "test_r4_rx.c"                         /* (gpt-bugs: its own regressions, besides gpt-verify's) */
 #include "test_r4_reset.c"
 #include "test_r4_gate.c"
 #include "test_r5.c"                             /* (0.6.5: the upper flash, dip writes) */
 #include "test_soak_rc.c"                        /* (BOARD=2: the return channel; soak_rc.exe) */
+#include "test_r6_gamma0.c"                      /* (review round 6: r6gamma0) */
 
 /* spec (review round 4): main.c behaviours of README / ULTRA_PROTOCOL.md that had no test. The power-on scene's
- * take-over 3 s after the first Ultra header without a light command (SCENE_TAKEOVER_MS); CONFIG 22 written only when
+ * take-over SCENE_TAKEOVER_MS after the first slot without a light command (r6: 15 s; 0.6.6: 3 s after the header); CONFIG 22 written only when
  * it differs from the stored value, auto / Ultra applied at once, WS2805 stored only; IDENTIFY 3 with argument 0 =
  * 60 s; signal loss "off" (CONFIG 8 = 1), then the host back without a reboot repeating its state with the SEQ it
  * already sent: the light must come back (0.6.2: it stays off until the next change). */
@@ -1217,7 +1254,8 @@ static void sc_spec(void)
     uint8_t s[32];
     uint16_t a[5] = { 65535, 65535, 65535, 65535, 65535 }, b[5] = { 65535, 65535, 65535, 65535, 65535 };
     uint32_t w0;
-    printf("soak spec: the scene's 3 s take-over, CONFIG 22 persistence, IDENTIFY 3 = 60 s, signal loss off + refresh\n");
+    printf("soak spec: the scene's take-over deadline, CONFIG 22 persistence, IDENTIFY 3 = 60 s, signal loss off + "
+           "refresh\n");
     scene_clear(&sc);
     sc.mask = 0x01u;                                     /* a stored scene: CH1 at 46 %, a 1 s cross-fade */
     sc.v[0] = 30000u;
@@ -1227,11 +1265,12 @@ static void sc_spec(void)
     run_ms(600);                                         /* (the soft start's 0.4 s) */
     CHECK(out_now[0] == 30000u && srun.hold == 0x01u, "spec: the stored scene shows from power-up (%u)", out_now[0]);
     host_on = 1;                                         /* an Ultra hub sending NOP frames: no light command */
-    run_ms(2500);
-    CHECK(ultra_on && out_now[0] == 30000u && srun.hold == 0x01u, "spec: the scene holds 2.5 s after the first "
-          "header (%u)", out_now[0]);
+    run_ms(SCENE_TAKEOVER_MS - 500u);
+    CHECK(ultra_on && out_now[0] == 30000u && srun.hold == 0x01u, "spec: the scene holds %u s after the first slot "
+          "(%u)", SCENE_TAKEOVER_MS / 1000u - 1u, out_now[0]);
     run_ms(1000);
-    CHECK(srun.hold == 0u && out_now[0] < 30000u, "spec: the take-over 3 s after the first header (%u)", out_now[0]);
+    CHECK(srun.hold == 0u && out_now[0] < 30000u, "spec: the take-over %u s after the first slot (%u)",
+          SCENE_TAKEOVER_MS / 1000u, out_now[0]);
     run_ms(1500);
     CHECK(out_now[0] == 0u && !srun.fading, "spec: faded to dark (no light defined) over the scene's 1 s (%u)",
           out_now[0]);
@@ -1581,7 +1620,7 @@ static void sc_d5(void)
     printf("  a failed write: %s\n", d5_line());
     CHECK(fl_fail == 0u && stat.fl_errs == 1u && strstr(d5_line(), "errors 1 (WRP)") != NULL,
           "d5: the error and its code (%s)", d5_line());
-    run_ms(3000);
+    run_ms(11000);                                       /* (r6: FLASH_RETRY_MS of hold-off after a failure) */
     console("status");
     CHECK(!settings_dirty && set.dither_mode == 2u && strstr(d5_line(), "pending") == NULL, "d5: the retry wrote it");
 }
@@ -1641,6 +1680,91 @@ static void sc_minmax(void)
 
 #include "test_r5_retry.c"
 #include "test_r5_age.c"                         /* (0.6.6: r5age) */
+/* (review round 6) the reviewers' scenario files, each with its own dispatcher; r6_scenarios tries them in turn */
+#include "test_r6_fable.c"                       /* (fable-fw: r6vdd ...) */
+#include "test_r6_gpt.c"                         /* (gpt-fw: r6gcut ...) */
+#include "test_r6_claude.c"                      /* (claude-fw: r6race ...) */
+#include "test_r6_sys.c"                         /* (fable-sys: r6e2e ...) */
+#include "test_r6_console.c"                     /* (0.6.7: the release console: conout ...; the samples) */
+static int r6_scenarios(const char *sc, int argc, char **argv)
+{
+    return r6f_scenario(sc) || r6g_scenario(sc) || r6c_scenario(sc) || r6s_scenario(sc, argc, argv) ||
+           r6o_scenario(sc);
+}
+
+#if MON_EXTRA
+/* d9 (0.6.5): backup / restore through main.c (restore_rec). Settings changed, a calibration (`set ical 50`), both
+ * stored; `backup`; a factory reset (`defaults`: settings, extension and calibration cleared); the backup line pasted
+ * back: the settings and the calibration as before, in effect at once, then stored by the stores' normal paths (the
+ * settings after the debounce, the calibration with its budget: read back from the flash model with a pp_find of the
+ * test's own, the stores' positions untouched); the line with one digit changed: rejected, nothing changed. */
+static int d9_cal_eq(const isense_cal_t *a, const isense_cal_t *b)
+{
+    return a->levels == b->levels && memcmp(a->pct, b->pct, sizeof a->pct) == 0 && a->zero_ma == b->zero_ma &&
+           memcmp(a->ma, b->ma, sizeof a->ma) == 0;
+}
+
+static void sc_d9(void)
+{
+    const pp_desc_t sd = { STORE_SLOT_BYTES, STORE_SLOTS, 4u, 0u, store_valid };
+    const pp_desc_t cd = { CAL_REC_BYTES, CAL_RECS, 4u, 0u, cal_valid };
+    pp_pos_t tmp;
+    const store_slot_t *sr;
+    const cal_rec_t *cr;
+    char bk[200];
+    isense_cal_t c0, c1;
+    settings_t s0;
+    store_ext_t e0;
+    size_t n;
+    printf("soak d9: backup, factory reset, restore\n");
+    boot(0, 0, 0);
+    run_ms(1000);
+    console("set dither 1");
+    run_ms(4000);
+    console("set preset 3");
+    run_ms(4000);
+    console("set ilimit 100");
+    run_ms(4000);
+    console("set ical 50");
+    run_ms(isense_cal_ms((uint16_t)(50u * 65535u / 100u)) + 4000u);
+    CHECK(isense_cal_get(&is, &c0) && c0.levels == 1u && !settings_dirty && cal_save_pend == 0u, "d9: changed, "
+          "calibrated, both stored");
+    s0 = set;
+    e0 = sext;
+    console("backup");
+    n = strcspn(con_out, "\r");
+    CHECK(strncmp(con_out, "restore ", 8) == 0 && n == 158u, "d9: the backup line (%u)", (uint32_t)n);
+    memcpy(bk, con_out, n);
+    bk[n] = 0;
+    console("defaults");
+    run_ms(10000);                                       /* the factory reset's pattern, its writes */
+    CHECK(set.dither_mode != s0.dither_mode && sext.ilimit50 == 0xFFu && !isense_cal_get(&is, &c1) && !settings_dirty &&
+          cal_save_pend == 0u, "d9: the factory reset cleared and stored it");
+    {
+        char d = bk[60];
+        bk[60] = (char)(d == '0' ? '1' : '0');           /* one digit changed */
+        console(bk);
+        CHECK(strcmp(con_out, "error: restore: CRC\r\n") == 0 && set.dither_mode != s0.dither_mode && !settings_dirty,
+              "d9: a changed line: rejected, nothing changed (%s)", con_out);
+        bk[60] = d;
+    }
+    console(bk);
+    printf("  restore: %s", con_out);
+    CHECK(strcmp(con_out, "ok\r\n") == 0 && memcmp(&set, &s0, sizeof set) == 0 && memcmp(&sext, &e0, sizeof sext) == 0,
+          "d9: the settings and the extension back, in effect at once");
+    CHECK(isense_cal_get(&is, &c1) && d9_cal_eq(&c1, &c0) && cal_present,
+          "d9: the calibration back (its write: at once while dark, %u)", (uint32_t)cal_save_pend);
+    CHECK(settings_dirty && eff.dither_mode == 1u && steps == settings_steps(&s0), "d9: in effect; the settings' "
+          "write pending (the debounce)");
+    run_ms(6000);
+    sr = (const store_slot_t *)pp_find(&sd, (const uint8_t *)SETTINGS_ADDR, (const uint8_t *)SETTINGS_B_ADDR, &tmp);
+    cr = (const cal_rec_t *)pp_find(&cd, (const uint8_t *)CAL_PAGE_ADDR, (const uint8_t *)CAL_B_ADDR, &tmp);
+    CHECK(!settings_dirty && sr && memcmp(&sr->s, &s0, sizeof s0) == 0 && memcmp(&sr->ext, &e0, sizeof e0) == 0,
+          "d9: the settings stored by the store (newest record = the backup's)");
+    CHECK(cal_save_pend == 0u && cr && d9_cal_eq(&cr->c, &c0), "d9: the calibration stored by its store");
+}
+#endif
+#include "test_r6_candle.c"                      /* (review round 6: r6candle) */
 
 int main(int argc, char **argv)
 {
@@ -1650,7 +1774,10 @@ int main(int argc, char **argv)
         sc_r5retry();
     } else if (strcmp(sc, "r5age") == 0) {
         sc_r5age();
-    } else if (verify_scenario(sc) || r4_scenario(sc) || r5_scenario(sc) || rc_scenario(sc)) {
+    } else if (strcmp(sc, "r6candle") == 0) {
+        sc_r6candle();
+    } else if (verify_scenario(sc) || r4_scenario(sc) || r5_scenario(sc) || rc_scenario(sc) ||
+               r6_scenarios(sc, argc, argv)) {
     } else if (strcmp(sc, "wrap") == 0) {
         sc_wrap();
     } else if (strcmp(sc, "r5cpu") == 0) {
@@ -1663,6 +1790,18 @@ int main(int argc, char **argv)
         sc_fx();
     } else if (strcmp(sc, "r5ovr") == 0) {
         sc_r5ovr();
+    } else if (strcmp(sc, "r6takeover") == 0) {
+        sc_r6takeover();
+    } else if (strcmp(sc, "r6takeover5") == 0) {
+        sc_r6takeover5();
+    } else if (strcmp(sc, "r6rejoin5") == 0) {
+        sc_r6rejoin5();
+    } else if (strcmp(sc, "r6takeover5d") == 0) {
+        sc_r6takeover5d();
+    } else if (strcmp(sc, "r6fxtake") == 0) {
+        sc_r6fxtake();
+    } else if (strcmp(sc, "r6takeover0") == 0) {
+        sc_r6takeover0();
     } else if (strcmp(sc, "cfg") == 0) {
         sc_cfg();
     } else if (strcmp(sc, "d2") == 0) {
@@ -1679,16 +1818,28 @@ int main(int argc, char **argv)
         sc_d5();
     } else if (strcmp(sc, "race") == 0) {
         sc_race();
+    } else if (strcmp(sc, "r6gamma0") == 0) {
+        sc_r6gamma0();
 #if BOARD_TESTJIG
     } else if (strcmp(sc, "r5jig") == 0) {
         sc_r5jig();
+    } else if (strcmp(sc, "r5jig6") == 0) {
+        sc_r5jig6();
+    } else if (strcmp(sc, "r5jig6p") == 0) {
+        sc_r5jig6p();
 #endif
     } else if (strcmp(sc, "tripreset") == 0) {
         sc_tripreset();
     } else if (strcmp(sc, "longws") == 0) {
         sc_longws();
+#if MON_EXTRA
+    } else if (strcmp(sc, "d9") == 0) {
+        sc_d9();
+#endif
     } else if (strcmp(sc, "minmax") == 0) {
         sc_minmax();
+    } else if (strcmp(sc, "r6seqwrap") == 0) {
+        sc_r6seqwrap();
     } else {
         printf("soak: unknown scenario %s\n", sc);
         return 2;

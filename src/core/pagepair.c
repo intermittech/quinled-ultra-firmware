@@ -30,7 +30,10 @@ const uint8_t *pp_find(const pp_desc_t *d, const uint8_t *page0, const uint8_t *
         }
     }
     if (after != 0u && after < d->recs) {
-        if (store_erased(best + d->bytes, d->bytes)) {
+        /* (review round 6) every entry after it reads erased, not only the next: a write refused for VDD (0.6.5)
+         * leaves its entry erased and used up, and a later one on the page may be cut short; programmed over, that
+         * one corrupts the next record although the store answers FLASH_OK */
+        if (store_erased(best + d->bytes, (d->recs - after) * d->bytes)) {
             pos->next = (uint8_t)(at << 4 | after);
             pos->erase = 0;
             pos->ahead = (uint8_t)store_erased(pg[at ^ 1u], bytes);   /* (only older records there) */

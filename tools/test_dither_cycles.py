@@ -3,10 +3,11 @@
 """Target timing regression probes for two output-equivalent mutation survivors.
 
 Usage: python tools/test_dither_cycles.py <MEASURE=1 fw.elf>
-Reference: xPack GCC 15.2, default rev04 LTO measurement build, rv32emu COST.
+Reference: GCC 15.2 (0.6.7: WCH's, XW), default rev04 LTO measurement build, rv32emu COST.
 These are emulator cycle estimates, not scope measurements. The upper bounds are the
 0.6.4 costs (0.6.2: 1,051 / 1,148 / 1,061; fable-algo's one-pass dither_build: 725), dither_build_var
-1,149 since 0.6.5 (-fno-ipa-modref: +1, Quindor's flash trade); a new compiler/configuration requires a
+1,149 since 0.6.5 (-fno-ipa-modref: +1, Quindor's flash trade), dither_build 728 since 0.6.7 (XW's flags,
+--param gcse-unrestricted-cost=0: +3, a flash trade within the limits); a new compiler/configuration requires a
 reviewed baseline.
 """
 import argparse
@@ -19,7 +20,7 @@ parser.add_argument("--frx-elf", help="optional default rev04 LTO=0 ELF for the 
 args = parser.parse_args()
 failures = 0
 for function, level, policy, length, limit, expected in (
-        ("dither_build", 28963, 2, 50, 725, 636),
+        ("dither_build", 28963, 2, 50, 728, 636),
         ("dither_build_var", 65184, 0, 32, 1149, None)):
     emu = Emu(args.elf)
     dst, opts, arr = 0x20004000, 0x20004300, 0x20004400

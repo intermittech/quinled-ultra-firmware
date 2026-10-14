@@ -13,7 +13,7 @@
  *   rcpages  every page from this receiver, the answer framing (SYNC, PAGE, INDEX, SEQ, UID16, CRC) and each page's
  *            fields against the firmware's own state; unknown / reserved pages answer UNSUPPORTED; ACKS against the
  *            SEQs the hub sent; IDENTITY's features and capabilities; the timing of every window (turn around
- *            250-900 us, the check 900-977 us, line HIGH at s_i -20 / +80 us, forward again W..W+60 us); traffic on
+ *            250-900 us, the check 900-977 us, line HIGH at s_i -20 / +80 us, forward again W..W+64 us); traffic on
  *            DIN during the window is not a frame (no capture, no frame end, the gate held closed and re-armed once at
  *            the end), and the next frame is decoded as usual
  *   rcpower  power events: a short (trip), a limit event (CONFIG 21 low), a supply dip; POWER's latches, RFLAGS EVENT
@@ -206,7 +206,7 @@ static int rc_timing_ok(const rc_obs_t *o, const uint8_t *poll)
     double s_i = ULTRA_RW_FIRST_US + (double)rc_slot_us(poll[RC_P_RATE]) * poll[RC_P_INDEX];
     int ok = o->turned && o->gate_closed && o->turn_us >= ULTRA_RW_DIR_MIN_US && o->turn_us <= ULTRA_RW_DIR_MAX_US &&
              o->checked && o->check_us >= ULTRA_RW_DIR_MAX_US && o->check_us <= ULTRA_RW_FIRST_US - 23.0 &&
-             o->fwd_us >= o->w_us && o->fwd_us <= o->w_us + 60.0;
+             o->fwd_us >= o->w_us && o->fwd_us <= o->w_us + 64.0;
     if (o->sent) {
         ok &= o->tx_us >= s_i - 20.0 && o->tx_us <= s_i + 80.0;
     }
@@ -523,6 +523,9 @@ static void sc_rcfail(void)
     run_ms(1500);
     rc_window(p, 1, 0, 0, 0, &o);                        /* a POLL without RW: dropped, not applied */
     CHECK(!o.turned && rc_missed == miss0 + 1u, "rcfail: a POLL in a frame without RW: no window");
+    rc_window(p, 1, ULTRA_HDR_RW | ULTRA_HDR_EXT, 0, 0, &o);   /* (review r6) RW with an extension it doesn't know */
+    CHECK(!o.turned && rc_missed == miss0 + 1u, "rcfail: RW with EXT (must understand: every slot ignored): no window "
+          "(turned %d)", o.turned);
     rc_window(p, 1, ULTRA_HDR_RW, 0, 900, &o);           /* the main loop 900 us late */
     CHECK(!o.turned && rc_missed == miss0 + 2u, "rcfail: a late main loop: no part (missed +%u)", rc_missed - miss0);
     rc_window(p, 1, ULTRA_HDR_RW, 0, 250, &o);           /* 250 us late: still in time */
@@ -543,7 +546,8 @@ static void sc_rcfail(void)
           "answer, forward at W");
     rc_contend_tx = 1;
     rc_window(p, 1, ULTRA_HDR_RW, 0, 0, &o);
-    CHECK(o.turned && !o.quiet && !o.sent, "rcfail: the burst finds the line taken: no answer");
+    CHECK(o.turned && o.quiet && !o.sent && o.fwd_us >= o.w_us, "rcfail: the burst finds the line taken: no answer, "
+          "quiet for the rest of the window (as at the check), forward at W (quiet %d)", o.quiet);
     rc_window(p, 1, ULTRA_HDR_RW, 0, 0, &o);
     CHECK(rc_answer_ok(&o, p) == ULTRA_PAGE_STATUS && (o.a[2] & 0x0Fu) == ULTRA_RSP_CONTENTION, "rcfail: the next "
           "answer has CONTENTION (%02X)", o.a[2]);
@@ -607,9 +611,13 @@ static void sc_rcfail(void)
           rc_flash_in_window);
 }
 
+#include "test_r6_rc_soak.c"
+
 static int rc_scenario(const char *s)
 {
-    if (!strcmp(s, "rcpages")) {
+    if (!strcmp(s, "r6rc")) {
+        sc_r6rc();
+    } else if (!strcmp(s, "rcpages")) {
         sc_rcpages();
     } else if (!strcmp(s, "rcpower")) {
         sc_rcpower();

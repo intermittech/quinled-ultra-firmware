@@ -220,21 +220,22 @@ static void test_r5_bounds(void)
     }
     parts = r5b_parts(&c, "help", &longest, all, sizeof all);
     printf("  help: %u bytes in %u parts, the longest %u\n", (uint32_t)strlen(all), parts, longest);
-    CHECK(parts == 2u && longest < CLI_PART_ROOM && c.st_part == 0u, "help: 2 parts, each under %u bytes (longest %u)",
+    CHECK(parts == 1u && longest < CLI_PART_ROOM && c.st_part == 0u, "help: 1 part (0.6.7), under %u bytes (longest %u)",
           CLI_PART_ROOM, longest);
     CHECK(strncmp(all, "status | get | ", 15) == 0 && strstr(all + 1, "status | get | ") == NULL, "help: the commands "
           "once, first");
-    for (i = 0, p = all; i < sizeof keyname / sizeof keyname[0]; i++) {
-        char want[48];
-        sprintf(want, "\r\n  %s: ", keyname[i]);
-        p = strstr(p, want);
-        CHECK(p != NULL && strstr(p + 1, want) == NULL, "help: %s once, in order", keyname[i]);
-        if (!p) {
-            break;
+    {                                                    /* (0.6.7) the keys, in order, on one line */
+        char want[256] = "keys:";
+        for (i = 0; i < sizeof keyname / sizeof keyname[0]; i++) {
+            strcat(want, " ");
+            strcat(want, keyname[i]);
         }
+        strcat(want, "\r\n");
+        p = strstr(all, want);
+        CHECK(p != NULL && strlen(p) == strlen(want), "help: the keys' line at the end (%s)", all);
     }
     run_cli(&c, "?\r");
-    CHECK(strstr(cli_out, "softstart: ") != NULL, "? = help, through cli_poll");
+    CHECK(strstr(cli_out, " softstart\r\n") != NULL, "? = help, through cli_poll");
     for (i = 0; i < 2u; i++) {
         static const char *const one[2] = { "get", "version" };
         parts = r5b_parts(&c, one[i], &longest, all, sizeof all);

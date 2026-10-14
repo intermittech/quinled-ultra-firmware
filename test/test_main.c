@@ -205,7 +205,7 @@ static void test_decoder(void)
 #include "test_console060.c"
 #include "test_d1.c"                             /* (0.6.5) reset breadcrumbs */
 #include "test_r5_bounds.c"                    /* (0.6.5 D8: every console output under one part) */
-#include "test_console_cz.c"                   /* (the whole console output, compressed vs plain) */
+#include "test_console_cz.c"                   /* (the whole console output) */
 #if MON_EXTRA
 #include "test_calhist.c"                      /* (0.6.6, M2) */
 #endif
@@ -415,6 +415,10 @@ static void test_ack(void)
     CHECK(ms >= 30000 && ms <= 32000, "identify 30 s");
 }
 
+#if MON_EXTRA
+#include "test_d9.c"                             /* (0.6.7, D9) backup / restore */
+#endif
+
 int main(void)
 {
     test_r4_mutation();
@@ -452,6 +456,9 @@ int main(void)
     test_gamma();
     test_store();
     test_store_ext();
+#if MON_EXTRA
+    test_d9();
+#endif
     test_isense_config();
     test_cli();
     test_ultra();

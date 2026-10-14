@@ -61,5 +61,7 @@ Program `...-factory.hex` with WCH-LinkUtility / wlink (WCH-LinkE on TP1-TP4):
 The repository exists (public, so ESPHome downloads without a token). The rest of the setup is part of
 [FIRST-RELEASE.md](FIRST-RELEASE.md), step B:
 - the xPack checksum in `release.yml`;
+- the repository variable `WCH_GCC15_URL`: where CI fetches WCH GCC 15.2's 7z for the XW app build
+  (`tools/toolchain/README.md`; its SHA-256 is checked against `tools/toolchain/wch-gcc15-win64.sha256`);
 - the keys and the CI secret (KEY_MANAGEMENT.md, "Setting up");
 - the production public keys in the ESPHome component.

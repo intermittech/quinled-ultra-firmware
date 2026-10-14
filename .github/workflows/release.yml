@@ -49,6 +49,18 @@ jobs:
           echo "RISCV_GCC=$RUNNER_TEMP/xpack-riscv-none-elf-gcc-${XPACK_GCC}/bin/riscv-none-elf-gcc.exe" >> "$GITHUB_ENV"
           pip install "cryptography>=42"
 
+      - name: Toolchain (WCH GCC 15.2 for the XW app build, checksum checked)
+        env:
+          WCH_GCC15_URL: ${{ vars.WCH_GCC15_URL }}
+        run: |
+          # tools/toolchain/README.md: the 7z from MounRiver Studio 2.5.0, kept where the project controls it
+          if [ -z "$WCH_GCC15_URL" ]; then echo "set the repository variable WCH_GCC15_URL (tools/toolchain/README.md)"; exit 1; fi
+          curl -sSL -o wch-gcc15.7z "$WCH_GCC15_URL"
+          echo "$(grep ' RISC-V Embedded GCC15.7z$' tools/toolchain/wch-gcc15-win64.sha256 | cut -c1-64)  wch-gcc15.7z" | sha256sum -c -
+          7z x -y -o"$RUNNER_TEMP/wch-gcc15" wch-gcc15.7z > /dev/null
+          bash tools/toolchain/check_wch_gcc.sh "$RUNNER_TEMP/wch-gcc15" wch-gcc15.7z
+          echo "WCH_GCC_DIR=$RUNNER_TEMP/wch-gcc15" >> "$GITHUB_ENV"
+
       - name: Host tests
         run: |
           cmd //c "test\\build_host.cmd"

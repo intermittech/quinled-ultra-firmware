@@ -124,32 +124,44 @@ extern volatile uint8_t pwm_forced;
 #define PWM_TRIP() pwm_force_off(1)
 #endif
 void led_set(uint8_t on);
-/* the test jig's pad (TP9 = PB10, pull-up) reads low: grounded */
-#if BOARD_TESTJIG
-#define TESTJIG_PAD_LOW() ((uint8_t)((GPIOB->INDR & (1u << 10)) == 0u))
+/* (0.6.7) the test jig's pads' levels (core/testjig.h tj_pads: TP6 counts only while no byte arrives): TP6 = PA3, the
+ * console's RX (pull-up), both boards; TP9 = PB10 (pull-up), the dig2analog-ultra only (the receiver's return-channel
+ * TX). uart_rx_pos: where the UART's RX DMA writes next */
+#define HW_TP6_LOW() ((uint8_t)((GPIOA->INDR & (1u << 3)) == 0u))
+#if BOARD == BOARD_D2A_ULTRA
+#define HW_TP9_LOW() ((uint8_t)((GPIOB->INDR & (1u << 10)) == 0u))
 #else
-#define TESTJIG_PAD_LOW() ((uint8_t)0u)
+#define HW_TP9_LOW() ((uint8_t)0u)
+#endif
+#if CONSOLE_FULL
+uint32_t uart_rx_pos(void);                     /* (the release console has no RX: TP6 is a GPIO alone) */
 #endif
 /* the flash: the stores (core/flashrec.h) on hw.c's flash_op. During an operation the tick runs from SRAM: main.c's
  * flash_poll_isr (the time base and the fast trip), which trips through hw_flash_trip (SRAM) */
 void flash_poll_isr(void);
 void hw_flash_trip(void);
+/* (review round 6) VDD below the PVD's 2.9 V (hw_init): flash_op would refuse (FLASH_ERR_VDD), so main.c's flash_may
+ * admits no write then: a store's budget token and its A/B entry are not used up by an operation that never starts */
+uint32_t hw_vdd_low(void);
 /* (0.6.5) the record pages' reads at boot, before hw_init: open = HCLK / 2 (the upper CodeFlash, board.h), 0 = back */
 void hw_records_window(uint32_t open);
 #if BOARD_RETURN
 /* the return channel (core/rc.h; the window runs in main.c's poll ISR). rc_hw_dir: RC_DIR_ANSWER turn around (the
  * input transceiver drives upstream from the relay node, the output one listens), RC_DIR_QUIET both listen (the
- * turnaround check failed), RC_DIR_FORWARD forward again (a burst still running is cut, the line released) */
+ * turnaround or burst check failed), RC_DIR_FORWARD forward again (a burst still running is cut, the line released) */
 enum { RC_DIR_FORWARD = 0, RC_DIR_ANSWER = 1, RC_DIR_QUIET = 2 };
 void     rc_hw_dir(uint32_t mode);
 /* poll ISR: the line HIGH (USART3 idles high on PB10), after RC_PREAMBLE_CYC DIN read back: LOW = another driver on
- * the segment (1: aborted, the line released); else the n bytes at brr by interrupt, the line released after them
+ * the segment (1: aborted, the line released); else a 0xFF (core/rc.h RC_LEAD_BYTES) and the n bytes at brr by
+ * interrupt, the line released after them
  * (n 0: the turnaround check, the line released at once) */
 uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr);
 #endif
-/* UART: RX by DMA into a ring, TX by DMA from a buffer (non-blocking unless the buffer is full) */
+/* UART: TX by DMA from a buffer (non-blocking unless the buffer is full); the full console's RX by DMA into a ring */
+#if CONSOLE_FULL
 int  uart_getc(void);                           /* -1 if nothing new; -2 once after a flash operation dropped
                                                    received bytes: cancel the line being typed */
+#endif
 void uart_write(const char *s);
 void uart_kick(void);                           /* start sending what uart_write buffered */
 uint32_t uart_busy(void);

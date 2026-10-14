@@ -427,21 +427,31 @@ def flash(elf):
         n = len(f.ops)
         check(f.ret == want and n <= 1 and f.mmio.get(FLASH + 0x10, 0) & 0x8080 == 0x8080,
               "%s: FLASH_ERR %d (%d), stopped after %d operation(s), locked again" % (name, want, f.ret, n))
-    # the console: a byte received during the operation (at half the baud) is dropped, and the line with it
-    u = FlashHal(elf)
-    u.mmio[DMA6_CNTR] = 60
-    u.wr(u.addr("uart_rx_pos"), 4, 4)
-    u.rx_during = 3
-    u.call("flash_op", [0x0800FF00, src, 1, 0])
-    check(u.rd(u.addr("uart_rx_drop"), 1) == 1 and u.rd(u.addr("uart_rx_pos"), 4) == 7,
-          "a byte received meanwhile: dropped (rx pos %d), the line cancelled (%d)"
-          % (u.rd(u.addr("uart_rx_pos"), 4), u.rd(u.addr("uart_rx_drop"), 1)))
-    u2 = FlashHal(elf)
-    u2.mmio[DMA6_CNTR] = 60
-    u2.wr(u2.addr("uart_rx_pos"), 4, 4)
-    u2.call("flash_op", [0x0800FF00, src, 1, 0])
-    check(u2.rd(u2.addr("uart_rx_drop"), 1) == 0 and u2.rd(u2.addr("uart_rx_pos"), 4) == 4,
-          "nothing received meanwhile: nothing dropped")
+    if "uart_rx_r" in FlashHal(elf).syms:
+        # the full console (CONSOLE_FULL 1): a byte received during the operation (at half the baud) is dropped, and
+        # the line with it
+        u = FlashHal(elf)
+        u.mmio[DMA6_CNTR] = 60
+        u.wr(u.addr("uart_rx_r"), 4, 4)
+        u.rx_during = 3
+        u.call("flash_op", [0x0800FF00, src, 1, 0])
+        check(u.rd(u.addr("uart_rx_drop"), 1) == 1 and u.rd(u.addr("uart_rx_r"), 4) == 7,
+              "a byte received meanwhile: dropped (rx pos %d), the line cancelled (%d)"
+              % (u.rd(u.addr("uart_rx_r"), 4), u.rd(u.addr("uart_rx_drop"), 1)))
+        u2 = FlashHal(elf)
+        u2.mmio[DMA6_CNTR] = 60
+        u2.wr(u2.addr("uart_rx_r"), 4, 4)
+        u2.call("flash_op", [0x0800FF00, src, 1, 0])
+        check(u2.rd(u2.addr("uart_rx_drop"), 1) == 0 and u2.rd(u2.addr("uart_rx_r"), 4) == 4,
+              "nothing received meanwhile: nothing dropped")
+    else:
+        # (0.6.7) the release console only sends: hw_init leaves USART2's receiver off and DMA1 ch6 untouched (free)
+        r = FlashHal(elf)
+        r.call("hw_init")
+        ch6 = [(a_, v) for a_, v in r.writes if dch(6) <= a_ < dch(6) + 0x10]
+        check(not (r.mmio.get(0x4000440C, 0) & 4) and not ch6,
+              "the release console: USART2 RE off (CTLR1 %04x), DMA1 ch6 never written (%d writes)"
+              % (r.mmio.get(0x4000440C, 0), len(ch6)))
     # the SRAM tick: the same two-sample trip, through hw_flash_trip; a held sample is skipped
     t = FlashHal(elf)
     t.call("hw_init")
@@ -494,6 +504,9 @@ def vectors(elf):
           % ("%08x" % mt if mt is not None else "not written", entry))
     handlers = {e.addr(f): f for f in ("poll_isr", "gate_isr", "slew2_isr", "slew3_isr")}
     want = {0x8000000C: "poll_isr", 0x8000002E: "gate_isr", 0x8000002C: "slew2_isr", 0x8000002D: "slew3_isr"}
+    if "rc_uart_isr" in e.syms:                          # (review r6) the receiver: USART3 (55) too, should VTF slot 1
+        handlers[e.addr("rc_uart_isr")] = "rc_uart_isr"  # not take it
+        want[0x80000037] = "rc_uart_isr"
     bad = []
     # every exception code (0-11: the privileged spec's below the page faults; QingKe V4 has no MMU), every interrupt
     # number of the CH32V203 (0-69; above 63 the low 6 bits alias 0-5)
@@ -513,8 +526,8 @@ def vectors(elf):
             x[0] = 0
         if got != want.get(cause) or (got is None and pc not in seen):
             bad.append("%08x -> %s" % (cause, got))
-    check(not bad, "SysTick / TIM4 / TIM2 / TIM3 to poll / gate / slew2 / slew3, the other 78 causes to the loop %s"
-          % (bad[:4] or ""))
+    check(not bad, "SysTick / TIM4 / TIM2 / TIM3%s to poll / gate / slew2 / slew3%s, the other %d causes to the loop %s"
+          % (" / USART3" if len(want) > 4 else "", " / rc_uart" if len(want) > 4 else "", 82 - len(want), bad[:4] or ""))
 
 
 def ramtext(elf):

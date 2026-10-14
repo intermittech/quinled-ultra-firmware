@@ -25,6 +25,33 @@ def sx(v, bits):
     return v - (1 << bits) if v >> (bits - 1) else v
 
 
+XW_EXECUTED = [0]          # XW instructions executed (all Emu instances): the tools can check XW ran
+
+
+def xw_decode(h):
+    """WCH XW (QingKe V4B/C/F, WCH GCC -march=..._xw): 16-bit byte / halfword loads and stores, in RV32C's
+    unused C.FLD / C.FSD / C.FLDSP / C.FSDSP slots and the reserved Q0 100. Encodings derived from WCH's GCC 15.2
+    assembler (review round 5, the XW study; tools/toolchain/README.md). Returns (is_store, size, reg, base, offset)
+    or None.
+      Q0 001 c.lbu / Q0 101 c.sb   rd'/rs2' 4:2, rs1' 9:7, off[0]=12 off[2:1]=6:5 off[4:3]=11:10   (0..31)
+      Q2 001 c.lhu / Q2 101 c.sh   rd'/rs2' 4:2, rs1' 9:7, off[5]=12 off[2:1]=6:5 off[4:3]=11:10   (0..62)
+      Q0 100, 12:11 = 00, 6:5 = 00 c.lbusp 01 c.lhusp 10 c.sbsp 11 c.shsp, rd'/rs2' 4:2,
+          byte: off[3:0]=10:7 (0..15), half: off[3:1]=10:8 off[4]=7 (0..30)"""
+    q, f3 = h & 3, h >> 13
+    rp, bp = 8 + ((h >> 2) & 7), 8 + ((h >> 7) & 7)
+    mid = (((h >> 5) & 1) << 1) | (((h >> 6) & 1) << 2) | (((h >> 10) & 3) << 3)
+    if q == 0 and f3 in (1, 5):
+        return f3 == 5, 1, rp, bp, mid | ((h >> 12) & 1)
+    if q == 2 and f3 in (1, 5):
+        return f3 == 5, 2, rp, bp, mid | (((h >> 12) & 1) << 5)
+    if q == 0 and f3 == 4 and (h >> 11) & 3 == 0:
+        sub = (h >> 5) & 3
+        if sub in (0, 2):
+            return sub == 2, 1, rp, 2, (h >> 7) & 0xF
+        return sub == 3, 2, rp, 2, (((h >> 8) & 7) << 1) | (((h >> 7) & 1) << 4)
+    return None
+
+
 class Emu:
     def __init__(self, elf):
         data = open(elf, "rb").read()
@@ -195,6 +222,14 @@ class Emu:
     def _c(self, h, pc, x):
         q, f3 = h & 3, h >> 13
         r = lambda v: 8 + (v & 7)
+        xw = xw_decode(h)
+        if xw is not None:                                         # WCH XW byte / halfword load / store
+            st, n, reg, base, off = xw
+            XW_EXECUTED[0] += 1
+            a = (x[base] + off) & 0xFFFFFFFF
+            if st:
+                self.wr(a, n, x[reg]); return pc + 2, "store"
+            x[reg] = self.rd(a, n); return pc + 2, "load"
         if q == 0:
             rdp, rs1p = r(h >> 2), r(h >> 7)
             if f3 == 0:                                            # c.addi4spn

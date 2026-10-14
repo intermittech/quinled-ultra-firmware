@@ -114,8 +114,7 @@ static void test_version(void)
         st.en = &test_en;
         st.version = "0.4 (development build)";
         run_cli(&c, "version\r");
-        CHECK(strstr(cli_out, "QuinLED dig2analog-ultra firmware v0.4 (development build), Copyright (C) 2026 QuinLED, "
-                              "GPL-3.0, source: github.com/intermittech/quinled-ultra-firmware\r\n") != 0 &&
+        CHECK(strstr(cli_out, "QuinLED dig2analog-ultra v0.4 (development build) (GPL-3.0)\r\n") != 0 &&
               strstr(cli_out, "app standalone build") != 0, "banner of a standalone development build");
         CHECK(ver_apply_cmd == CMD_IDENTIFY && ver_apply_arg == CFG_IDENTIFY_VERSION, "`version` blinks the version");
         st.version = "0.6.0-beta.1";
@@ -125,7 +124,7 @@ static void test_version(void)
         st.app_state = 1;
         memcpy(st.bl_build, "1a2b3c4d", 9);
         run_cli(&c, "status\r");
-        CHECK(strstr(cli_out, "QuinLED dig2analog-ultra firmware v0.6.0-beta.1, Copyright (C) 2026 QuinLED") == cli_out &&
+        CHECK(strstr(cli_out, "QuinLED dig2analog-ultra v0.6.0-beta.1 (GPL-3.0)\r\n") == cli_out &&
               strstr(cli_out, "bootloader rev 1 (build 1a2b3c4d), hardware 1 revision 1, app trial (not confirmed yet)") != 0,
               "status starts with the banner and the bootloader line");
         st.app_state = 2;

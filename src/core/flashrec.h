@@ -33,6 +33,8 @@
 #define FLASH_ERR_KEY 4u            /* the flash did not unlock */
 #define FLASH_ERR_VERIFY 5u         /* a half-word read back differently (FLASH_VERIFY builds only, BENCH) */
 #define FLASH_ERR_VDD 6u            /* (0.6.5) VDD below the PVD's 2.9 V: not started (DS table 4-17: >= 2.4 V) */
+#define FLASH_ERR_UART 7u           /* (review round 6) the console's byte in flight didn't finish (TC): not started,
+                                       so the baud never halves mid-byte (hw.c flash_op); a failure, as the others */
 
 /* the primitive (hal/hw.c; test/test_soak.c: its model): erase the 256-byte page at erase_addr (0: none), then program
  * `halfwords` half-words from src at addr (erased flash). Returns FLASH_OK or FLASH_ERR_*. */

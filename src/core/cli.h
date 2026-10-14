@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* UART diagnostics console (USART2 on TP5 TX / TP6 RX, 115200 8N1, line based, CR or LF ends a line).
+/* UART diagnostics console (USART2 on TP5 TX, 115200 8N1). (0.6.7, Quindor) The release (core/config.h CONSOLE_FULL 0)
+ * only sends: the banner at boot, a line of live values (as `watch`) every second, the full status once the live
+ * values are valid (~3 s) and every minute (in parts), the firmware's messages and the test jig's lines (the stream
+ * pauses in test mode); no input (TP6 is the test jig's pad). CONSOLE_FULL 1 (the bench) adds TP6 RX and the
+ * commands, line based (CR or LF ends a line):
  *   help | ?            command list
  *   status              firmware, uptime, reset cause, stack used, protocol, frame / error counters, frame rate,
  *                       CPU load (the last second, the busiest since the last status), outputs
@@ -27,6 +31,7 @@
 #include "calhist.h"
 #include "config.h"
 #include "energy.h"
+#include "store.h"                  /* (D9) */
 #include "health.h"
 #include "pwrev.h"
 #include "scene.h"
@@ -138,15 +143,25 @@ typedef struct {
 
 typedef struct {
     void (*write)(const char *s);
+#if CONSOLE_FULL
     cfg_result_t (*apply)(uint8_t cmd, uint8_t arg);    /* runs config_apply + the main loop's follow-up */
     void (*save_now)(void);
     void (*status_begin)(void);    /* snapshot and reset extrema only for an actual status command */
+#endif
     const settings_t *set;
+#if MON_EXTRA && CONSOLE_FULL
+    const store_ext_t *ext;        /* (0.6.7, D9) the settings' extension (store.h: the current limit, options) */
+    /* (0.6.7, D9) `restore`: a backup checked here (length, CRC, version, board); main.c applies its settings,
+     * extension and calibration (as stored: 16 + 7 + 48 bytes) after its own checks: 1 = taken */
+    int (*restore)(const uint8_t *data);
+#endif
     const scene_t *scene;          /* power-on scene (stored, or about to be) */
     const cli_status_t *st;
-    char line[48];
+#if CONSOLE_FULL
+    char line[MON_EXTRA ? 168 : 48];   /* (D9: a `restore` line is 158 + some slack; 48 without it) */
     uint16_t watch_ms;             /* `watch`: a status line every watch_ms (main.c), 0 = off; any key stops it */
     uint8_t len;
+#endif
     uint8_t  st_part;              /* (0.6.5) `status` / `help` in progress: the next part + 1 (0 = none; cli_poll) */
 } cli_t;
 /* (0.6.5) the console output's next part (a `status` or `help` in progress): 1 while more remain. main.c calls it
@@ -154,27 +169,32 @@ typedef struct {
 #define CLI_PART_ROOM 512u
 uint32_t cli_poll(cli_t *c);
 
+#if CONSOLE_FULL
 void cli_feed(cli_t *c, char ch);
+#endif
 /* a message of the firmware on the console: z = Z(name, "text\r\n") (core/cz.h; a '%' as "%%"); it writes through
  * c->write: only after main() has set it (it does, before the boot's first flash write) */
 void cli_say(cli_t *c, int z);
-/* "QuinLED dig2analog-ultra firmware v<version>, Copyright (C) 2026 QuinLED, GPL-3.0, source: ..." and the
- * bootloader / hardware / app line: at boot, first in `status`, and `version` */
+/* the banner and the bootloader / hardware / app line: at boot, first in `status`, and `version`. The release:
+ * "QuinLED <the board> v<version>, (C) 2026 QuinLED, GPL-3.0, <the source>"; the full console (0.6.7: one short line):
+ * "QuinLED dig2analog-ultra v<version> (GPL-3.0)" */
 void cli_banner(cli_t *c);
-/* test jig mode, after each cycle: each channel's current at the peak of pct % (mA), its estimate at 100 %, and the
- * supply (mV, 0 = not read); then (0.6.5) one line for a jig PC:
+/* test jig mode, after each cycle: one line for a jig PC (0.6.5 D10; 0.6.7: the only report). Its format is fixed,
+ * jig software parses it (README: Test jig):
  *   jig cycle=7 PASS fail=0 a=0.14/0.13/0.40/0.80/0.00 supply=24.01 uid=19088743,2309737967,4275878552 fw=0.6.5
- * PASS when every channel's current at pct % is within core/testjig.h's TJ_PASS_MIN_MA .. TJ_PASS_MAX_MA, else FAIL and
- * fail's bits R 1, G 2, B 4, W1 8, W2 16 (exact mA; the line shows them in A, as the report); the supply in V (0.00 = not
- * read); the chip's unique id (st->uid: its three words at 0x1FFFF7E8, decimal) and the firmware version (st->version:
- * the rest of the line) */
-void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv);
+ * ma: each channel's current at TJ_PEAK_PCT (mA; the line shows A); fail: core/testjig.c's verdict, PASS when 0, else
+ * FAIL and its bits R 1, G 2, B 4, W1 8, W2 16 (a channel outside TJ_PASS_MIN_MA .. TJ_PASS_MAX_MA); the supply (mV,
+ * 0 = not read: 0.00); the chip's unique id (st->uid: its three words at 0x1FFFF7E8, decimal) and the firmware version
+ * (st->version: the rest of the line) */
+void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t fail, uint32_t cycle, uint32_t supply_mv);
 /* `watch`: one line of the live values (the snapshot in st) */
 void cli_watch(cli_t *c);
 #define HW_DIAG_N 9u                /* (0.6.5, D6) cli_status_t.hwd's length: hal/hw.h's (the same definition: main.c
                                        sees both) */
+#if CONSOLE_FULL
 /* exposed for tests */
 void cli_exec(cli_t *c, const char *line);
+#endif
 
 /* (0.6.5, D2) the event log: the last EVLOG_N events with the uptime they came at (main.c ev_add; RAM, a reset clears
  * it). Fed by what counts them already, no counter of its own: the power events (pwrev_t.ev: a limit event, a trip,

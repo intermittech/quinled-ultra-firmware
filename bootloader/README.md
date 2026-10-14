@@ -72,7 +72,7 @@ input, and the board's pull-downs keep the gate drivers off.
 
 | | |
 |---|---|
-| Flash | 6,520 of 8,192 bytes. `-fno-optimize-crc`: GCC 15 would turn the bitwise CRCs into 1.75 KB of tables |
+| Flash | 6,604 of 8,192 bytes (bootloader 2, 0.6.5: `UPD_APP_END` 0x0801_0000, 57,088-byte bodies, images say `min_bootloader 2`; 0.6.4's layout, `UPPER_RECORDS=0`: bootloader 1, 6,612 B; 0.6.7: +8 B, +4 B, below). `-fno-optimize-crc`: GCC 15 would turn the bitwise CRCs into 1.75 KB of tables |
 | RAM | 16,960 B buffers (`.noinit`: ring 4 KB, session + 48-page pool 12.7 KB) + 1.5 KB stack, of 20,448 |
 | Fast boot path | ~0.1 ms at 8 MHz (descriptor CRC by the CRC unit, status records, hand-over) |
 | Decoder | 36.7 cycles per 16-sample word on average, 39 inside a frame: 61 % of the 144 MHz CPU (budget 64) |
@@ -84,7 +84,7 @@ input, and the board's pull-downs keep the gate drivers off.
 - 144 MHz / 36 MHz reuses the app's sampling rate and thresholds, with margin.
 - Flash operations then run at HCLK / 2, and the decoder resyncs after each one; the host's page pause covers it.
 
-## Tests (`bootloader\test\build_bl_test.cmd`, MSVC; 441 + 50 checks, 53 with `BL_TEST_IMAGE`)
+## Tests (`bootloader\test\build_bl_test.cmd`, MSVC; 669 checks (+ the round-4 ones) and the sender's 90)
 
 **Flash model**
 
@@ -95,7 +95,8 @@ input, and the board's pull-downs keep the gate drivers off.
 
 **`bl_tests.exe`**
 
-- **Erase plan:** contiguous, inside 0x2000-0xF6FF, descriptor sector first.
+- **Erase plan:** contiguous, inside 0x2000-0xFFFF (bootloader 2; 0x2000-0xF6FF with 0.6.4's layout), descriptor
+  sector first.
 - **Descriptor checks:** every field.
 - **Boot decision table:** including watchdog loop, reset flags, request survival.
 - **Clean update**, 30.5 KB, 3 passes: 4.2 s, verified, trial, confirmed by PING, then the fast path.
@@ -129,7 +130,7 @@ input, and the board's pull-downs keep the gate drivers off.
 quinled-ultra-esphome: `ULTRA_ESPHOME`, else next to the firmware repository, else next to the hardware project)
 
 - 30.5 KB: 4.4 s on the wire at the hub's worst-case bit time.
-- Full slot (54,784 B): 7.2 s.
+- Full slot of 0.6.4's layout (54,784 B): 7.2 s (bootloader 2's slot is 57,088 B).
 - 1 % loss + a 50-board lead-in + a forced downgrade.
 - ABORT, PING.
 - `fw_version.h` semver ordering.
@@ -140,7 +141,7 @@ quinled-ultra-esphome: `ULTRA_ESPHOME`, else next to the firmware repository, el
 
 | # | Check | If it fails |
 |---|---|---|
-| 1 | Fast page program (FTPG, 64 words + PGSTRT), fast page erase, 4 KB sector erase at HCLK / 2; BSY / WRBSY / EOP; times (2 / 16 / 16 ms) | sequence per WCH's library; times feed `UPD_PAGE_PAUSE` (host) |
+| 1 | Fast page program (FTPG, 64 words + PGSTRT), fast page erase, 4 KB sector erase at HCLK / 2; BSY / WRBSY / EOP; times (2 / 16 / 16 ms). (0.6.7, review round 6 F1) An operation that ends without EOP is an error, as WRPRTERR: an update stops at the first failed erase, before a later sector goes (`test/test_r6_boot_eop.py` runs the compiled helpers and session on the emulator) | sequence per WCH's library; times feed `UPD_PAGE_PAUSE` (host); a no-EOP end on silicon: the bench plan |
 | 2 | Erased flash reads 0xE339E339 | status checks accept 0xFFFF too |
 | 3 | Standard half-word programming of single records into a page that already holds records (status area, descriptor) | records as whole fast pages (needs a page per record) |
 | 4 | After programming the zero-wait area, do CPU reads see the new data before a reset? | the design doesn't depend on it (VERIFY runs after a reset) |

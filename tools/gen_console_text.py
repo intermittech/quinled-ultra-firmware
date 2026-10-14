@@ -2,7 +2,8 @@
 # Copyright (C) 2026 QuinLED
 """Compress the console's text at build time (byte-pair tokens), for core/cz.h's streaming decoder.
 
-    python tools/gen_console_text.py <out dir> [--perf] [--upper] [--no-jig] [source.c ...]   (default: the sources in SOURCES)
+    python tools/gen_console_text.py <out dir> [--perf] [--upper] [--no-jig] [--full] [source.c ...]   (default: the sources
+    in SOURCES)
 
 Writes <out dir>/cz_text.h (rewritten only when it changes); tools/build_target.sh, test/build_host.cmd and
 test/build_robust.cmd run it and add <out dir> to the include path.
@@ -13,8 +14,11 @@ used again with the same text). ZP(name, "text") is the same for a PERF build's 
 `perf`): read only with --perf (build_target.sh with PERF=1 / 2), so a release's blob holds none of them. ZU(...):
 the texts of the monitoring only the upper record layout has room for (core/config.h MON_EXTRA): read with --upper
 (build_target.sh unless UPPER_RECORDS=0; the host tests' builds); ZL(...) the same text for 0.6.4's layout, read
-only without --upper. ZJ(...): the test jig's texts, left out with --no-jig (build_target.sh for BOARD=2: the
-Diff-Power receiver has no test pad).
+only without --upper. ZJ(...): the test jig's texts, left out with --no-jig. (0.6.7) ZC(...): the full console's
+texts (core/config.h CONSOLE_FULL: commands, help, the keys, their replies), read only with --full (build_target.sh
+with CONSOLE_FULL=1, the host tests' builds): the release console takes no input and holds none of them. The marks
+combine: Z and any of P, U, L, J, C, each a condition the text needs (ZCU: --full and --upper, ZCL: --full without
+--upper).
 
 Format (decoded by cz_next in core/cli.c, character by character, no buffer):
   - every string is stored once (identical texts share it), compressed, and ends with a NUL byte;
@@ -94,15 +98,21 @@ def shown(path):
         return path.replace("\\", "/")
 
 
-def scan(path, perf=False, upper=False, no_jig=False):
-    """[(name, text bytes, 'file:line')] for every Z(name, "..." ...) in path (and ZP(...) with perf, ZU(...) with
-    upper, ZJ(...) unless no_jig)."""
+def wanted(mark, perf, upper, no_jig, full):
+    """a mark Z + conditions: P perf, U upper, L not upper, J not no_jig, C full"""
+    c = mark[1:]
+    return (re.fullmatch(r"Z[PULJC]*", mark) is not None and ("P" not in c or perf) and ("U" not in c or upper) and
+            ("L" not in c or not upper) and ("J" not in c or not no_jig) and ("C" not in c or full))
+
+
+def scan(path, perf=False, upper=False, no_jig=False, full=False):
+    """[(name, text bytes, 'file:line')] for every Z(name, "..." ...) in path whose mark's conditions hold (ZP(...)
+    with perf, ZU(...) with upper, ZL(...) without, ZJ(...) unless no_jig, ZC(...) with full; combined: all of them)"""
     found, toks = [], list(tokens(path))
     rel = shown(path)
-    marks = ("Z",) + (("ZP",) if perf else ()) + (("ZU",) if upper else ("ZL",)) + (() if no_jig else ("ZJ",))
     for i in range(len(toks) - 4):
-        if toks[i][0] != "id" or toks[i][1] not in marks or toks[i + 1][1] != "(" or toks[i + 2][0] != "id" \
-                or toks[i + 3][1] != ",":
+        if toks[i][0] != "id" or not wanted(toks[i][1], perf, upper, no_jig, full) or toks[i + 1][1] != "(" or \
+                toks[i + 2][0] != "id" or toks[i + 3][1] != ",":
             continue
         j, text = i + 4, b""
         if toks[j][0] != "str":
@@ -197,10 +207,12 @@ def main():
         raise SystemExit(__doc__)
     out_dir = sys.argv[1]
     perf, upper, no_jig = "--perf" in sys.argv[2:], "--upper" in sys.argv[2:], "--no-jig" in sys.argv[2:]
-    srcs = [a for a in sys.argv[2:] if a not in ("--perf", "--upper", "--no-jig")] or [os.path.join(FW, s) for s in SOURCES]
+    full = "--full" in sys.argv[2:]
+    srcs = [a for a in sys.argv[2:] if a not in ("--perf", "--upper", "--no-jig", "--full")] or \
+        [os.path.join(FW, s) for s in SOURCES]
     names, texts, order = {}, [], {}
     for path in srcs:
-        for name, text, where in scan(path, perf, upper, no_jig):
+        for name, text, where in scan(path, perf, upper, no_jig, full):
             if name in names and names[name][0] != text:
                 raise SystemExit("%s: Z(%s) has another text at %s" % (where, name, names[name][1]))
             names.setdefault(name, (text, where))

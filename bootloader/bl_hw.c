@@ -311,7 +311,7 @@ static int fl_done(uint32_t ctlr_bits)
     FLASH->CTLR |= FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK;
     RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV1;
     hw_flash_stall = 1;
-    return (st & FLASH_STATR_WRPRTERR) ? -1 : 0;
+    return (st & FLASH_STATR_WRPRTERR) || !(st & FLASH_STATR_EOP) ? -1 : 0;
 }
 
 int bl_plat_erase_sector(uint32_t addr)

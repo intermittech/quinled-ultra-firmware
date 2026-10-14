@@ -18,15 +18,18 @@
  *  - The hub decodes segment 0 as a UART at its nominal rate (line HIGH, start bit, 8 bits LSB first, stop bit),
  *    32 bytes per answer, checks the CRC and the content.
  * Checked over random chains: no fight, each receiver's timing inside the spec's windows (turn around 250-900 us, line
- * HIGH at s_i -20 / +80 us, its start bit 2-10 us later, LOW again before the next slot, forward again W..W+60 us,
+ * HIGH at s_i -20 / +80 us, its start bit 2-10 us later, LOW again before the next slot, forward again W..W+64 us,
  * before the hub's next frame at W + 200 us), every answer decoded by the hub, relay-only receivers silent.
  * Failures: a receiver that doesn't take part (its POLL lost, the clock not rated, a late main loop): the one behind it
- * stops at the turnaround check (no fight: without the check, the relayed bursts of the receivers further down fight
+ * stops after the turnaround check (the HIGH probe can fight; without the check, the relayed bursts further down fight
  * its forward driver), the hub gets the answers before it and retries the rest; an answer the hub receives damaged
  * (CRC): retried; 500 / 250 kbaud. Power events (core/pwrev.c): a hub reading POWER from 8 receivers with trips,
  * limit events and dips between its polls and lost answers / acknowledges never misses an event, and a latch clears
  * only with its counts. */
 #include "../src/core/rc.h"
+#ifndef RC_LEAD_BYTES
+#define RC_LEAD_BYTES 0u                   /* (firmware before the lead byte: the burst is the 32-byte answer alone) */
+#endif
 
 /* ------------------------------------------------------------------------------------------------ units */
 static void rc_poll_slot(uint8_t *s, uint8_t seq, uint8_t index, uint8_t slots, uint8_t page, uint8_t rate,
@@ -46,6 +49,11 @@ static void rc_poll_slot(uint8_t *s, uint8_t seq, uint8_t index, uint8_t slots, 
     }
     ultra_put16(s + 30, ultra_crc16(s, 30));
 }
+
+/* forward mode again W .. W + this (review r6: the 0.2.4 proposal's ULTRA_RW_END_US 60 can't hold a 50 us tick with
+ * a 200 ppm rate error over the longest window, 4.7 us each way: proposed 80 (claude-telemetry, as ULTRA_RW_LATE_US) or
+ * 64 (gpt-protocol); held to the stricter here) */
+#define RCS_END_US 64.0
 
 static void test_rc_units(void)
 {
@@ -103,7 +111,26 @@ static void test_rc_units(void)
     rc_schedule(&sc, 0xFFFFFFF0u, 0, nominal, s);
     CHECK(sc.dir_tick == 0xFFFFFFF0u + 10u && sc.end_tick == 0xFFFFFFF0u + 66u, "rc: across the tick's wrap");
     rc_schedule(&sc, 0, 0, (uint32_t)(50.0 / 1.02 * 65536.0), s);   /* a 2 % fast HSI: more ticks per host us */
-    CHECK(sc.end_tick == (uint32_t)ceil(3252.0 * 1.02 / 50.0), "rc: a fast HSI's ticks (%u)", sc.end_tick);
+    CHECK(sc.end_tick == (uint32_t)ceil((3250.0 + RC_END_US) * 1.02 / 50.0), "rc: a fast HSI's ticks (%u)", sc.end_tick);
+    /* (review r6) forward again at W .. W + RCS_END_US for every t0 phase in the tick and a +-200 ppm error of the
+     * measured rate, at the longest window (16 slots at 250 kbaud: W = 23,560 us); 3 us for the ISR's latency and a
+     * 2.2 % slow HSI's longer tick */
+    {
+        double lo = 1e9, hi = -1e9, e;
+        int32_t bk;
+        int sgn;
+        rc_poll_slot(s, 9, 0, 16, 0, 2, 0, 0);
+        for (sgn = -1; sgn <= 1; sgn += 2) {
+            for (bk = 0; bk < 1800; bk += 3) {
+                rc_schedule(&sc, 1000u, bk, (uint32_t)(nominal * (1.0 + sgn * 200e-6)), s);
+                e = (double)(sc.end_tick - 1000u) * 50.0 + bk / 36.0 - 23560.0;
+                lo = e < lo ? e : lo;
+                hi = e > hi ? e : hi;
+            }
+        }
+        CHECK(lo >= 0.0 && hi + 3.0 <= RCS_END_US, "rc: forward again W %+.1f .. %+.1f us (+-200 ppm, 23.6 ms)",
+              lo, hi);
+    }
     rc_poll_slot(s, 9, ULTRA_POLL_RELAY_ONLY, 16, 0, 2, 0, 0);
     rc_schedule(&sc, 0, 0, nominal, s);
     CHECK(sc.end_tick == (1000u + 16u * 1410u + 49u) / 50u, "rc: relay only, 16 slots at 250 kbaud (%u)", sc.end_tick);
@@ -114,6 +141,11 @@ static void test_rc_units(void)
     CHECK(rc_brr((uint32_t)(50.0 / 0.979 * 65536.0), 0) == 141u, "rc: BRR for a 2.1 %% slow HSI (%u)",
           rc_brr((uint32_t)(50.0 / 0.979 * 65536.0), 0));
     CHECK(rc_brr(nominal / 2u, 0) == 144u && rc_brr(0xFFFFFFFFu, 1) == 288u, "rc: BRR for an implausible rate");
+    /* (review r6) 500 / 250 kbaud at their own resolution: 576 x 1.015 = 584.6 (0.6.6: 146 x 4 = 584, 0.35 % off) */
+    CHECK(rc_brr((uint32_t)(50.0 / 1.015 * 65536.0), 2) == 585u && rc_brr((uint32_t)(50.0 / 1.015 * 65536.0), 1) ==
+          292u && rc_brr((uint32_t)(50.0 / 1.07 * 65536.0), 2) == 576u, "rc: BRR at 250 / 500 kbaud for a 1.5 %% fast "
+          "HSI (%u %u), 7 %% implausible", rc_brr((uint32_t)(50.0 / 1.015 * 65536.0), 2),
+          rc_brr((uint32_t)(50.0 / 1.015 * 65536.0), 1));
 
     for (i = 0; i < 32u; i++) {
         a[i] = (uint8_t)(i * 7u);
@@ -151,7 +183,7 @@ typedef struct {
     uint16_t uid16;
     /* what it did (us of real time; 0 = never) */
     double t0;                             /* the frame's last edge as it arrived here */
-    double dir_on, check_at, tx_high, tx_start, tx_end, fwd_at;
+    double dir_on, check_at, check_end, tx_high, tx_start, tx_end, fwd_at, quiet_at;
     int took_part, quiet, sent, aborted;
     uint8_t ans[32];
 } rcs_board_t;
@@ -162,7 +194,7 @@ typedef struct {
     double t0;                             /* the hub's frame end (its last edge leaves) */
     uint32_t steps;
     uint8_t *node[RCS_MAX];                /* each receiver's relay node (its input DI), per step */
-    uint32_t fights[RCS_MAX + 1], fight_steps;
+    uint32_t fights[RCS_MAX + 1], fight_steps, late_fights;
     uint8_t got[16][32];                   /* the hub's decoded answers by index */
     int got_n[16], hub_bytes_bad;
 } rcs_t;
@@ -182,7 +214,7 @@ static void rcs_board_run(rcs_t *c, int k)
     }
     b->t0 = c->t0 + hop_total;                           /* the frame's last edge, here */
     b->took_part = b->quiet = b->sent = b->aborted = 0;
-    b->dir_on = b->check_at = b->tx_high = b->tx_start = b->tx_end = 0.0;
+    b->dir_on = b->check_at = b->tx_high = b->tx_start = b->tx_end = b->quiet_at = 0.0;
     if (b->fail != RCS_NONE) {
         return;                                          /* forward mode throughout */
     }
@@ -194,13 +226,14 @@ static void rcs_board_run(rcs_t *c, int k)
     b->took_part = 1;
     b->dir_on = rcs_tick_time(b, s.dir_tick) + b->latency;
     b->check_at = rcs_tick_time(b, s.check_tick) + b->latency;
+    b->check_end = b->check_at + (double)RC_PREAMBLE_CYC / (144.0 * b->hsi) + 0.1;   /* HIGH, read back, released */
     b->fwd_at = rcs_tick_time(b, s.end_tick) + b->latency;
     if (b->poll[RC_P_INDEX] != ULTRA_POLL_RELAY_ONLY) {
         b->sent = 1;
         b->tx_high = rcs_tick_time(b, s.tx_tick) + b->latency;
         b->tx_start = b->tx_high + (double)RC_PREAMBLE_CYC / (144.0 * b->hsi) + 0.1;
         bit = (double)rc_brr(b->rate_q16, b->poll[RC_P_RATE]) / (144.0 * b->hsi);
-        b->tx_end = b->tx_start + 320.0 * bit;
+        b->tx_end = b->tx_start + (32.0 + RC_LEAD_BYTES) * 10.0 * bit;
     }
 }
 
@@ -215,7 +248,8 @@ static int rcs_upper_drives(const rcs_t *c, int k, double t)
     return !u->took_part || t < u->dir_on || t >= u->fwd_at;
 }
 
-/* the turnaround check and the burst's read-back: a receiver drives HIGH and reads LOW where another drives */
+/* Assumption, NOT an electrical guarantee: an opposing LOW driver wins the read-back.
+ * Model the HIGH probe and the time before the result shuts DE off; never apply future quiet retroactively. */
 static void rcs_checks(rcs_t *c)
 {
     int k;
@@ -224,20 +258,34 @@ static void rcs_checks(rcs_t *c)
         if (!b->took_part) {
             continue;
         }
-        if (c->check && rcs_upper_drives(c, k, b->check_at + 1.0)) {
+        if (!c->check) {
+            b->check_at = 0.0;
+        }
+        if (c->check && rcs_upper_drives(c, k, b->check_at + (double)RC_PREAMBLE_CYC / (144.0 * b->hsi))) {
             b->quiet = 1;                                /* stops driving upstream until the window's end */
+            b->quiet_at = b->check_at + (double)RC_PREAMBLE_CYC / (144.0 * b->hsi);
             b->sent = 0;
+            b->tx_high = b->tx_start = 0.0;
             b->aborted = 1;
         } else if (b->sent && rcs_upper_drives(c, k, b->tx_high + 2.9)) {
+            b->quiet = 1;
+            b->quiet_at = b->tx_start;
             b->sent = 0;
             b->aborted = 1;
         }
     }
 }
 
-static int rcs_tx_level(const rcs_board_t *b, double t, double bit)
+static int rcs_tx_level(const rcs_t *c, const rcs_board_t *b, double t, double bit)
 {
     int i, byte, pos;
+    (void)c;
+    if ((b->check_at > 0.0 && t >= b->check_at && t < b->check_end) ||
+        (b->tx_high > 0.0 && t >= b->tx_high && t < b->tx_start)) {
+        return 1;                                        /* the turnaround check's HIGH, an aborted burst's preamble:
+                                                            driven even without an answer (gpt-protocol: always;
+                                                            they reach the hub: claude-telemetry's UART test) */
+    }
     if (!b->sent || t < b->tx_high || t >= b->tx_end) {
         return -1;                                       /* PB10 not driven */
     }
@@ -253,14 +301,14 @@ static int rcs_tx_level(const rcs_board_t *b, double t, double bit)
     if (pos == 9) {
         return 1;
     }
-    return (b->ans[byte] >> (pos - 1)) & 1;
+    return ((byte < (int)RC_LEAD_BYTES ? 0xFF : b->ans[byte - (int)RC_LEAD_BYTES]) >> (pos - 1)) & 1;
 }
 
 /* drives segment s (s = 1..n: below receiver s-1) from below: receiver s answering (its DE in) */
 static int rcs_lower_drives(const rcs_t *c, int s, double t)
 {
     const rcs_board_t *b = &c->b[s];
-    return s < c->n && b->took_part && !b->quiet && t >= b->dir_on && t < b->fwd_at;
+    return s < c->n && b->took_part && (!b->quiet || t < b->quiet_at) && t >= b->dir_on && t < b->fwd_at;
 }
 
 static void rcs_simulate(rcs_t *c, double t_end)
@@ -268,6 +316,7 @@ static void rcs_simulate(rcs_t *c, double t_end)
     int k;
     uint32_t i;
     c->steps = (uint32_t)((t_end - c->t0) / RCS_STEP) + 1u;
+    c->late_fights = 0;
     for (k = 0; k <= RCS_MAX; k++) {
         c->fights[k] = 0;
     }
@@ -278,7 +327,7 @@ static void rcs_simulate(rcs_t *c, double t_end)
         c->node[k] = (uint8_t *)malloc(c->steps);
         for (i = 0; i < c->steps; i++) {
             double t = c->t0 + i * RCS_STEP;
-            int tx = rcs_tx_level(b, t, bit), lvl, up, low;
+            int tx = rcs_tx_level(c, b, t, bit), lvl, up, low;
             if (tx >= 0) {
                 lvl = tx;
             } else {                                     /* the output transceiver's RO: segment k+1 */
@@ -289,6 +338,7 @@ static void rcs_simulate(rcs_t *c, double t_end)
                     int v = (i >= (uint32_t)dly) ? c->node[s][i - dly] : 0;
                     if (v != 0) {
                         c->fights[s]++;                  /* receiver s relays a HIGH into this one's LOW */
+                        c->late_fights += t >= c->t0 + ULTRA_RW_FIRST_US;
                     }
                     lvl = 0;
                 } else if (low) {
@@ -307,7 +357,7 @@ static void rcs_hub_decode(rcs_t *c)
 {
     double bit = 1.0 * (1u << c->b[0].poll[RC_P_RATE]), t;
     int dly = (int)(c->b[0].hop / RCS_STEP), idx, nb = 0, k;
-    uint8_t buf[32];
+    uint8_t buf[32 + RC_LEAD_BYTES];
     uint32_t i = 0;
     memset(c->got_n, 0, sizeof c->got_n);
     c->hub_bytes_bad = 0;
@@ -335,7 +385,7 @@ static void rcs_hub_decode(rcs_t *c)
             if (j >= c->steps || !SEG0(j)) {
                 break;                                   /* no stop bit: the burst ended (line LOW) */
             }
-            if (nb < 32) {
+            if (nb < (int)sizeof buf) {
                 buf[nb] = v;
             }
             nb++;
@@ -345,9 +395,10 @@ static void rcs_hub_decode(rcs_t *c)
                 break;                                   /* idle HIGH: no more start bits */
             }
         }
-        if (nb == 32 && buf[0] == ULTRA_RSP_SYNC && ultra_get16(buf + 30) == ultra_crc16(buf, 30)) {
-            idx = buf[2] >> 4;
-            memcpy(c->got[idx], buf, 32);
+        if (nb == (int)sizeof buf && buf[RC_LEAD_BYTES] == ULTRA_RSP_SYNC &&
+            ultra_get16(buf + RC_LEAD_BYTES + 30) == ultra_crc16(buf + RC_LEAD_BYTES, 30)) {
+            idx = buf[RC_LEAD_BYTES + 2] >> 4;
+            memcpy(c->got[idx], buf + RC_LEAD_BYTES, 32);
             c->got_n[idx]++;
         } else if (nb >= 4) {
             c->hub_bytes_bad++;
@@ -355,6 +406,78 @@ static void rcs_hub_decode(rcs_t *c)
         while (i < c->steps && SEG0(i)) i++;
     }
 #undef SEG0
+}
+
+/* The hub as a real UART on segment 0 (review r6): a start bit is a falling edge after >= 3/16 bit HIGH (an STM32 /
+ * ESP32 style receiver at 16x), sampled mid-bit, the stop bit checked (LOW: a framing error, the byte kept with its
+ * flag); the next start bit is searched from the stop bit's sample on. The hub's software: bytes before SYNC are
+ * discarded, then 32 bytes without a framing error and a valid CRC are an answer (ULTRA_PROTOCOL 0.2.4: "discard to
+ * SYNC, take 32 bytes, check them"). Unlike rcs_hub_decode it does not resynchronise on every HIGH: a frame started by
+ * a turnaround check's pulse runs its 10 bits whatever comes. */
+static void rcs_hub_uart(rcs_t *c)
+{
+    static uint8_t by[2048], fe[2048];
+    double bit = 1.0 * (1u << c->b[0].poll[RC_P_RATE]);
+    int dly = (int)(c->b[0].hop / RCS_STEP), k;
+    uint32_t i = 0, hi = 0, need = (uint32_t)(3.0 / 16.0 * bit / RCS_STEP), n = 0, m;
+    memset(c->got_n, 0, sizeof c->got_n);
+    c->hub_bytes_bad = 0;
+#define SEG0(j) ((c->n > 0 && (j) < c->steps && rcs_lower_drives(c, 0, c->t0 + (j) * RCS_STEP) && \
+                  (j) >= (uint32_t)dly) ? c->node[0][(j) - dly] : 0)
+    while (i < c->steps) {
+        uint32_t s0, j;
+        uint8_t v = 0;
+        if (SEG0(i)) {
+            hi++;
+            i++;
+            continue;
+        }
+        if (hi < need) {                                 /* LOW, no idle before it: no start bit */
+            hi = 0;
+            i++;
+            continue;
+        }
+        s0 = i;
+        if (SEG0(s0 + (uint32_t)(0.5 * bit / RCS_STEP))) {
+            hi = 1;                                      /* a glitch, not a start bit */
+            i = s0 + (uint32_t)(0.5 * bit / RCS_STEP) + 1u;
+            continue;
+        }
+        for (k = 0; k < 8; k++) {
+            if (SEG0(s0 + (uint32_t)((1.5 + k) * bit / RCS_STEP))) {
+                v |= (uint8_t)(1u << k);
+            }
+        }
+        j = s0 + (uint32_t)(9.5 * bit / RCS_STEP);
+        if (j >= c->steps) {
+            break;
+        }
+        if (n < sizeof by) {
+            by[n] = v;
+            fe[n] = (uint8_t)!SEG0(j);
+            n++;
+        }
+        hi = SEG0(j) ? 1u : 0u;
+        i = j + 1u;
+    }
+#undef SEG0
+    for (m = 0; m + 32u <= n; m++) {                     /* the hub's software: to SYNC, 32 bytes, CRC */
+        uint32_t q, ok = by[m] == ULTRA_RSP_SYNC && !fe[m];
+        for (q = 1; ok && q < 32u; q++) {
+            ok = !fe[m + q];
+        }
+        if (ok) {
+            uint8_t a[32];
+            for (q = 0; q < 32u; q++) {
+                a[q] = by[m + q];
+            }
+            if (ultra_get16(a + 30) == ultra_crc16(a, 30)) {
+                memcpy(c->got[a[2] >> 4], a, 32);
+                c->got_n[a[2] >> 4]++;
+                m += 31u;
+            }
+        }
+    }
 }
 
 static void rcs_free(rcs_t *c)
@@ -428,7 +551,7 @@ static int rcs_timing_ok(const rcs_t *c, double w, int k, char *why, size_t n)
         return 0;
     }
     d = b->fwd_at - b->t0;
-    if (d < w || d > w + 60.0 || b->fwd_at > c->t0 + w + ULTRA_RW_HOLDOFF_US) {
+    if (d < w || d > w + RCS_END_US || b->fwd_at > c->t0 + w + ULTRA_RW_HOLDOFF_US) {
         snprintf(why, n, "forward again at %.1f us (W %.0f)", d, w);
         return 0;
     }
@@ -528,6 +651,7 @@ static void test_rc_chain(void)
                 for (k = 0; k <= RCS_MAX; k++) {
                     fights_check += (int)c.fights[k];
                 }
+                CHECK(c.late_fights == 0, "rc: no payload-slot fights after the probes (LOW-wins model)");
                 CHECK(got_before == f && got_after == 0 && quiet_ok && c.hub_bytes_bad == 0,
                       "rc: receiver %d doesn't take part (%d): %d of %d before it, %d after, the next one quiet %d, "
                       "bad bursts %d", f, mode, got_before, f, got_after, quiet_ok, c.hub_bytes_bad);
@@ -558,7 +682,8 @@ static void test_rc_chain(void)
         }
         printf("  one receiver out (lost POLL / unrated / late, each position): fight steps with the check %d, "
                "without %d\n", fights_check, fights_nocheck);
-        CHECK(fights_check == 0 && fights_nocheck > 0 && retry_ok, "rc: no fight with the turnaround check (%d; "
+        CHECK(fights_check > 0 && fights_check < 24 * RCS_MAX * 1200 && fights_nocheck > 0 && retry_ok,
+              "rc: bounded probe fights with the check (%d; "
               "without it %d), the retry gets the rest (%d)", fights_check, fights_nocheck, retry_ok);
     }
 
@@ -710,9 +835,71 @@ static void test_rc_power(void)
     CHECK(bad == 0 && latch_bad == 0, "rc power: hub counts %d off, latch / EVENT %d wrong", bad, latch_bad);
 }
 
+/* (review r6) the turnaround check's pulses reach the hub: each is a HIGH of 3 us, then the line LOW, which a UART takes
+ * as a start bit and runs as a 10-bit frame (a break). A check late in its tick (920-970 us) on one receiver and slot 0
+ * early in its tick on another: at 500 / 250 kbaud that frame's stop bit falls into slot 0's first byte, so the hub's
+ * UART is misframed and answer 0 is lost. Chains of 2-8 receivers, every one answering, the check pulses on the line,
+ * the hub a real UART. */
+#ifndef RCS_UART_TRIALS
+#define RCS_UART_TRIALS 500                /* windows per rate (0.6.6: ~15 answers lost at 250 kbaud) */
+#endif
+static void test_rc_hub_uart(void)
+{
+    static rcs_t c;
+    uint8_t idx[RCS_MAX];
+    int rate, trial, k, lost[3] = { 0, 0, 0 }, sent[3] = { 0, 0, 0 }, fights = 0;
+    double end_worst = -1e9;                   /* the burst's end against its slot's guard (s_i + pitch - 30 us) */
+    printf("return channel: the hub as a real UART, the turnaround check's pulses on the line (lead bytes %u)\n",
+           (unsigned)RC_LEAD_BYTES);
+    for (rate = 0; rate < 3; rate++) {
+        for (trial = 0; trial < RCS_UART_TRIALS; trial++) {
+            int n = 2 + (int)rint_(RCS_MAX - 1);
+            double w;
+            rcs_random_chain(&c, n, n, rate);
+            for (k = 0; k < n; k++) {
+                idx[k] = (uint8_t)k;
+            }
+            w = ULTRA_RW_FIRST_US + (double)rc_slot_us((uint8_t)rate) * n;
+            c.t0 = 100.0;
+            for (k = 0; k < n; k++) {
+                rcs_board_t *b = &c.b[k];
+                uint32_t i;
+                rc_poll_slot(b->poll, (uint8_t)trial, idx[k], (uint8_t)n, ULTRA_PAGE_STATUS, (uint8_t)rate, 0, 0);
+                for (i = 0; i < 24u; i++) {
+                    b->ans[ULTRA_RSP_DATA + i] = (uint8_t)(k * 31 + i * 7 + trial);
+                }
+                rc_answer(b->ans, b->poll, ULTRA_PAGE_STATUS, 0, b->uid16);
+                rcs_board_run(&c, k);
+            }
+            rcs_checks(&c);
+            rcs_simulate(&c, c.t0 + w + 400.0);
+            rcs_hub_uart(&c);
+            for (k = 0; k <= n; k++) {
+                fights += c.fights[k] != 0u;
+            }
+            for (k = 0; k < n; k++) {
+                sent[rate]++;
+                lost[rate] += c.got_n[k] != 1 || memcmp(c.got[k], c.b[k].ans, 32) != 0;
+                if (c.b[k].sent) {
+                    double e = c.b[k].tx_end - c.b[k].t0 - (ULTRA_RW_FIRST_US + rc_slot_us((uint8_t)rate) * (k + 1u)
+                                                             - 30.0);
+                    end_worst = e > end_worst ? e : end_worst;
+                }
+            }
+            rcs_free(&c);
+        }
+        printf("  rate %d: %d of %d answers lost at the hub's UART\n", rate, lost[rate], sent[rate]);
+    }
+    printf("  the bursts end by their slot's guard %+.1f us (s_i + pitch - 30 us)\n", end_worst);
+    CHECK(lost[0] == 0 && lost[1] == 0 && lost[2] == 0 && fights == 0 && end_worst <= 0.0,
+          "rc hub UART: answers lost %d / %d / %d (1 M / 500 k / 250 kbaud), fights %d, burst end past the guard %+.1f "
+          "us", lost[0], lost[1], lost[2], fights, end_worst);
+}
+
 static void test_rc(void)
 {
     test_rc_units();
     test_rc_chain();
+    test_rc_hub_uart();
     test_rc_power();
 }

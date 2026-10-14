@@ -11,7 +11,10 @@ typedef char calhist_size[(sizeof(calhist_t) == CALHIST_REC_BYTES && CALHIST_N =
 int calhist_valid(const uint8_t *r)
 {
     const calhist_t *h = (const calhist_t *)r;
-    return h->magic == CALHIST_MAGIC && h->n <= CALHIST_N && h->crc == crc16_ccitt(r, CALHIST_REC_BYTES - 2u);
+    /* (review round 6) a CRC that reads like erased flash: a record cut before its last half-word (config.h
+     * crc16_erased, as the calibration's and the lifetime record's since 0.6.5) */
+    return h->magic == CALHIST_MAGIC && h->n <= CALHIST_N && !crc16_erased(h->crc) &&
+           h->crc == crc16_ccitt(r, CALHIST_REC_BYTES - 2u);
 }
 
 MEASURED void calhist_add(calhist_t *h, uint32_t lit_s, const isense_cal_t *c)
@@ -47,5 +50,8 @@ void calhist_pack(calhist_t *h)
 {
     h->magic = CALHIST_MAGIC;
     h->seq++;
-    h->crc = crc16_ccitt((const uint8_t *)h, CALHIST_REC_BYTES - 2u);
+    while (crc16_erased(h->crc = crc16_ccitt((const uint8_t *)h, CALHIST_REC_BYTES - 2u))) {
+        h->rsv2--;                                       /* (review round 6: never a CRC that reads erased; rsv2 is read
+                                                            by nothing) */
+    }
 }

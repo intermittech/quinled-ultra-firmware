@@ -9,25 +9,18 @@
  * the jig line), then 4,000 random states (seeded: every field, the pointers NULL or set; 0.6.6: each struct's random
  * bytes from a generator of its own, seeded by two draws, so a field added to one of these structs leaves every other
  * random value as it was: add new fields at a struct's end and only the new lines differ; the newer features' values
- * come from a generator of their own). The transcript (each step's name and its output) without the newer features'
- * lines (0.6.6: M2's cal_history / cal_trend) must match the plain build's byte for byte: its CRC-32 and length,
- * CONSOLE_PLAIN_* below, come from this same file built against 0.6.5's src/core before the compression (cli.c with
- * plain strings; the 0.6.5 release notes), where those lines don't exist. The whole transcript: CONSOLE_GOLDEN_*.
- * CONSOLE_DUMP=<file> writes the transcript (diff it against one from that build). */
+ * come from a generator of their own). The transcript (each step's name and its output) must match CONSOLE_GOLDEN_*
+ * byte for byte. Its provenance: up to 0.6.6 the same file built against 0.6.5's src/core before the compression
+ * (cli.c with plain strings), the newer features' lines aside; 0.6.7 retired that twin and changed the console by
+ * design (the one-line banner, `help` without the value hints, the jig line only): its transcript equals 0.6.6's with
+ * exactly those edits applied (checked once, the 0.6.7 notes). A console change: CONSOLE_DUMP=<file> writes the
+ * transcript; diff it against the previous one, then take the new CRC and length. */
 
-#define CONSOLE_PLAIN_CRC  0x7c100f2du      /* 0.6.5 with plain strings (this file, 0.6.6's random fill): 10,549 steps */
-#define CONSOLE_PLAIN_LEN  12184340u        /* (0.6.5's fill: 0x9018c899, 12,200,684 B) */
-#if MON_EXTRA && defined(CALHIST_N)   /* (M2; the plain twin, 0.6.5, has none) */
-#define CONSOLE_GOLDEN_CRC 0xaeac0becu      /* + M2's lines (5,432 in 1,571 steps) */
-#define CONSOLE_GOLDEN_LEN 12492909u
-#else
-#define CONSOLE_GOLDEN_CRC CONSOLE_PLAIN_CRC
-#define CONSOLE_GOLDEN_LEN CONSOLE_PLAIN_LEN
-#endif
+#define CONSOLE_GOLDEN_CRC 0xa37991a9u      /* 0.6.7, the upper layout's console (M2, D9): 10,549 steps */
+#define CONSOLE_GOLDEN_LEN 11996212u        /* (0.6.6 + D9: 0x30fe4358, 12,493,731 B; the edits: 4,888 banners, 6 helps,
+                                               262 report lines) */
 
 static uint32_t ccz_crc = 0xFFFFFFFFu, ccz_len, ccz_steps;
-static uint32_t ccz_pcrc = 0xFFFFFFFFu, ccz_plen;   /* (0.6.6) without the newer features' lines */
-static int ccz_bol = 1, ccz_newline;                 /* at a line's start; in a newer feature's line */
 static uint32_t ccz_uid[3] = { 19088743u, 2309737967u, 4275878552u };
 static volatile uint32_t ccz_ovr[3];
 static volatile uint16_t ccz_hwd[HW_DIAG_N];
@@ -69,19 +62,21 @@ static uint32_t ccz_crc8(uint32_t c, uint8_t b)
     return c;
 }
 
+/* (0.6.7) the jig's verdict on ma, as core/testjig.c makes it (the `jig` line's fail) */
+static uint32_t ccz_jig_fail(const int32_t ma[5])
+{
+    uint32_t i, f = 0;
+    for (i = 0; i < 5u; i++) {
+        f |= (uint32_t)(ma[i] < (int32_t)TJ_PASS_MIN_MA || ma[i] > (int32_t)TJ_PASS_MAX_MA) << i;
+    }
+    return f;
+}
+
 static void ccz_add(const char *s)
 {
     size_t n = strlen(s), i;
     for (i = 0; i < n; i++) {
         ccz_crc = ccz_crc8(ccz_crc, (uint8_t)s[i]);
-        if (ccz_bol) {                     /* (0.6.6) a newer feature's line: in the whole transcript only */
-            ccz_newline = !strncmp(s + i, "cal_history ", 12) || !strncmp(s + i, "cal_trend ", 10);
-        }
-        if (!ccz_newline) {
-            ccz_pcrc = ccz_crc8(ccz_pcrc, (uint8_t)s[i]);
-            ccz_plen++;
-        }
-        ccz_bol = s[i] == '\n';
     }
     ccz_len += (uint32_t)n;
     if (ccz_dump) {
@@ -246,6 +241,11 @@ static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev
     if (ccz_rnd() & 1u) pw->ack_ovl = pw->ovl_trips;
     if (ccz_rnd() & 1u) pw->ack_short = pw->short_trips;
     if (ccz_rnd() & 1u) pw->ack_dips = pw->in.dips;
+    /* Preserve this golden fixture's old event distribution; latch storage is now explicit. */
+    pw->latched = (uint8_t)((pw->limit_events != pw->ack_limit ? ULTRA_PW_EV_LIMITED : 0u) |
+                            (pw->ovl_trips != pw->ack_ovl ? ULTRA_PW_EV_OVERLOAD : 0u) |
+                            (pw->short_trips != pw->ack_short ? ULTRA_PW_EV_SHORT : 0u) |
+                            (pw->in.dips != pw->ack_dips ? ULTRA_PW_EV_SUPPLY_DIP : 0u));
     if (ccz_rnd() & 1u) pw->limit_age_s = PWREV_AGE_NONE;
     if (ccz_rnd() & 1u) pw->trip_age_s = PWREV_AGE_NONE;
     ccz_fill(h, sizeof *h);
@@ -468,6 +468,7 @@ static void test_console_cz(void)
         pw.ovl_trips = (uint16_t)((i >> 4) & 1u);
         pw.short_trips = (uint16_t)((i >> 5) & 1u);
         pw.in.dips = (uint16_t)((i >> 6) & 1u);
+        pw.latched = (uint8_t)((i >> 3) & 0x0Fu); /* explicit latches for this synthetic fixture */
         pw.limit_age_s = (i >> 7) & 1u ? 17u : PWREV_AGE_NONE;
         pw.trip_age_s = (i % 3u) ? 1000u * i : PWREV_AGE_NONE;
         pw.last_cause = (uint8_t)(i % 5u);
@@ -581,7 +582,7 @@ static void test_console_cz(void)
             ma[k] = (int32_t)(ccz_rnd() % 9000u) - 500;
         }
         cli_out[0] = 0;
-        cli_test_report(&c, ma, i == 0u ? 0u : 9u * i, 100u + i, (i & 1u) ? 23950u + i : 0u);
+        cli_test_report(&c, ma, ccz_jig_fail(ma), 100u + i, (i & 1u) ? 23950u + i : 0u);
         snprintf(name, sizeof name, "test report %u", (unsigned)i);
         ccz_take(name);
     }
@@ -601,7 +602,8 @@ static void test_console_cz(void)
             cy = ccz_rnd();
             mv = (ccz_rnd() & 1u) ? ccz_rnd() : 0u;
             cli_out[0] = 0;
-            cli_test_report(&c, ma, pk, cy, mv);
+            (void)pk;                      /* (0.6.6's percentage: drawn, so the random states stay) */
+            cli_test_report(&c, ma, ccz_jig_fail(ma), cy, mv);
             ccz_take("test report: random");
             ccz_cmd(&c, "get\r");
             ccz_cmd(&c, "version\r");
@@ -611,14 +613,8 @@ static void test_console_cz(void)
         fclose(ccz_dump);
     }
     ccz_crc = ~ccz_crc;
-    ccz_pcrc = ~ccz_pcrc;
-    printf("  transcript: %u steps, %u bytes, CRC-32 %08x; without the newer features' lines %u bytes, CRC-32 %08x\n",
-           (unsigned)ccz_steps, (unsigned)ccz_len, (unsigned)ccz_crc, (unsigned)ccz_plen, (unsigned)ccz_pcrc);
-    CHECK(ccz_pcrc == CONSOLE_PLAIN_CRC && ccz_plen == CONSOLE_PLAIN_LEN,
-          "console transcript differs from the plain-text build's (%08x / %u bytes, want %08x / %u): CONSOLE_DUMP=<file> "
-          "and diff",
-          (unsigned)ccz_pcrc, (unsigned)ccz_plen, (unsigned)CONSOLE_PLAIN_CRC, (unsigned)CONSOLE_PLAIN_LEN);
+    printf("  transcript: %u steps, %u bytes, CRC-32 %08x\n", (unsigned)ccz_steps, (unsigned)ccz_len, (unsigned)ccz_crc);
     CHECK(ccz_crc == CONSOLE_GOLDEN_CRC && ccz_len == CONSOLE_GOLDEN_LEN,
-          "console transcript with the newer features' lines (%08x / %u bytes, want %08x / %u)",
+          "console transcript differs from the golden (%08x / %u bytes, want %08x / %u): CONSOLE_DUMP=<file> and diff",
           (unsigned)ccz_crc, (unsigned)ccz_len, (unsigned)CONSOLE_GOLDEN_CRC, (unsigned)CONSOLE_GOLDEN_LEN);
 }

@@ -69,16 +69,14 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
             p->trip_ma = in->trip_ma;      /* a short's peak sample can land in the next ms' take */
         }
     }
+    p->latched |= ev;
     p->ev = ev;                            /* (before the copy: it stays the tail call it was) */
     p->in = *in;
 }
 
 uint8_t pwrev_latched(const pwrev_t *p)
 {
-    return (uint8_t)((p->limit_events != p->ack_limit ? ULTRA_PW_EV_LIMITED : 0u) |
-                     (p->ovl_trips != p->ack_ovl ? ULTRA_PW_EV_OVERLOAD : 0u) |
-                     (p->short_trips != p->ack_short ? ULTRA_PW_EV_SHORT : 0u) |
-                     (p->in.dips != p->ack_dips ? ULTRA_PW_EV_SUPPLY_DIP : 0u));
+    return p->latched;
 }
 
 uint8_t pwrev_state(const pwrev_t *p)
@@ -122,8 +120,20 @@ void pwrev_ack(pwrev_t *p, const uint8_t arg[9])
     if (!(arg[0] & ULTRA_PW_ARG_ACK)) {
         return;
     }
-    p->ack_limit = (uint16_t)ultra_get16(arg + 1);
-    p->ack_ovl = (uint16_t)ultra_get16(arg + 3);
-    p->ack_short = (uint16_t)ultra_get16(arg + 5);
-    p->ack_dips = (uint16_t)ultra_get16(arg + 7);
+    if (ultra_get16(arg + 1) == p->limit_events) {
+        p->ack_limit = p->limit_events;
+        p->latched &= (uint8_t)(0xFFu ^ ULTRA_PW_EV_LIMITED);
+    }
+    if (ultra_get16(arg + 3) == p->ovl_trips) {
+        p->ack_ovl = p->ovl_trips;
+        p->latched &= (uint8_t)(0xFFu ^ ULTRA_PW_EV_OVERLOAD);
+    }
+    if (ultra_get16(arg + 5) == p->short_trips) {
+        p->ack_short = p->short_trips;
+        p->latched &= (uint8_t)(0xFFu ^ ULTRA_PW_EV_SHORT);
+    }
+    if (ultra_get16(arg + 7) == p->in.dips) {
+        p->ack_dips = p->in.dips;
+        p->latched &= (uint8_t)(0xFFu ^ ULTRA_PW_EV_SUPPLY_DIP);
+    }
 }

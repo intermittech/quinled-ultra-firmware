@@ -30,11 +30,20 @@
 
 #define RC_DIR_US        500u          /* turn around here (the middle of ULTRA_RW_DIR_MIN_US .. _MAX_US) */
 #define RC_CHECK_US      920u          /* the turnaround check (0.2.4): after ULTRA_RW_DIR_MAX_US, before slot 0 */
-#define RC_END_US        2u            /* forward again W + this: the rate (+-200 ppm) and t0 errors keep it >= W */
+#define RC_END_US        6u            /* forward again W + this: the rate (+-200 ppm: 4.7 us at the longest W, 23.6 ms)
+                                          and t0 errors keep it >= W (review r6: 0.6.6's 2 went to W - 2.7 us); with
+                                          the slowest tick it lands W .. W+62 us: the 0.2.4 amendment's end (64 or 80
+                                          us), still before the host's W+200 us */
 #define RC_ANSWER_BYTES  32u
 #define RC_RATES         3u            /* POLL return rate: 0 = 1 Mbaud, 1 = 500 kbaud, 2 = 250 kbaud (0.2.4) */
 #define RC_SAMPLES_TICK  1800u         /* DIN samples (36 MHz) per poll tick (50 us) */
 #define RC_PREAMBLE_CYC  432u          /* the line HIGH this long (HCLK cycles: 3 us) before the first start bit */
+#define RC_LEAD_BYTES    1u            /* (review r6) a 0xFF before the answer's SYNC (hal/hw.c rc_hw_send): the
+                                          turnaround checks' pulses (920-970 us) reach the hub as UART frames of 10
+                                          bits; at 250 / 500 kbaud the stop bit of one can fall into slot 0's first
+                                          byte and misframe it. A 0xFF has one falling edge, its start bit: a hub
+                                          UART still inside such a frame ends it there and starts cleanly at SYNC (the
+                                          hub discards the bytes before SYNC) */
 /* a POLL slot's fields (slot byte offsets): ULTRA_PROTOCOL.md "Slot type 7, POLL" */
 #define RC_P_INDEX       (ULTRA_PAYLOAD + 0u)   /* answer index 0..R-1, or ULTRA_POLL_RELAY_ONLY */
 #define RC_P_SLOTS       (ULTRA_PAYLOAD + 1u)   /* R: response slots in this window, 1..ULTRA_RW_MAX_SLOTS */

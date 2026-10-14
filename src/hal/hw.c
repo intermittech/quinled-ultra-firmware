@@ -77,7 +77,7 @@ static const uint16_t pin_tab[] = {
     PIN(0, 5, 0, CFG_AF_PP),                             /* PA5: SPI1_SCK, internal only (pad not connected) */
     PIN(0, FWD_PIN, PIN_LO, CFG_OUT_PP),                 /* PA1: FWD_EN, the gate closed */
     PIN(0, 2, 0, CFG_AF_PP),                             /* PA2 / PA3: the console */
-    PIN(0, 3, 0, CFG_IN_FLOAT),
+    PIN(0, 3, PIN_HI, CFG_IN_PULL),                      /* (0.6.7: pull-up, TP6 = the test jig's pad too) */
     PIN(0, 4, 0, CFG_ANALOG),                            /* PA4: the supply / bus voltage (R36 / R37 / C29) */
     PIN(0, 7, 0, CFG_ANALOG),                            /* PA7: the current sense */
     PIN(0, 8, 0, CFG_AF_PP),                             /* PA8 / PA9: PWM G / R */
@@ -703,6 +703,7 @@ void led_set(uint8_t on)
  * follows the output transceiver's RO (1 k against the 100 R from PB10). BENCH: the node's levels, DIN's read-back. */
 static const uint8_t *rc_next;
 static uint32_t rc_left;
+typedef char rc_one_lead_byte[RC_LEAD_BYTES == 1u ? 1 : -1];   /* (rc_hw_send writes one 0xFF) */
 extern void rc_uart_entry(void);                         /* isr.S */
 
 static void rc_release(void)
@@ -747,10 +748,11 @@ uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
         rc_release();
         return low;
     }
-    rc_next = b + 1;
-    rc_left = n - 1u;
+    rc_next = b;
+    rc_left = n;
+    BARRIER();                                           /* (r6) the cursor published before its interrupt */
     USART3->STATR = (uint16_t)~USART_STATR_TC;
-    USART3->DATAR = b[0];
+    USART3->DATAR = 0xFFu;                               /* RC_LEAD_BYTES (core/rc.h): the hub's UART in step */
     USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
     return 0;
 }
@@ -758,6 +760,7 @@ uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
 void rc_uart_isr(void);                                  /* USART3, entered via isr.S (VTF, HPE + mret) */
 void rc_uart_isr(void)
 {
+    BARRIER();                                           /* acquire the cursor published by the poll ISR */
     if (USART3->CTLR1 & USART_CTLR1_TXEIE) {
         if (rc_left != 0u) {
             rc_left--;
@@ -813,19 +816,33 @@ static void watchdog_start(void)
 }
 
 /* ---------------------------------------------------------------------------------------------------- UART */
-/* USART2 115200 8N1. RX: DMA1 ch6 circular into uart_rx. TX: DMA1 ch7 from one of two buffers: uart_write
- * fills the idle buffer, uart_kick sends it. Blocks only when 512 bytes are pending while one is in flight. */
+/* USART2 115200 8N1. TX: DMA1 ch7 from one of two buffers: uart_write fills the idle buffer, uart_kick sends it.
+ * Blocks only when a buffer's worth is pending while one is in flight. (0.6.7) The release console (core/config.h
+ * CONSOLE_FULL 0) only sends: two buffers of 256 (each part it writes fits both: main.c waits for CLI_PART_ROOM), no
+ * RX (DMA1 ch6 free; PA3 / TP6 the test jig's pad alone). CONSOLE_FULL 1: RX by DMA1 ch6 circular into uart_rx,
+ * two buffers of 512. */
+#if CONSOLE_FULL
 #define UART_RX_SIZE 64u
 #define UART_TX_SIZE 512u
 static uint8_t uart_rx[UART_RX_SIZE];
-static uint8_t uart_tx[2][UART_TX_SIZE];
-static uint32_t uart_rx_pos, uart_tx_len;
-static uint8_t uart_tx_fill;
+static uint32_t uart_rx_r;
 static uint8_t uart_rx_drop;                             /* flash_op dropped bytes: 1 = tell main.c, 2 = to CR / LF */
+#else
+#define UART_TX_SIZE 256u
+#endif
+static uint8_t uart_tx[2][UART_TX_SIZE];
+static uint32_t uart_tx_len;
+static uint8_t uart_tx_fill;
 
+#if CONSOLE_FULL
 static uint32_t uart_rx_w(void)
 {
     return (UART_RX_SIZE - DMA1_Channel6->CNTR) % UART_RX_SIZE;
+}
+
+uint32_t uart_rx_pos(void)
+{
+    return uart_rx_w();
 }
 
 int uart_getc(void)
@@ -836,11 +853,11 @@ int uart_getc(void)
         uart_rx_drop = 2;
         return -2;                                       /* (main.c: the line being typed is cancelled) */
     }
-    if (uart_rx_pos == w) {
+    if (uart_rx_r == w) {
         return -1;
     }
-    c = uart_rx[uart_rx_pos];
-    uart_rx_pos = (uart_rx_pos + 1u) % UART_RX_SIZE;
+    c = uart_rx[uart_rx_r];
+    uart_rx_r = (uart_rx_r + 1u) % UART_RX_SIZE;
     if (uart_rx_drop) {
         if (c == '\r' || c == '\n') {
             uart_rx_drop = 0;                            /* the rest of the cut line is gone, the next one counts */
@@ -849,6 +866,7 @@ int uart_getc(void)
     }
     return c;
 }
+#endif
 
 static int uart_tx_busy(void)
 {
@@ -971,14 +989,19 @@ void hw_init(void)
     SysTick->CTLR = (1u << 5) /* INIT */ | (1u << 3) /* STRE */ | (1u << 2) /* HCLK */ | (1u << 1) /* STIE */ | 1u;
     NVIC_EnableIRQ(SysTicK_IRQn);
 
-    /* debug UART 115200 8N1, DMA both ways (USART2_RX = DMA1 ch6, USART2_TX = DMA1 ch7) */
+    /* debug UART 115200 8N1, TX by DMA (USART2_TX = DMA1 ch7); the full console's RX too (USART2_RX = DMA1 ch6) */
     USART2->BRR = (uint16_t)(144000000u / 115200u);
+#if CONSOLE_FULL
     USART2->CTLR3 = USART_CTLR3_DMAR | (1u << 7) /* DMAT */;
     USART2->CTLR1 = USART_CTLR1_TE | USART_CTLR1_RE | USART_CTLR1_UE;
     DMA1_Channel6->PADDR = (uint32_t)&USART2->DATAR;
     DMA1_Channel6->MADDR = (uint32_t)uart_rx;
     DMA1_Channel6->CNTR = UART_RX_SIZE;
     DMA1_Channel6->CFGR = DMA_CFGR1_CIRC | DMA_CFGR1_MINC | DMA_CFGR1_EN;
+#else
+    USART2->CTLR3 = 1u << 7 /* DMAT */;
+    USART2->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;   /* (no RE: PA3 is TP6, the test jig's pad, a GPIO input) */
+#endif
     DMA1_Channel7->PADDR = (uint32_t)&USART2->DATAR;
 #if BOARD_RETURN
     rc_hw_init();
@@ -1011,7 +1034,8 @@ void hw_init(void)
 #define FLASH_KEY1      0x45670123u
 #define FLASH_KEY2      0xCDEF89ABu
 #define FLASH_BSY_POLLS 2000000u                         /* ~0.1-0.2 s of BSY polls at 72 MHz: the flash is stuck */
-#define FLASH_TC_POLLS  4000u                            /* > one byte at 115200 baud (87 us) */
+#define FLASH_TC_POLLS  12000u                           /* > shift register + data register at 115200 baud (two bytes:
+                                                            174 us) */
 #ifndef FLASH_VERIFY
 #define FLASH_VERIFY 0                                   /* 1: read each half-word back (BENCH: a read after programming
                                                             may come from the copy made at reset) */
@@ -1029,6 +1053,11 @@ void hw_records_window(uint32_t open)
 #else
     (void)open;                                          /* 0.6.4's layout: zero-wait flash, read at any clock */
 #endif
+}
+
+uint32_t hw_vdd_low(void)
+{
+    return (PWR->CSR & PWR_CSR_PVDO) != 0u;             /* PVDO = 1: VDD below the threshold (flash_op's test) */
 }
 
 /* the SRAM path's trip: all five outputs forced low (as pwm_force_off(1)); never back to PWM */
@@ -1079,14 +1108,28 @@ static void flash_clock(uint32_t cfgr, uint32_t slow)
 
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
-    uint32_t i, r = FLASH_OK, cfgr, mtvec, rxw, adc = adc_ready;
+    uint32_t i, r = FLASH_OK, cfgr, mtvec, adc = adc_ready, txctl;
+#if CONSOLE_FULL
+    uint32_t rxw;
+#endif
     uint16_t slewing;
     BARRIER();                                           /* the record (written as its own type) is complete */
     if (PWR->CSR & PWR_CSR_PVDO) {
         return FLASH_ERR_VDD;                            /* (0.6.5) VDD below 2.9 V: the write stays pending */
     }
     adc_ready = 0;                                       /* no new injected sequence (hw_adc_ms) */
+    /* (review round 6, gpt-fw R6-05) the console's TX: its DMA requests paused (the channel keeps its address and
+     * count), the bytes already in the UART finish (two at most: 174 us), then the clock halves; the line goes on
+     * after the operation at the restored baud. Never a byte at a baud changing under it, and no write ever waits for
+     * a line (a dip write neither). TC not set by then: not started (FLASH_ERR_UART). */
+    txctl = USART2->CTLR3;
+    USART2->CTLR3 = txctl & ~USART_CTLR3_DMAT;
     for (i = 0; i < FLASH_TC_POLLS && !(USART2->STATR & USART_STATR_TC); i++) {
+    }
+    if (!(USART2->STATR & USART_STATR_TC)) {
+        USART2->CTLR3 = txctl;
+        adc_ready = (uint8_t)adc;
+        return FLASH_ERR_UART;
     }
     __disable_irq();
     gate_force_closed();
@@ -1098,7 +1141,9 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
         TIM3->ATRLR = (uint16_t)(cur_steps - 1u);
     }
     slew_pend2 = slew_pend3 = 0;
+#if CONSOLE_FULL
     rxw = uart_rx_w();
+#endif
     /* only SysTick, through VTF slot 0 into SRAM; mtvec to the SRAM fault handler */
     cfgr = RCC->CFGR0;
     __asm volatile("csrr %0, mtvec" : "=r"(mtvec));
@@ -1149,12 +1194,15 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     PFIC->VTFADDR[0] = 0;
     __asm volatile("csrw mtvec, %0" ::"r"(mtvec) : "memory");
     PFIC->IENR[1] = FLASH_IRQ1;
+#if CONSOLE_FULL
     if (uart_rx_w() != rxw || (USART2->STATR & (USART_STATR_ORE | USART_STATR_FE | USART_STATR_NE))) {
         (void)USART2->DATAR;                             /* (STATR then DATAR: the error flags clear) */
-        uart_rx_pos = uart_rx_w();                       /* received at the halved baud: dropped, the line too */
+        uart_rx_r = uart_rx_w();                         /* received at the halved baud: dropped, the line too */
         uart_rx_drop = 1;
     }
+#endif
     adc_ready = (uint8_t)adc;
+    USART2->CTLR3 = txctl;                               /* (r6) the line goes on at the restored baud */
     __enable_irq();
     if (slewing) {
         TIM2->INTFR = (uint16_t)~TIM_UIF;

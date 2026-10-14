@@ -41,7 +41,7 @@ L065 = {"settings": (0x08010000, 0x08011000, 0x100), "cal": (0x08010100, 0x08011
         "fx": (0x08010400, 0x08011400, 0x200)}
 L066 = {"settings": (0x08010000, 0x08011000, 0x100), "cal": (0x08012000, 0x08013000, 0x100),
         "scene": (0x08014000, 0x08015000, 0x100), "life (its two pages)": (0x08016000, 0x08017000, 0x100),
-        "fx": (0x08018000, 0x08019000, 0x200)}
+        "fx": (0x08018000, 0x08019000, 0x200), "calhist": (0x0801A000, 0x0801B000, 0x100)}
 UPPER_SPAN = (0x08010000, 0xC000)                    # the upper record area, erased at the start
 # 0.6.4's layout
 REG = {"cal": (0x0800F600, 0x100), "scene": (0x0800F700, 0x500), "fx": (0x0800FC00, 0x200),
@@ -86,6 +86,7 @@ class FlashEmu(Emu):
 
 def fresh(elf):
     e = FlashEmu(elf)
+    e.mmio[0x40004400] = 0xC0              # USART2 STATR: TXE, TC (the console idle: 0.6.7's flash_op waits for TC)
     if UPPER:
         e.poke(UPPER_SPAN[0], b"\xff" * UPPER_SPAN[1])
     else:
@@ -105,7 +106,9 @@ def layout(elf):
 
 
 def canon(lay, writes):
-    """the flash ADDR register's values (the erases' pages) as (store, page, offset): the same in either layout"""
+    """the flash ADDR register's values (the erases' pages) as (store, page, offset): the same in either layout. (0.6.7)
+    Without USART2 CTLR3's: flash_op pauses the console's TX DMA requests around each operation (review round 6, F5)"""
+    writes = [w for w in writes if w[0] != 0x40004414]
     def c(a):
         for s, (pa, pb, n) in lay.items():
             for p, base in enumerate((pa, pb)):
@@ -187,6 +190,23 @@ def stores(elf):
     if LIFE not in e.syms:
         e.call("energy_clear", [])
         log.append(("eclear", e.ret))
+    if "calhist_store" in e.syms:                              # (review round 6) 0.6.6 M2: the calibration history,
+        rh = random.Random(7)                                  # its own pair (REC_CALHIST = 4), 11 records
+        h = buf + 700
+        e.poke(h, bytes(64))
+        e.call("calhist_load", [h])
+        log.append(("hload", e.ret))
+        for k in range(11):
+            e.poke(h + 8, bytes(rh.getrandbits(8) for _ in range(52)))   # tests, n, the entries, rsv2
+            e.poke(h + 10, bytes([rh.getrandbits(8) % 5]))              # (n <= CALHIST_N)
+            e.call("calhist_store", [h])
+            log.append(("hist", e.ret))
+            e.call("flash_rec_pending", [4])
+            if e.ret:
+                e.call("flash_rec_prepare", [4])
+                log.append(("hprep", e.ret))
+        e.call("calhist_load", [buf + 800])
+        log.append(("hload2", e.ret, e.peek(buf + 800, 64)))
     if lay:
         img = {r: e.peek(a, n) + e.peek(b, n) for r, (a, b, n) in lay.items()}
     else:
@@ -196,9 +216,10 @@ def stores(elf):
     return log, img, canon(lay, e.writes)
 
 
-def save_now(elf):
-    """main.c's save_now in the image: 19 saves of poked settings (page wraps)"""
-    lay = layout(elf) if UPPER else None
+def save_now(elf, lay_elf=None):
+    """main.c's save_now in the image: 19 saves of poked settings (page wraps). lay_elf: the build whose record map it
+    has (an LTO image inlines cal_load / cal_store, which layout() calls: its measurement build's; review round 6)"""
+    lay = layout(lay_elf or elf) if UPPER else None
     e = fresh(elf)
     rnd = random.Random(5)
     s, x = e.sym("set"), e.sym("sext")
@@ -245,6 +266,9 @@ if __name__ == "__main__":
         ok = compare("stores", sa, sb, {"settings": 256, "cal": 256, "fx": 512, "fx (all lights)": 512})
     else:
         ok = compare("stores", sa, sb)
-    ok &= compare("save_now (settings, %s)" % img, save_now(old), save_now(img))
+    if "save_now" in FlashEmu(img).syms and "save_now" in FlashEmu(old).syms:
+        ok &= compare("save_now (settings, %s)" % img, save_now(old), save_now(img, new))
+    else:
+        print("save_now: not in both images (0.6.7: the release console has no `save`; the settings' writes: above)")
     print("IDENTICAL" if ok else "DIFFERENT")
     sys.exit(0 if ok else 1)

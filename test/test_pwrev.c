@@ -34,7 +34,7 @@ static void pw_run(pwrev_t *p, uint32_t t0, uint32_t t1, pwrev_in_t in)
 static void test_pwrev(void)
 {
     pwrev_t p;
-    uint8_t g[PWREV_PAGE_BYTES], a[7];
+    uint8_t g[PWREV_PAGE_BYTES], a[9] = { 0 };
     pwrev_in_t in;
     uint32_t i;
 

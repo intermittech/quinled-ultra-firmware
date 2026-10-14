@@ -16,12 +16,30 @@ if [ -n "$RISCV_GCC" ]; then GCC="$RISCV_GCC"
 elif [ -n "$XPACK" ]; then GCC="$XPACK/riscv-none-elf-gcc"
 else GCC="$HOME/.platformio/packages/toolchain-riscv32-esp/bin/riscv32-esp-elf-gcc"
 fi
+# XW (0.6.7, Quindor 2026-10-14; review round 5, the XW study): WCH's XW extension of the QingKe V4B, 16-bit byte /
+# halfword loads and stores (c.lbu, c.lhu, c.sb, c.sh and their sp forms), with WCH's GCC 15.2 (MounRiver Studio
+# 2.5.0's "RISC-V Embedded GCC15", in WCH_GCC_DIR, pinned by tools/toolchain/check_wch_gcc.sh): ~1.5 KB smaller.
+# XW=0: the compiler above (xPack GCC 15.2), byte-identical to 0.6.6's builds: the comparison and the fallback. The
+# bootloader stays on xPack GCC (bootloader/build_bl.sh). tools/rv32emu.py runs XW; no objdump disassembles it.
+XW="${XW:-1}"
+if [ "$XW" = 1 ]; then
+  if [ -z "$WCH_GCC_DIR" ]; then
+    echo "XW=1 (the default) needs WCH GCC 15.2: WCH_GCC_DIR=<its folder> (tools/toolchain/README.md); XW=0 builds without" >&2
+    exit 2
+  fi
+  bash "$FW/tools/toolchain/check_wch_gcc.sh" "$WCH_GCC_DIR" || exit 2
+  GCC="$WCH_GCC_DIR/bin/riscv32-wch-elf-gcc"
+fi
 PFX="${GCC%gcc}"
 # -mtune=size (0.6.4, fable-flash): the size cost model for every file and the LTO link (-292 B on the 0.6.4 tree; a
 # tune on some files only stops LTO's inlining across them). Measured alone: +1..+4 cycles on 8 render rows (the render
 # cache then took 230-2,000 off each), the SET slot -48, the flicker render -151; the rest the same.
 if "$GCC" --version | head -1 | grep -q " 8\."; then ARCH="-march=rv32imc -mabi=ilp32"; LTO="${LTO:-0}"; else ARCH="-march=rv32imc_zicsr_zifencei -mabi=ilp32 -mtune=size"; fi
 LDARCH="-march=rv32imc -mabi=ilp32"   # selects the rv32imc multilib (libgcc)
+if [ "$XW" = 1 ]; then
+  ARCH="-march=rv32imc_zicsr_zifencei_xw -mabi=ilp32 -mtune=size"
+  LDARCH="-march=rv32imc_xw -mabi=ilp32"   # (WCH's rv32imc_xw multilib: its libgcc with XW too)
+fi
 # STRICT_ALIGN=1 (0.6.6): -mstrict-align, no load / store at a misaligned address. -mtune=size lets GCC merge byte
 # accesses into halfword / word ones at odd offsets (0.6.5: 17 in the release app); the QingKe V4 manual lists the
 # misaligned-access exceptions (mcause 4 / 6) without saying the core handles them: BENCH. Cost: README "New in 0.6.6".
@@ -29,22 +47,27 @@ if [ "${STRICT_ALIGN:-0}" = 1 ]; then ARCH="$ARCH -mstrict-align"; fi
 OUT="${OUT:-$FW/build/target}"
 mkdir -p "$OUT"
 # the Diff-Power receiver (BOARD=2): its own set (0.6.6): no MON_EXTRA monitoring (D5 / M5 / M3 / D6: the console
-# only; the return channel carries its values), so 0.6.4's layout's texts (ZL), the records still upper; no test jig
-# (--no-jig: it has no test pad); RC_PAGES_024=<0 / 1>: the three pages only the 0.2.4 proposal defines (OUTPUTS, ACKS,
-# ERRORS), 0 = UNSUPPORTED until its review
+# only; the return channel carries its values), so 0.6.4's layout's texts (ZL), the records still upper; the test jig
+# on TP6 (0.6.7: the console's RX, hal/hw.c hw_jig_pad_low); RC_PAGES_024=<0 / 1>: the three pages only the 0.2.4 proposal defines (OUTPUTS, ACKS,
+# ERRORS), 1 by default (0.6.7, Quindor: the room is there), 0 = they answer UNSUPPORTED
 RECEIVER=0
-case " $EXTRA_CFLAGS " in *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0 -DRC_PAGES_024=${RC_PAGES_024:-0}" ;; esac
-# STACK_SIZE=<bytes> (0.6.6): the stack, 2048 by default. 1536 is ready (static worst case 832 B with the ISRs nested,
-# tools/stack.py: main 720 + poll 64 + a slew 48; the QingKe V4B nests two levels) and waits for the bench: the painted
-# `stack=` high-water mark of the 30-day soak (test/ROUND4_BENCH_PLAN.md). The receiver needs at least 1792 B (its main
-# loop 928 B: 1,040 B nested). The linker scripts put the reset breadcrumbs right below it (Link_sections.ld).
+case " $EXTRA_CFLAGS " in *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0 -DRC_PAGES_024=${RC_PAGES_024:-1}" ;; esac
+# STACK_SIZE=<bytes> (0.6.6): the stack, 2048 by default. 1536 is ready (static worst case 928 B with the ISRs nested,
+# tools/stack.py, 0.6.7: main 800 + poll 80 + a slew 48; the QingKe V4B nests two levels) and waits for the bench: the
+# painted `stack=` high-water mark of the 30-day soak (test/ROUND4_BENCH_PLAN.md). The receiver needs at least 1792 B
+# (its main loop 864 B: 992 B nested). The linker scripts put the reset breadcrumbs right below it (Link_sections.ld).
 SS="${STACK_SIZE:-2048}"
 if [ "$RECEIVER" = 1 ] && [ "$SS" -lt 1792 ]; then SS=1792; fi
 STACK_LD=""
 if [ "$SS" != 2048 ]; then STACK_LD="-Wl,--defsym=QL_STACK_SIZE=$SS"; fi
+# CONSOLE_FULL=1 (0.6.7, core/config.h): the bench's console with its commands; 0 (the release): it only sends. A PERF
+# build has it (its `perf`).
+CONSOLE_FULL="${CONSOLE_FULL:-0}"
+if [ "${PERF:-0}" != 0 ]; then CONSOLE_FULL=1; fi
+EXTRA_CFLAGS="$EXTRA_CFLAGS -DCONSOLE_FULL=$CONSOLE_FULL"
 # the console's text, compressed (core/cz.h: tools/gen_console_text.py writes $OUT/gen/cz_text.h; Python 3, stdlib)
 "${PYTHON:-python}" "$FW/tools/gen_console_text.py" "$OUT/gen" $([ "${PERF:-0}" != 0 ] && echo --perf) \
-    $([ "${UPPER_RECORDS:-1}" != 0 ] && [ "$RECEIVER" = 0 ] && echo --upper) $(echo " $EXTRA_CFLAGS " | grep -q -- " -DBOARD=2 " && echo --no-jig)
+    $([ "${UPPER_RECORDS:-1}" != 0 ] && [ "$RECEIVER" = 0 ] && echo --upper) $([ "$CONSOLE_FULL" = 1 ] && echo --full)
 echo "compiler: $("$GCC" --version | head -1)"
 # -msmall-data-limit=400: every variable up to 400 bytes goes to .sbss / .sdata, in reach of gp (one instruction
 # less per access); the big buffers (ul, din_ring / din_copy, tail_copy, uart_tx, the PWM tables) stay outside.
@@ -71,7 +94,16 @@ if [ "${PERF:-0}" != 0 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DPERF_BUILD=$PERF"; 
 # stays; two duplicate CRC tables merge: -56 B, 16 B RAM), -fno-partial-inlining (-84 B); no measured row slower.
 # Then (a 270-option sweep, each with measure.py): --param max-inline-insns-auto=5, max-hoist-depth=0 and
 # max-grow-copy-bb-insns=4 (alone +16 / +64 / +36 B: LTO's choices interact; the set is what pays), no row slower.
-OPT="-Os -g -fno-partial-inlining -malign-data=natural --param=max-inline-insns-auto=5 --param=max-hoist-depth=0 --param=max-grow-copy-bb-insns=4 -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
+# 0.6.7 (XW; speed for flash, within: the poll / slew / gate ISRs and the fast trip <= +5 cycles, the decoders <= +5 %,
+# the worst case < 95 % CPU): --param gcse-unrestricted-cost=0, -fno-tree-sra, max-grow-copy-bb-insns 4 -> 3: -412 B
+# (the receiver -492 B); the poll ISR's first edges / ring copies / frame ends +5 cycles, the decoders +1.7 .. +2.2 %,
+# the worst case 90.8 -> 91.4 %; the gate ISR 3 instructions shorter, the SRAM trip path the same; the stack +16 B
+# (main, the poll ISR). Left out (alone on this tree; with the set): -fno-if-conversion -156 B; -136 B (the fast trip
+# +6, the first edges +7 cycles), -fno-caller-saves -132 B; -212 B (the clock sync +6.5 %), -fno-tree-forwprop -104 B
+# (the SET +14 %), -fno-move-loop-invariants -168 B (the ring copies +216 cycles), uninlined-function-insns=0 / 1 -172 B
+# / with gcse + sra -100 B (the frame end +31 / the first edges +21 cycles), max-grow-copy-bb-insns=0 -56 B (the capture
+# decode +5.5 %), -fno-if-conversion2 (with gcse + sra +44 B), gcse-unrestricted-cost=1 (= 0), 2 (= 3).
+OPT="-Os -g -fno-partial-inlining -malign-data=natural --param=max-inline-insns-auto=5 --param=max-hoist-depth=0 --param=max-grow-copy-bb-insns=3 --param=gcse-unrestricted-cost=0 -fno-tree-sra -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
 CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -DUPD_CRC_ULTRA -I$FW/vendor/wch -I$FW/src/hal -I$FW/src -I$OUT/gen $EXTRA_CFLAGS"
 SRC="$FW/src/app/main.c $FW/src/hal/hw.c"
 for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
