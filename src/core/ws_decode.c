@@ -38,7 +38,7 @@ MEASURED int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nb
         while (tr != 0u) {
             uint32_t j = (tr & 0xFF00u) ? clz8[tr >> 8] : 8u + clz8[tr & 0xFFu];
             uint32_t pos = (k << 4) + j;
-            tr &= ~(0x8000u >> j);
+            tr ^= 0x8000u >> j;                  /* j names a set bit: toggle it off */
             if ((w << j) & 0x8000u) {                 /* rising edge */
                 if (seen_rise && pos - fall >= gmin) {
                     return WS_ERR_SHORT;
@@ -82,7 +82,7 @@ MEASURED int ws_decode_last(const uint16_t *buf, uint32_t nsamples, const ws_tim
         while (tr != 0u) {
             uint32_t j = (tr & 0xFF00u) ? clz8[tr >> 8] : 8u + clz8[tr & 0xFFu];
             uint32_t pos = (k << 4) + j;
-            tr &= ~(0x8000u >> j);
+            tr ^= 0x8000u >> j;                  /* j names a set bit: toggle it off */
             if ((w << j) & 0x8000u) {                 /* rising edge */
                 if (seen_rise && pos - fall >= gmin) {
                     return WS_ERR_SHORT;               /* a reset gap inside the window */

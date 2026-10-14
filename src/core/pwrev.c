@@ -2,7 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Power events: see pwrev.h. */
 #include "pwrev.h"
-#include "climit.h"
+#include "rc.h"                            /* rc_pack */
 
 void pwrev_init(pwrev_t *p, uint32_t now)
 {
@@ -97,19 +97,24 @@ void pwrev_page(const pwrev_t *p, uint8_t out[PWREV_PAGE_BYTES])
         r = (p->in.retry_ms + 999u) / 1000u;
         r = r < 1u ? 1u : r > 255u ? 255u : r;
     }
-    out[ULTRA_PW_NOW] = (uint8_t)(pwrev_state(p) & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED | ULTRA_ST_CH_LIMITING));
-    out[ULTRA_PW_LATCHED] = pwrev_latched(p);
-    ultra_put16(out + ULTRA_PW_LIMIT_EVENTS, p->limit_events);
-    ultra_put16(out + ULTRA_PW_OVL_TRIPS, p->ovl_trips);
-    ultra_put16(out + ULTRA_PW_SHORT_TRIPS, p->short_trips);
-    ultra_put24(out + ULTRA_PW_LIMIT_AGE, p->limit_age_s);
-    ultra_put24(out + ULTRA_PW_TRIP_AGE, p->trip_age_s);
-    ultra_put16(out + ULTRA_PW_LIMIT_MA, p->in.limit_ma);
-    out[ULTRA_PW_SRC_CAUSE] = (uint8_t)(((p->in.limit_src & 0x0Fu) << 4) | (p->last_cause & 0x0Fu));
-    ultra_put16(out + ULTRA_PW_EVENT_MA, p->event_ma);
-    ultra_put16(out + ULTRA_PW_TRIP_MA, p->trip_ma);
-    ultra_put16(out + ULTRA_PW_FACTOR, tripped ? 0u : p->in.factor);
-    out[ULTRA_PW_RETRY_S] = (uint8_t)r;
+    {                                    /* the ULTRA_PW_* fields in order, NOW .. RETRY_S */
+        static const uint8_t len[13] = { 1, 1, 2, 2, 2, 3, 3, 2, 1, 2, 2, 2, 1 };
+        uint32_t v[13];
+        v[0] = pwrev_state(p) & (ULTRA_ST_LIMITING | ULTRA_ST_TRIPPED | ULTRA_ST_CH_LIMITING);
+        v[1] = pwrev_latched(p);
+        v[2] = p->limit_events;
+        v[3] = p->ovl_trips;
+        v[4] = p->short_trips;
+        v[5] = p->limit_age_s;
+        v[6] = p->trip_age_s;
+        v[7] = p->in.limit_ma;
+        v[8] = ((p->in.limit_src & 0x0Fu) << 4) | (p->last_cause & 0x0Fu);
+        v[9] = p->event_ma;
+        v[10] = p->trip_ma;
+        v[11] = tripped ? 0u : p->in.factor;
+        v[12] = r;
+        rc_pack(out, v, len, 13);
+    }
 }
 
 void pwrev_ack(pwrev_t *p, const uint8_t arg[9])
@@ -121,10 +126,4 @@ void pwrev_ack(pwrev_t *p, const uint8_t arg[9])
     p->ack_ovl = (uint16_t)ultra_get16(arg + 3);
     p->ack_short = (uint16_t)ultra_get16(arg + 5);
     p->ack_dips = (uint16_t)ultra_get16(arg + 7);
-}
-
-uint8_t pwrev_src(uint8_t climit_src)
-{
-    return climit_src == CLIMIT_SRC_USER ? ULTRA_PW_SRC_USER
-         : climit_src == CLIMIT_SRC_FUSE ? ULTRA_PW_SRC_FUSE : ULTRA_PW_SRC_BOARD;
 }

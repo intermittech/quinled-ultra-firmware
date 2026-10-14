@@ -161,8 +161,54 @@ static void test_update_chain(void)
     wconfirmed = 0;
 }
 
+/* (0.6.6) the update frames' CRCs are ultra_protocol.h's one copy (ULTRA_CRC_EXTERN / UPD_CRC_ULTRA): against the
+ * bitwise definitions the bootloader, the tools and the hub keep (ultra_update.h without the define), random data */
+static uint16_t ref_crc16(const uint8_t *d, uint32_t n)
+{
+    uint16_t c = 0xFFFFu;
+    while (n--) {
+        uint32_t b;
+        c ^= (uint16_t)((uint16_t)*d++ << 8);
+        for (b = 0; b < 8u; b++) {
+            c = (uint16_t)((c & 0x8000u) ? (((uint32_t)c << 1) ^ 0x1021u) : ((uint32_t)c << 1));
+        }
+    }
+    return c;
+}
+
+static uint8_t ref_crc8(const uint8_t *d, uint32_t n)
+{
+    uint8_t c = 0;
+    while (n--) {
+        uint32_t b;
+        c ^= *d++;
+        for (b = 0; b < 8u; b++) {
+            c = (uint8_t)((c & 0x80u) ? (((uint32_t)c << 1) ^ 0x07u) : ((uint32_t)c << 1));
+        }
+    }
+    return c;
+}
+
+static void test_update_crc(void)
+{
+    uint8_t d[64];
+    uint32_t i, k, x = 0x2545F491u, bad16 = 0, bad8 = 0;
+    for (k = 0; k < 20000u; k++) {
+        uint32_t n = k % 65u;
+        for (i = 0; i < n; i++) {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            d[i] = (uint8_t)x;
+        }
+        bad16 += upd_crc16(d, n) != ref_crc16(d, n) || ultra_crc16(d, n) != ref_crc16(d, n);
+        bad8 += upd_crc8(d, n) != ref_crc8(d, n) || ultra_crc8(d, n) != ref_crc8(d, n);
+    }
+    CHECK(bad16 == 0u && bad8 == 0u, "the CRC-16 / CRC-8 of the update frames = the bitwise reference (%u / %u of 20000 differ)",
+          (unsigned)bad16, (unsigned)bad8);
+}
+
 static void test_update(void)
 {
+    test_update_crc();
     tu_board_t b;
     uint8_t d_new[64], d_same[64], d_old[64], d_hw[64], d_rev[64], d_bl[64];
     printf("firmware update, app side (core/upd_app.c)\n");

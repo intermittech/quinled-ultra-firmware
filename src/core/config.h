@@ -89,7 +89,8 @@ typedef struct {
 } cfg_result_t;
 
 uint8_t      crc8_smbus(const uint8_t *d, uint32_t n);
-uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);
+uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);    /* = ultra_crc16 (CRC-16/CCITT-FALSE), one copy: the
+                                                             calibration and lifetime records */
 /* (0.6.5) a CRC-16 field programmed last reads like erased flash (0xFFFF / 0xE339) while its record was cut short:
  * the packers never write those values, the checks reject them (the calibration and the lifetime record) */
 #ifndef UPPER_RECORDS
@@ -101,9 +102,11 @@ uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);
 #ifndef MON_EXTRA
 #define MON_EXTRA UPPER_RECORDS
 #endif
-static inline int crc16_erased(uint32_t c) { return UPPER_RECORDS && (c == 0xFFFFu || c == 0xE339u); }   /* (0.6.4's
-                                         layout: 0.6.4's rules, its records read as before) */    /* = ultra_crc16 (CRC-16/CCITT-FALSE), one copy: the
-                                                             calibration and lifetime records */
+static inline int crc16_erased(uint32_t c)   /* (0.6.4's layout: 0.6.4's rules, its records read as before) */
+{
+    (void)c;
+    return UPPER_RECORDS && (c == 0xFFFFu || c == 0xE339u);
+}
 void         settings_default(settings_t *s);
 /* a record read from flash: every field within the range the firmware relies on (the enums; a raw period of
  * PWM_STEPS_MIN..PWM_STEPS_MAX: pattern_len_for divides by it and sizes the PWM tables with it). A field outside it

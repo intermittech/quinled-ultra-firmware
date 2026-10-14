@@ -21,6 +21,7 @@
 
 #include <stdint.h>
 #include "ultra_protocol.h"
+#include "climit.h"
 
 #define PWREV_PAGE_BYTES 24u          /* POWER page DATA */
 #define PWREV_AGE_NONE   0xFFFFFFu    /* u24 age: no event since power-up */
@@ -65,7 +66,11 @@ uint8_t pwrev_state(const pwrev_t *p);
 void    pwrev_page(const pwrev_t *p, uint8_t out[PWREV_PAGE_BYTES]);
 /* POWER page POLL arguments, slot bytes 7..15: flags, then the four counts the controller read (u16 each) */
 void    pwrev_ack(pwrev_t *p, const uint8_t arg[9]);
-/* the board limit's source (core/climit.h CLIMIT_SRC_*) -> ULTRA_PW_SRC_* */
-uint8_t pwrev_src(uint8_t climit_src);
+/* the board limit's source (core/climit.h CLIMIT_SRC_*) -> ULTRA_PW_SRC_* (inline: main.c asks every ms) */
+static inline uint8_t pwrev_src(uint8_t climit_src)
+{
+    return climit_src == CLIMIT_SRC_USER ? ULTRA_PW_SRC_USER
+         : climit_src == CLIMIT_SRC_FUSE ? ULTRA_PW_SRC_FUSE : ULTRA_PW_SRC_BOARD;
+}
 
 #endif

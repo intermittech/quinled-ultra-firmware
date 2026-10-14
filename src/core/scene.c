@@ -166,8 +166,10 @@ uint8_t ultra_fx_load(ultra_t *u, const uint8_t *img, uint8_t crc[ULTRA_LIGHTS])
             }
             crc[i] = img[5u + i];
             mask |= (uint8_t)(1u << i);
-        } else if (MON_EXTRA && (img[4] & (1u << i))) {
+#if MON_EXTRA
+        } else if (img[4] & (1u << i)) {
             ultra_fx_rejected++;                         /* (0.6.5, D5) listed, its CRC wrong */
+#endif
         }
     }
     return mask;

@@ -64,6 +64,13 @@ proto_t     proto_classify(uint32_t total_bits, uint8_t ultra);
 /* once per frame; returns the frame's classification */
 proto_t     proto_frame_end(proto_state_t *s, uint32_t total_bits, uint8_t ultra);
 proto_t     proto_active(const proto_state_t *s);
+/* proto_active(s) == PROTO_ULTRA, inline (the main loop asks every pass: a forced Ultra mode, or auto / any other
+ * mode with Ultra locked; the WS modes never answer Ultra) */
+static inline uint32_t proto_active_ultra(const proto_state_t *s)
+{
+    return s->mode == PMODE_ULTRA ||
+           (s->mode != PMODE_WS2915 && s->mode != PMODE_WS2805 && s->locked == PROTO_ULTRA);
+}
 /* change the mode at runtime; switching to auto keeps the protocol in use (no gap until a new lock) */
 void        proto_set_mode(proto_state_t *s, proto_mode_t mode);
 gate_plan_t proto_gate_plan(proto_t p);

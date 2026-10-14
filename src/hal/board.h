@@ -54,6 +54,15 @@
 #define BOARD_TESTJIG    0
 #endif
 
+/* the return channel (core/rc.h; ULTRA_PROTOCOL.md "Reserved: return channel"): the Diff-Power ultra receiver only.
+ * Its RS-485 transceivers: input (towards the host) DE on PB14, output (towards the next receiver) DE on PA10, both
+ * ~RE on GND; USART3 TX on PB10 into the relay node. The dig2analog-ultra never reports back: none of it is built. */
+#if BOARD == BOARD_DP_RX
+#define BOARD_RETURN     1
+#else
+#define BOARD_RETURN     0
+#endif
+
 /* board current sense (core/isense.h): soldered fuse + 2 mohm shunt + TPA158A3 (gain 100) -> 1 k / 47 nF -> PA7 */
 #define ISENSE_FUSE_MA   10000u     /* soldered fuse: 10 A */
 #define ISENSE_BOARD_MA  8000u      /* board rating: default and maximum of the remote limit */
@@ -89,21 +98,25 @@
 #include "../core/ultra_update.h"           /* UPPER_RECORDS: the layout */
 #if UPPER_RECORDS
 /* 0.6.5 (Quindor 2026-10-14): the records in the upper CodeFlash (DS table 2-1: 160 KB
- * non-zero-wait at 0x08010000-0x08037FFF), every one an A/B pair: the A pages in the 4 KB sector 0x08010000, the B
- * pages in 0x08011000 (nothing else in either sector). Read only in hw.c's boot window (hw_records_window: HCLK / 2,
- * DS table 4-17's 60 MHz flash clock), the values kept in RAM; written through hw.c's flash_op (HCLK / 2 as well). */
-#define SETTINGS_ADDR    0x08010000u   /* the settings (core/flashrec.h), page A */
-#define CAL_PAGE_ADDR    0x08010100u   /* the current calibration (core/calstore.h), page A */
-#define SCENE_LOG_ADDR   0x08010200u   /* the power-on scene log (core/scene.h), page A */
-#define LIFE_PAGE0_ADDR  0x08010300u   /* the lifetime record (core/energy.h), page A */
-#define SCENE_FX_ADDR    0x08010400u   /* the power-on effects (core/ultra.h ULTRA_FX_*), bank A: two pages */
-#define SETTINGS_B_ADDR  0x08011000u   /* ... their B pages / bank B, the same offsets in the next sector */
-#define CAL_B_ADDR       0x08011100u
-#define SCENE_B_ADDR     0x08011200u
-#define LIFE_PAGE1_ADDR  0x08011300u
-#define SCENE_FX_B_ADDR  0x08011400u
-#define RECORDS_BASE     0x08010000u   /* the record area: [RECORDS_BASE, RECORDS_END) */
-#define RECORDS_END      0x08012000u
+ * non-zero-wait at 0x08010000-0x08037FFF), every one an A/B pair. 0.6.6 (review round 5): each store in its own two
+ * 4 KB sectors, A then B, nothing else in them (0.6.5 had every A page in one sector and every B page in the next: a
+ * 4 KB sector erase, should the bench need one instead of the 256-byte page erase, would have hit every pair at once).
+ * Read only in hw.c's boot window (hw_records_window: HCLK / 2, DS table 4-17's 60 MHz flash clock), the values kept
+ * in RAM; written through hw.c's flash_op (HCLK / 2 as well). */
+#define SETTINGS_ADDR    0x08010000u   /* the settings (core/flashrec.h): page A, page B in the next sector */
+#define SETTINGS_B_ADDR  0x08011000u
+#define CAL_PAGE_ADDR    0x08012000u   /* the current calibration (core/calstore.h) */
+#define CAL_B_ADDR       0x08013000u
+#define SCENE_LOG_ADDR   0x08014000u   /* the power-on scene log (core/scene.h) */
+#define SCENE_B_ADDR     0x08015000u
+#define LIFE_PAGE0_ADDR  0x08016000u   /* the lifetime record (core/energy.h) */
+#define LIFE_PAGE1_ADDR  0x08017000u
+#define SCENE_FX_ADDR    0x08018000u   /* the power-on effects (core/ultra.h ULTRA_FX_*): bank A, two pages; bank B */
+#define SCENE_FX_B_ADDR  0x08019000u
+#define CALHIST_ADDR     0x0801A000u   /* the calibration history (M2): its pair */
+#define CALHIST_B_ADDR   0x0801B000u
+#define RECORDS_BASE     0x08010000u   /* the record area: [RECORDS_BASE, RECORDS_END), twelve sectors */
+#define RECORDS_END      0x0801C000u
 #else
 /* 0.6.4's layout (the bench fallback): the top of the 64 KB flash; the power-on effects in one bank */
 #define SETTINGS_ADDR    0x0800FF00u   /* the settings (core/flashrec.h): an A/B page pair (0.6.4), page A the last */

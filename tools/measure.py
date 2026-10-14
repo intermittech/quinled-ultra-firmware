@@ -221,12 +221,11 @@ def measure_isense(emu, scratch):
         wm = wa = 0
         for _ in range(ms):
             na = emu.call("isense_apply", [IS, req, req + 16])
-            wa = max(wa, emu.cycles())
+            if emu.cycles() >= wa:                       # (r5: its own cycles; it was isense_ms's, and unassigned
+                wa, naa = emu.cycles(), na               #  when isense_ms got cheaper than isense_apply)
             nm = emu.call("isense_ms", [IS, raw * 20, 20, raw + 20])
             if emu.cycles() >= wm:
                 wm, nmm = emu.cycles(), nm
-            if emu.cycles() >= wa:
-                naa = na
         rows.append(("isense_ms, %s (every 1 ms, worst)" % name, nmm, wm, ""))
         rows.append(("isense_apply, %s (per output update, worst)" % name, naa, wa, ""))
 
@@ -360,7 +359,7 @@ def main():
 
     # ---- smoothing step (5 channels, ramp running)
     sm = emu.addr("sm")
-    emu.poke(sm, struct.pack("<5H5H5HxxIIIIB", *([0] * 5), *([0] * 5), *([60000, 1000, 30000, 257, 9]), 100, 400, 100, 400, 1))
+    emu.poke(sm, struct.pack("<5H5H5HBxIIII", *([0] * 5), *([0] * 5), *([60000, 1000, 30000, 257, 9]), 1, 100, 400, 100, 400))
     n = emu.call("smooth_update", [sm, 300])
     rows.append(("smooth_update (5 channels, every 1 ms)", n, emu.cycles(), ""))
 

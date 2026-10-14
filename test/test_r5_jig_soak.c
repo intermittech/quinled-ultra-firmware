@@ -58,4 +58,27 @@ static void sc_r5jig(void)
     CHECK(ok && strcmp(res, "FAIL") == 0 && fail == 1u && ma[0] > TJ_PASS_MAX_MA, "r5jig: R too high: FAIL, bit 1 "
           "(%s, fail %u, %u mA)", res, fail, ma[0]);
     ld_ma[0] = 1500;
+    /* (0.6.6) statuses typed while the jig runs: its reports wait for the UART's room, none lost, nothing blocks */
+    {
+        const char *p;
+        uint32_t b0 = tx_blocks, c1, n = 0, k;
+        run_ms(100);
+        (void)r5j_line(&c0, res, &fail, ma, uid, fw);
+        con_out_n = 0;
+        con_out[0] = 0;
+        con_in_r = con_in_w = 0;
+        for (k = 0; k < 3u; k++) {
+            memcpy(con_in + con_in_w, "status\r", 7u);
+            con_in_w += 7u;
+        }
+        run_ms(4600);
+        (void)r5j_line(&c1, res, &fail, ma, uid, fw);
+        for (p = con_out; (p = strstr(p, "jig cycle=")) != 0; p++) {
+            n++;
+        }
+        printf("  3 x status while the jig runs: cycles %u..%u, %u jig lines, writes past the UART's buffers: %u\n", c0,
+               c1, n, tx_blocks - b0);
+        CHECK(c1 >= c0 + 2u && n == c1 - c0 && tx_blocks == b0, "r5jig: a line each cycle during statuses (%u..%u, %u "
+              "lines, %u blocked bytes)", c0, c1, n, tx_blocks - b0);
+    }
 }

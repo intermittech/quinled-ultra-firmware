@@ -6,16 +6,28 @@
  * `watch`, the banner and the test jig's report through every branch (each reset flag, protocol, decode error,
  * current state, calibration level count, temperature, dip, board limit, D9, power event, health and scene case; 0.6.5:
  * the CPU load, the reset breadcrumbs, the overruns, the event log, the supply impedance, "calibration suggested",
- * the jig line), then 4,000 random states (seeded: every field, the pointers NULL or set). The transcript (each step's
- * name and its output) must match the plain build's byte for byte: its CRC-32 and length, CONSOLE_GOLDEN_* below,
- * come from this same file built against 0.6.5's src/core before the compression (cli.c with plain strings;
- * the 0.6.5 release notes). CONSOLE_DUMP=<file> writes the transcript (diff it against one from that
- * build). */
+ * the jig line), then 4,000 random states (seeded: every field, the pointers NULL or set; 0.6.6: each struct's random
+ * bytes from a generator of its own, seeded by two draws, so a field added to one of these structs leaves every other
+ * random value as it was: add new fields at a struct's end and only the new lines differ; the newer features' values
+ * come from a generator of their own). The transcript (each step's name and its output) without the newer features'
+ * lines (0.6.6: M2's cal_history / cal_trend) must match the plain build's byte for byte: its CRC-32 and length,
+ * CONSOLE_PLAIN_* below, come from this same file built against 0.6.5's src/core before the compression (cli.c with
+ * plain strings; the 0.6.5 release notes), where those lines don't exist. The whole transcript: CONSOLE_GOLDEN_*.
+ * CONSOLE_DUMP=<file> writes the transcript (diff it against one from that build). */
 
-#define CONSOLE_GOLDEN_CRC 0x9018c899u      /* 0.6.5 with plain strings (this file): 10,549 steps */
-#define CONSOLE_GOLDEN_LEN 12200684u
+#define CONSOLE_PLAIN_CRC  0x7c100f2du      /* 0.6.5 with plain strings (this file, 0.6.6's random fill): 10,549 steps */
+#define CONSOLE_PLAIN_LEN  12184340u        /* (0.6.5's fill: 0x9018c899, 12,200,684 B) */
+#if MON_EXTRA && defined(CALHIST_N)   /* (M2; the plain twin, 0.6.5, has none) */
+#define CONSOLE_GOLDEN_CRC 0xaeac0becu      /* + M2's lines (5,432 in 1,571 steps) */
+#define CONSOLE_GOLDEN_LEN 12492909u
+#else
+#define CONSOLE_GOLDEN_CRC CONSOLE_PLAIN_CRC
+#define CONSOLE_GOLDEN_LEN CONSOLE_PLAIN_LEN
+#endif
 
 static uint32_t ccz_crc = 0xFFFFFFFFu, ccz_len, ccz_steps;
+static uint32_t ccz_pcrc = 0xFFFFFFFFu, ccz_plen;   /* (0.6.6) without the newer features' lines */
+static int ccz_bol = 1, ccz_newline;                 /* at a line's start; in a newer feature's line */
 static uint32_t ccz_uid[3] = { 19088743u, 2309737967u, 4275878552u };
 static volatile uint32_t ccz_ovr[3];
 static volatile uint16_t ccz_hwd[HW_DIAG_N];
@@ -31,15 +43,45 @@ static uint32_t ccz_rnd(void)
     return (uint32_t)(ccz_rs >> 32);
 }
 
+/* (0.6.6) n random bytes at p: two draws seed a generator of their own (ccz_random's structs: their sizes change no
+ * other random value) */
+static void ccz_fill(void *p, size_t n)
+{
+    uint8_t *b = (uint8_t *)p;
+    size_t i;
+    unsigned long long s = ccz_rnd();       /* (each draw its own statement: C leaves an expression's order open) */
+    s = (s << 32 | ccz_rnd()) | 1u;
+    for (i = 0; i < n; i++) {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        b[i] = (uint8_t)(s >> 32);
+    }
+}
+
+static uint32_t ccz_crc8(uint32_t c, uint8_t b)
+{
+    int k;
+    c ^= b;
+    for (k = 0; k < 8; k++) {
+        c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+    }
+    return c;
+}
+
 static void ccz_add(const char *s)
 {
     size_t n = strlen(s), i;
-    int k;
     for (i = 0; i < n; i++) {
-        ccz_crc ^= (uint8_t)s[i];
-        for (k = 0; k < 8; k++) {
-            ccz_crc = (ccz_crc >> 1) ^ (0xEDB88320u & (0u - (ccz_crc & 1u)));
+        ccz_crc = ccz_crc8(ccz_crc, (uint8_t)s[i]);
+        if (ccz_bol) {                     /* (0.6.6) a newer feature's line: in the whole transcript only */
+            ccz_newline = !strncmp(s + i, "cal_history ", 12) || !strncmp(s + i, "cal_trend ", 10);
         }
+        if (!ccz_newline) {
+            ccz_pcrc = ccz_crc8(ccz_pcrc, (uint8_t)s[i]);
+            ccz_plen++;
+        }
+        ccz_bol = s[i] == '\n';
     }
     ccz_len += (uint32_t)n;
     if (ccz_dump) {
@@ -80,18 +122,43 @@ static void ccz_status(cli_t *c, const char *name)
     ccz_take("(watch line)");
 }
 
+#if MON_EXTRA && defined(CALHIST_N)   /* (M2; the plain twin, 0.6.5, has none) */
+/* (0.6.6) the newer fields (M2: the calibration history) from a generator of their own, after the struct's random
+ * bytes: every value the transcript had before stays, only their lines are new */
+static calhist_t ccz_ch;
+static unsigned long long ccz_rs2 = 0x9E3779B97F4A7C15ull;
+
+static uint32_t ccz_rnd2(void)
+{
+    ccz_rs2 ^= ccz_rs2 << 13;
+    ccz_rs2 ^= ccz_rs2 >> 7;
+    ccz_rs2 ^= ccz_rs2 << 17;
+    return (uint32_t)(ccz_rs2 >> 32);
+}
+
+static void ccz_newer(cli_status_t *st)
+{
+    uint32_t i, k;
+    st->ch = (ccz_rnd2() & 1u) ? &ccz_ch : NULL;
+    ccz_ch.n = (uint8_t)(ccz_rnd2() % (CALHIST_N + 1u));
+    ccz_ch.tests = (uint16_t)ccz_rnd2();
+    for (i = 0; i < CALHIST_N; i++) {
+        ccz_ch.e[i].lit_h = (uint16_t)ccz_rnd2();
+        for (k = 0; k < 5u; k++) {
+            ccz_ch.e[i].ma[k] = (uint16_t)((ccz_rnd2() % 4u) ? ccz_rnd2() % 9000u : 0u);
+        }
+    }
+}
+#endif
+
 static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev_t *pw, health_t *h)
 {
     uint32_t i, l;
-    uint8_t *b;
     static const char *const vers[] = { "test", "0.6.4", "0.6.5-beta.1 (development build)", "" };
     static const char *const builds[] = { "20261014", "", "abcdefgh" };
     const energy_t *en = st->en;
     const vsense_t *vs = st->dip_vs;
-    b = (uint8_t *)st;                     /* every byte random, then the pointers and the counts made valid */
-    for (i = 0; i < sizeof *st; i++) {
-        b[i] = (uint8_t)ccz_rnd();
-    }
+    ccz_fill(st, sizeof *st);              /* every byte random, then the pointers and the counts made valid */
     st->version = vers[ccz_rnd() % 4u];
     snprintf(st->bl_build, sizeof st->bl_build, "%s", builds[ccz_rnd() % 3u]);
     st->bl_version = (uint8_t)(ccz_rnd() % 3u == 0u ? 0u : st->bl_version);
@@ -142,9 +209,14 @@ static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev
     for (i = 0; i < HW_DIAG_N; i++) {
         ccz_hwd[i] = (uint16_t)((ccz_rnd() % 3u == 0u) ? ccz_rnd() : 0u);
     }
-    if (ccz_rnd() & 1u) st->fl_pend = st->fl_errs = 0, st->fl_rej = 0;   /* (0.6.5, D5: often nothing) */
+    if (ccz_rnd() & 1u) {                  /* (0.6.5, D5: often nothing) */
+        st->fl_pend = 0;
+        st->fl_errs = 0;
+        st->fl_rej = 0;
+    }
     for (i = 0; i < 5u; i++) {             /* (0.6.5, M3) */
-        test_en.ch_mwh[i] = ccz_rnd() >> (ccz_rnd() % 32u);
+        uint32_t v = ccz_rnd();
+        test_en.ch_mwh[i] = v >> (ccz_rnd() % 32u);   /* (0.6.6: the draws in a set order) */
     }
     cli_set.last_proto = (uint8_t)(ccz_rnd() % 7u);
     c->scene = (ccz_rnd() & 1u) ? sc : NULL;
@@ -154,10 +226,7 @@ static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev
     }
     sc->mask = (uint8_t)(ccz_rnd() % 33u);
     sc->fade = (uint8_t)ccz_rnd();
-    b = (uint8_t *)d;
-    for (i = 0; i < sizeof *d; i++) {
-        b[i] = (uint8_t)ccz_rnd();
-    }
+    ccz_fill(d, sizeof *d);
     d->n_log = (uint8_t)(ccz_rnd() % (VDIP_LOG + 1u));
     d->head = (uint8_t)(ccz_rnd() % VDIP_LOG);
     d->in_dip = (uint8_t)(ccz_rnd() & 1u);
@@ -168,10 +237,7 @@ static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev
     for (l = 0; l < VDIP_LOG; l++) {
         d->log[l].ref_x = (uint16_t)(d->log[l].ref_x | 1u);
     }
-    b = (uint8_t *)pw;
-    for (i = 0; i < sizeof *pw; i++) {
-        b[i] = (uint8_t)ccz_rnd();
-    }
+    ccz_fill(pw, sizeof *pw);
     pw->limit_on = (uint8_t)(ccz_rnd() & 1u);
     pw->ch_on = (uint8_t)(ccz_rnd() & 1u);
     pw->in.trip_cause = (uint8_t)(ccz_rnd() % 4u);
@@ -182,21 +248,18 @@ static void ccz_random(cli_status_t *st, cli_t *c, scene_t *sc, vdip_t *d, pwrev
     if (ccz_rnd() & 1u) pw->ack_dips = pw->in.dips;
     if (ccz_rnd() & 1u) pw->limit_age_s = PWREV_AGE_NONE;
     if (ccz_rnd() & 1u) pw->trip_age_s = PWREV_AGE_NONE;
-    b = (uint8_t *)h;
-    for (i = 0; i < sizeof *h; i++) {
-        b[i] = (uint8_t)ccz_rnd();
-    }
+    ccz_fill(h, sizeof *h);
     for (i = 0; i < 5u; i++) {
         if (ccz_rnd() % 3u == 0u) h->test_dev[i] = ULTRA_HE_NA;
         if (ccz_rnd() % 3u == 0u) h->model_dev[i] = ULTRA_HE_NA;
     }
-    b = (uint8_t *)&test_en.lt;
-    for (i = 0; i < sizeof test_en.lt; i++) {
-        b[i] = (uint8_t)ccz_rnd();
-    }
+    ccz_fill(&test_en.lt, sizeof test_en.lt);
     test_en.boot_mwh = ccz_rnd();
     test_en.mwh_seen = ccz_rnd();
     test_en.base_wh = ccz_rnd();
+#if MON_EXTRA && defined(CALHIST_N)   /* (M2; the plain twin, 0.6.5, has none) */
+    ccz_newer(st);
+#endif
 }
 
 static void test_console_cz(void)
@@ -482,7 +545,8 @@ static void test_console_cz(void)
         snprintf(name, sizeof name, "status: flash state %u", (unsigned)i);
         ccz_status(&c, name);
     }
-    st.fl_pend = st.fl_errs = st.fl_err = 0;
+    st.fl_pend = st.fl_err = 0;
+    st.fl_errs = 0;
     st.fl_rej = 0;
     st.hwd = ccz_hwd;                      /* (0.6.5, D6) ADC / DMA counters: none, one, all */
     for (i = 0; i <= HW_DIAG_N; i++) {
@@ -529,11 +593,15 @@ static void test_console_cz(void)
         ccz_status(&c, name);
         if (i % 16u == 0u) {
             int32_t ma[5];
+            uint32_t pk, cy, mv;
             for (k = 0; k < 5u; k++) {
                 ma[k] = (int32_t)ccz_rnd();
             }
+            pk = ccz_rnd() % 120u;         /* (0.6.6: the draws in a set order, not as arguments) */
+            cy = ccz_rnd();
+            mv = (ccz_rnd() & 1u) ? ccz_rnd() : 0u;
             cli_out[0] = 0;
-            cli_test_report(&c, ma, ccz_rnd() % 120u, ccz_rnd(), (ccz_rnd() & 1u) ? ccz_rnd() : 0u);
+            cli_test_report(&c, ma, pk, cy, mv);
             ccz_take("test report: random");
             ccz_cmd(&c, "get\r");
             ccz_cmd(&c, "version\r");
@@ -543,10 +611,14 @@ static void test_console_cz(void)
         fclose(ccz_dump);
     }
     ccz_crc = ~ccz_crc;
-    printf("  transcript: %u steps, %u bytes, CRC-32 %08x\n", (unsigned)ccz_steps, (unsigned)ccz_len,
-           (unsigned)ccz_crc);
-    CHECK(ccz_crc == CONSOLE_GOLDEN_CRC && ccz_len == CONSOLE_GOLDEN_LEN,
+    ccz_pcrc = ~ccz_pcrc;
+    printf("  transcript: %u steps, %u bytes, CRC-32 %08x; without the newer features' lines %u bytes, CRC-32 %08x\n",
+           (unsigned)ccz_steps, (unsigned)ccz_len, (unsigned)ccz_crc, (unsigned)ccz_plen, (unsigned)ccz_pcrc);
+    CHECK(ccz_pcrc == CONSOLE_PLAIN_CRC && ccz_plen == CONSOLE_PLAIN_LEN,
           "console transcript differs from the plain-text build's (%08x / %u bytes, want %08x / %u): CONSOLE_DUMP=<file> "
           "and diff",
+          (unsigned)ccz_pcrc, (unsigned)ccz_plen, (unsigned)CONSOLE_PLAIN_CRC, (unsigned)CONSOLE_PLAIN_LEN);
+    CHECK(ccz_crc == CONSOLE_GOLDEN_CRC && ccz_len == CONSOLE_GOLDEN_LEN,
+          "console transcript with the newer features' lines (%08x / %u bytes, want %08x / %u)",
           (unsigned)ccz_crc, (unsigned)ccz_len, (unsigned)CONSOLE_GOLDEN_CRC, (unsigned)CONSOLE_GOLDEN_LEN);
 }

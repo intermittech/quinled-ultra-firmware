@@ -6,6 +6,7 @@
 #include "config.h"                 /* crc16_ccitt */
 #include "lto.h"
 #include "ultra_protocol.h"
+#include "rc.h"                         /* rc_pack */
 
 #define LIT_FAR 0x40000000u         /* lit_ms is kept at most this far back (2^30 ms) */
 typedef char life_rec_size[(sizeof(life_rec_t) == LIFE_REC_BYTES && LIFE_RECS * LIFE_REC_BYTES <= 256u) ? 1 : -1];
@@ -140,7 +141,7 @@ static int life_valid(const uint8_t *s)
     return s[37] == LIFE_MAGIC && !crc16_erased(c) && c == crc16_ccitt(s, 38u);
 }
 
-static const pp_desc_t life_pp = { LIFE_REC_BYTES, LIFE_RECS, (uint8_t)offsetof(life_rec_t, writes), 0u, life_valid };
+const pp_desc_t life_pp = { LIFE_REC_BYTES, LIFE_RECS, (uint8_t)offsetof(life_rec_t, writes), 0u, life_valid };
 
 uint32_t life_find(const uint8_t *page0, const uint8_t *page1, life_rec_t *r, life_pos_t *pos)
 {
@@ -202,8 +203,13 @@ void energy_page(const energy_t *e, uint32_t now_s, uint32_t power_mw, uint8_t o
     for (i = 0; i < 24u; i++) {
         out[i] = 0;
     }
-    ultra_put32(out + ULTRA_EN_BOOT_MWH, e->boot_mwh);
-    ultra_put32(out + ULTRA_EN_TOTAL_WH, energy_total_wh(e));
-    ultra_put32(out + ULTRA_EN_POWER_MW, power_mw);
-    ultra_put24(out + ULTRA_EN_SAVED_AGE, !e->saved ? 0xFFFFFFu : age > 0xFFFFFEu ? 0xFFFFFEu : age);
+    {                                    /* ULTRA_EN_BOOT_MWH, _TOTAL_WH, _POWER_MW, _SAVED_AGE */
+        static const uint8_t len[4] = { 4, 4, 4, 3 };
+        uint32_t v[4];
+        v[0] = e->boot_mwh;
+        v[1] = energy_total_wh(e);
+        v[2] = power_mw;
+        v[3] = !e->saved ? 0xFFFFFFu : age > 0xFFFFFEu ? 0xFFFFFEu : age;
+        rc_pack(out, v, len, 4);
+    }
 }

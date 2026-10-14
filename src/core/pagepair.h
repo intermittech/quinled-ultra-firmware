@@ -15,6 +15,11 @@
  * outputs are bright (programs only) find erased entries on both pages. Each page is still erased once per round of
  * 2 x recs writes: no extra wear.
  *
+ * (0.6.6, review round 5) "the newest record is on this one" is pos->held: set only by a write that succeeded (pp_done,
+ * after flash_op) or found at boot (pp_find). A failed write uses up its entry (it may be partly programmed) but never
+ * counts as a record: before, the position after a failed first write on a page let the other page, which held the
+ * only valid record, be erased ahead.
+ *
  * Positions: page << 4 | entry (entry 0..recs - 1, recs <= 16). The power-on scene log uses it too (0.6.4: 16 records
  * of 16 bytes a page, 16-bit sequence numbers). */
 #ifndef PAGEPAIR_H
@@ -36,6 +41,7 @@ typedef struct {                        /* where the next record goes */
     uint8_t ahead;                      /* the other page reads erased (erased ahead) */
     uint8_t bad;                        /* (0.6.5, D5) pp_find: entries neither erased nor valid (a record cut by a
                                            power loss, a corrupted one, one of another layout) */
+    uint8_t held;                       /* (0.6.6) next's page holds a committed record (the newest): erase ahead */
 } pp_pos_t;
 #define PP_NONE 0xFFu
 #define PP_PAGE(at)  ((uint32_t)(at) >> 4)   /* a position's page (0 / 1) */
@@ -47,6 +53,9 @@ const uint8_t *pp_find(const pp_desc_t *d, const uint8_t *page0, const uint8_t *
 /* a write at pos: returns where (page << 4 | entry), or PP_NONE while the next page must be erased first. Moves pos
  * on (a write that fills its page: the other page next, erased first unless it was erased ahead). */
 uint32_t pp_plan(const pp_desc_t *d, pp_pos_t *pos);
+/* (0.6.6) the write at `at` (pp_plan's) is done: ok = programmed (FLASH_OK). A failed one never holds the newest record:
+ * if it filled a page that holds none, that page is erased and used again (the other page keeps the newest) */
+void     pp_done(pp_pos_t *pos, uint32_t at, uint32_t ok);
 /* the erase to do: 2 = due (no write before it), 1 = possible ahead, 0 = none; *page: which page (0 / 1) */
 uint32_t pp_erase_due(const pp_pos_t *pos, uint32_t *page);
 /* ... it was done */

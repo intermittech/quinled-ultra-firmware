@@ -128,7 +128,9 @@ SECTIONS
     	*(.gnu.linkonce.r.*)
     	*(.data .data.*)
     	*(.gnu.linkonce.d.*)
-		. = ALIGN(8);
+        /* Startup copies words; each input section keeps its own required
+         * alignment (including any future 8-byte .sdata). Avoid an extra pad. */
+        . = ALIGN(4);
     	PROVIDE( __global_pointer$ = . + 0x600 );	/* QuinLED: not + 0x800. gp's +-2 KB window then starts 0x200
 							   below the small data: all of .sdata / .sbss (~3.1 KB) is in it,
 							   clear of the reserve the linker keeps at the window's edges */
@@ -161,16 +163,18 @@ SECTIONS
 	ASSERT(DEFINED(QL_DIAG_BIG_SLOT) || ORIGIN(FLASH) + LENGTH(FLASH) <= 0x10000, "the image must stay in the zero-wait flash")
 	PROVIDE( end = . );
 
-	/* QuinLED (0.6.5): the reset breadcrumbs (main.c bcrumb), 32 bytes no reset clears, at the same address in every
-	   link (0x200047E0, just below the stack): outside the hand-over block (0x20000000-1F) and the bootloader's RAM
-	   (bootloader/bl.ld: its buffers end at 0x20004274, its stack starts at 0x20004A00; test/test_noinit_map.py). The
-	   startup neither copies nor clears it. One 4 KB %hi page: isr.S stores with one lui. */
+	/* QuinLED (0.6.5): the reset breadcrumbs (main.c bcrumb), 32 bytes no reset clears, right below the stack
+	   (0x200047E0 with the 2 KB stack; 0x200049E0 with STACK_SIZE=1536): outside the hand-over block (0x20000000-1F)
+	   and the bootloader's RAM (bootloader/bl.ld: its buffers end at 0x20004274, its stack starts at 0x20004A00:
+	   asserted; test/test_d1_map.py). The startup neither copies nor clears it. One 4 KB %hi page: isr.S stores with one
+	   lui. */
 	.noinit ORIGIN(RAM) + LENGTH(RAM) - __stack_size - 32 (NOLOAD) :
 	{
 		KEEP(*(.noinit .noinit.*))
 	} >RAM
 	ASSERT(_ebss <= ADDR(.noinit) && SIZEOF(.noinit) <= 32, "RAM: .bss overlaps the reset breadcrumbs (.noinit)")
 	ASSERT(((ADDR(.noinit) + 0x800) >> 12) == ((ADDR(.noinit) + 31 + 0x800) >> 12), ".noinit: one %hi page")
+	ASSERT(ADDR(.noinit) + 32 <= 0x20004A00, ".noinit: below the bootloader's stack (a smaller STACK_SIZE moves it up)")
 
     .stack ORIGIN(RAM) + LENGTH(RAM) - __stack_size :
     {

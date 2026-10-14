@@ -147,6 +147,8 @@ uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips, uint32_t admit);
 /* e->lt as the record to write now: the energy, the next write count, the check */
 void     energy_pack(energy_t *e);
 void     energy_saved(energy_t *e, uint32_t now_s);
+/* the pair's description (core/pagepair.h; flashrec.c's descriptor, 0.6.6): a record valid (magic, CRC-16) */
+extern const pp_desc_t life_pp;
 /* the two pages: the newest valid record into *r (returns 1; 0 = none) and where the next one goes (the entry after
  * it when that reads erased, else the other page's first: erased first unless it is) */
 uint32_t life_find(const uint8_t *page0, const uint8_t *page1, life_rec_t *r, life_pos_t *pos);

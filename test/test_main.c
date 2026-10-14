@@ -192,6 +192,7 @@ static void test_decoder(void)
 #include "test_ocled.c"
 #include "test_r5_ovr.c"                       /* (0.6.5 D4: the overrun counters) */
 #include "test_pwrev.c"
+#include "test_rc.c"
 #include "test_vsense.c"
 #include "test_testjig.c"
 #include "test_d2.c"                             /* (0.6.5) event log */
@@ -205,6 +206,9 @@ static void test_decoder(void)
 #include "test_d1.c"                             /* (0.6.5) reset breadcrumbs */
 #include "test_r5_bounds.c"                    /* (0.6.5 D8: every console output under one part) */
 #include "test_console_cz.c"                   /* (the whole console output, compressed vs plain) */
+#if MON_EXTRA
+#include "test_calhist.c"                      /* (0.6.6, M2) */
+#endif
 #include "test_spec.c"
 #include "test_r4_mutation.c"                    /* (gpt-mutation: regressions from surviving mutants) */
 
@@ -479,6 +483,7 @@ int main(void)
     test_ocled();
     test_r5_ovr();
     test_pwrev();
+    test_rc();
     test_vsense();
     test_rxpower();
     test_testjig();
@@ -494,6 +499,9 @@ int main(void)
     test_d1();
     test_r5_bounds();
     test_console_cz();
+#if MON_EXTRA
+    test_calhist();
+#endif
     test_spec();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;

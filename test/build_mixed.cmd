@@ -15,7 +15,7 @@ if not defined VSDIR (
 call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
 set "OUT=%HERE%..\build\mixed"
 if not exist "%OUT%" mkdir "%OUT%"
-cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\mixed_tests.exe" /Fo:"%OUT%\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /Fe:"%OUT%\mixed_tests.exe" /Fo:"%OUT%\\" ^
    "%HERE%test_mixed.c" "%HERE%..\src\core\frame_rx.c" "%HERE%..\src\core\proto.c"
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\mixed_tests.exe" %*

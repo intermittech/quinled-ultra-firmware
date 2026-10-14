@@ -54,6 +54,13 @@ typedef struct {
 } health_t;
 
 void    health_init(health_t *h);
+/* (a - b) in % of b (b > 0), clamped to -127..127 (0.6.6: inline, also the calibration history's trend, core/calhist.c:
+ * out of line it cost health_run and health_test_done ~60 cycles) */
+static inline int8_t dev_pct(int32_t a, int32_t b)
+{
+    int32_t d = (a - b) * 100 / b;
+    return (int8_t)(d > 127 ? 127 : d < -127 ? -127 : d);
+}
 /* a test starts: the stored test (levels 0: none) */
 void    health_test_start(health_t *h, const isense_cal_t *stored);
 /* the test is done: classify; returns the D9 code (0: nothing found, 1..5 the first abnormal channel, 6 dark) */

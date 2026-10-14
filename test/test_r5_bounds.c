@@ -29,7 +29,8 @@ static uint32_t r5b_parts(cli_t *c, const char *cmd, uint32_t *longest, char *al
     return n;
 }
 
-#define STATUS_PARTS_TEST 10u              /* (cli.c STATUS_PARTS: the 0.6.5 merge added the event log's) */
+#define STATUS_PARTS_TEST (10u + MON_EXTRA)   /* (cli.c STATUS_PARTS: the 0.6.5 merge added the event log's, 0.6.6
+                                                the calibration history's, M2) */
 
 static void test_r5_bounds(void)
 {
@@ -92,6 +93,21 @@ static void test_r5_bounds(void)
         st.ovr = ovr;
         st.ev = &ev;
     }
+#if MON_EXTRA
+    {
+        static calhist_t ch;               /* (0.6.6, M2) four tests, the widest numbers, the trend at its widest */
+        uint32_t k;
+        for (i = 0; i < CALHIST_N; i++) {
+            ch.e[i].lit_h = (uint16_t)(i ? 65535u : 0u);
+            for (k = 0; k < 5u; k++) {
+                ch.e[i].ma[k] = (uint16_t)(i ? 65535u : 20000u);
+            }
+        }
+        ch.n = CALHIST_N;
+        ch.tests = 65535;
+        st.ch = &ch;
+    }
+#endif
     st.proto_locked = 1;
     st.proto_provisional = 1;
     st.frames = st.decoded = st.config_frames = st.saves = st.stagger_moves = 0xFFFFFFFFu;

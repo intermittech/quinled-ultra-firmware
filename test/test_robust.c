@@ -996,6 +996,9 @@ static void cli_save(void) {}
 static energy_t cli_en;                                  /* (0.6.3) the energy / lifetime record the status shows */
 
 static uint32_t cli_ovr[3];                              /* (0.6.5 D4) the overrun counters */
+#if MON_EXTRA
+static calhist_t cli_ch;                                 /* (0.6.6, M2) the calibration history */
+#endif
 static void rnd_status(void)
 {
     uint8_t *b = (uint8_t *)&cli_st;
@@ -1036,6 +1039,11 @@ static void rnd_status(void)
     }
     cli_ev.head = (uint8_t)rint_(EVLOG_N);
     cli_st.ev = chance(80) ? &cli_ev : 0;
+#if MON_EXTRA
+    for (i = 0; i < sizeof cli_ch; i++) ((uint8_t *)&cli_ch)[i] = (uint8_t)rnd();
+    cli_ch.n = (uint8_t)rint_(CALHIST_N + 1u);          /* (0.6.6, M2) its invariant: calhist_add / calhist_valid */
+    cli_st.ch = chance(80) ? &cli_ch : 0;
+#endif
     {
         static uint32_t uid[3];                          /* (0.6.5 D10) the chip's id: always set too */
         for (i = 0; i < 3u; i++) {

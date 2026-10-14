@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Supply dips: see vdip.h. */
 #include "vdip.h"
+#include "rc.h"                             /* rc_pack */
 #include "lto.h"
 
 void vdip_init(vdip_t *d)
@@ -142,25 +143,26 @@ static uint32_t age_s(uint32_t now_s, uint32_t t_s)
 
 void vdip_page(const vdip_t *d, const vsense_t *vs, uint32_t now_s, uint32_t now_mv, uint8_t arg, uint8_t out[24])
 {
+    static const uint8_t len[13] = { 2, 2, 2, 2, 1, 3, 1, 3, 2, 1, 2, 2, 1 };   /* the ULTRA_SU_* fields, DIPS .. 23 */
     const vdip_ev_t *e = vdip_event(d, arg);
-    uint32_t i;
-    for (i = 0; i < 24u; i++) {
-        out[i] = 0;
-    }
-    ultra_put16(out + ULTRA_SU_DIPS, d->count);
-    ultra_put16(out + ULTRA_SU_REF_MV, d->ref_q12 ? vsense_mv(vs, d->ref_q12 >> 8, 16u) : 0u);
-    ultra_put16(out + ULTRA_SU_NOW_MV, now_mv > 65535u ? 65535u : now_mv);
+    uint32_t v[13] = { 0 };
+    v[0] = d->count;
+    v[1] = d->ref_q12 ? vsense_mv(vs, d->ref_q12 >> 8, 16u) : 0u;
+    v[2] = now_mv > 65535u ? 65535u : now_mv;
+    v[5] = 0xFFFFFFu;
     if (d->deep.ref_x) {
-        ultra_put16(out + ULTRA_SU_DEEP_MV, vsense_mv(vs, d->deep.min_x, 1u));
-        out[ULTRA_SU_DEEP_PCT] = (uint8_t)vdip_pct(&d->deep);
+        v[3] = vsense_mv(vs, d->deep.min_x, 1u);
+        v[4] = vdip_pct(&d->deep);
+        v[5] = age_s(now_s, d->deep.t_s);
     }
-    ultra_put24(out + ULTRA_SU_DEEP_AGE, d->deep.ref_x ? age_s(now_s, d->deep.t_s) : 0xFFFFFFu);
-    out[ULTRA_SU_LOGGED] = d->n_log;
-    ultra_put24(out + ULTRA_SU_EV_AGE, e ? age_s(now_s, e->t_s) : 0xFFFFFFu);
+    v[6] = d->n_log;
+    v[7] = 0xFFFFFFu;
     if (e) {
-        ultra_put16(out + ULTRA_SU_EV_MV, vsense_mv(vs, e->min_x, 1u));
-        out[ULTRA_SU_EV_PCT] = (uint8_t)vdip_pct(e);
-        ultra_put16(out + ULTRA_SU_EV_MS, e->dur_ms);
-        ultra_put16(out + ULTRA_SU_EV_MA, e->i_ma);
+        v[7] = age_s(now_s, e->t_s);
+        v[8] = vsense_mv(vs, e->min_x, 1u);
+        v[9] = vdip_pct(e);
+        v[10] = e->dur_ms;
+        v[11] = e->i_ma;
     }
+    rc_pack(out, v, len, 13);                          /* (byte 23 reserved: 0) */
 }

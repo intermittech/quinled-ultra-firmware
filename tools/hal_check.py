@@ -392,6 +392,9 @@ def flash(elf):
           % (e.ret, kinds))
     check(e.peek(0x0800FF00, 8) == bytes([0x34, 0x12, 0x78, 0x56, 0xBC, 0x9A, 0xF0, 0xDE]), "the data programmed")
     bad = []
+    irq1 = (1 << 12) | (1 << 13) | (1 << 14)           # TIM2 / TIM3 / TIM4
+    if "rc_uart_isr" in e.syms:
+        irq1 |= 1 << 23                                # the receiver (BOARD=2): its return channel's USART3 too
     for k, a, s in e.ops:
         if not s["irq_on"]:
             bad.append("%s: interrupts off" % k)
@@ -403,7 +406,7 @@ def flash(elf):
             bad.append("%s: VTF %d %08x" % (k, s["vtfid"], s["vtfaddr"]))
         if s["mtvec"] != fault:
             bad.append("%s: mtvec %08x" % (k, s["mtvec"]))
-        if s["irer1"] != (1 << 12) | (1 << 13) | (1 << 14):
+        if s["irer1"] != irq1:
             bad.append("%s: IRER1 %08x" % (k, s["irer1"]))
         if 4 in s["modes"]:
             bad.append("%s: an output forced low" % k)
@@ -412,7 +415,7 @@ def flash(elf):
           "touched %s" % (bad[:3] or ""))
     after = e.state()
     check(after["cfgr"] == 0x0002 | (4 << 11) and after["cmp"] == 7199 and after["vtfaddr"] == 0 and
-          after["mtvec"] == e.addr("trap_entry") and e.mmio.get(PFIC_B + 0x104, 0) == (7 << 12) and after["irq_on"] and
+          after["mtvec"] == e.addr("trap_entry") and e.mmio.get(PFIC_B + 0x104, 0) == irq1 and after["irq_on"] and
           e.mmio.get(FLASH + 0x10, 0) & 0x8080 == 0x8080,
           "after: the clocks, SysTick, VTF, mtvec, the interrupts and the locks as before (%s)" % after)
     check(e.mmio.get(SYST + 0x08, 0) in (2999, 3000, 3001), "SysTick's phase kept across the two clock changes (%d)"
@@ -520,12 +523,12 @@ def ramtext(elf):
     import subprocess
     print("ramtext: the SRAM code calls nothing in the flash")
     e = Emu(elf)
-    lo, hi = e.addr("__ramtext_start"), e.addr("__ramtext_start") + 0x400
+    lo, hi = e.addr("__ramtext_start"), e.addr("__ramtext_end")
     objdump = os.environ.get("OBJDUMP", "riscv-none-elf-objdump")
     dis = subprocess.run([objdump, "-d", "-j", ".ramtext", elf], capture_output=True, text=True).stdout
     out = []
     for l in dis.splitlines():
-        m = re.search(r"\t(jal|j|call|tail|jalr|beq|bne|blt|bge|bltu|bgeu|beqz|bnez)\s.*?([0-9a-f]{8}) <", l)
+        m = re.search(r"\t(jal|j|call|tail|jalr|beq|bne|blt|bge|bltu|bgeu|beqz|bnez)\s.*?([0-9a-f]{1,8}) <", l)
         if m and not lo <= int(m.group(2), 16) < hi:
             out.append(l.strip())
     funcs = re.findall(r"<([^>]+)>:", dis)

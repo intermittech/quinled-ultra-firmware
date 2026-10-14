@@ -6,6 +6,7 @@
 #include "ch32v20x.h"
 #include "hw.h"
 #include "../core/flashrec.h"
+#include "../core/rc.h"
 #include "../core/stagger.h"
 #include "../core/scratch.h"
 #include "../core/lto.h"
@@ -63,6 +64,41 @@ static void pin_cfg(GPIO_TypeDef *g, uint32_t pin, uint32_t cfg)
     uint32_t sh = (pin & 7u) * 4u;
     *r = (*r & ~(0xFu << sh)) | (cfg << sh);
 }
+
+/* hw_init's pins (board.h), in order: the pin, its port, an ODR write before the mode, and the CFG nibble (bits 8-11) */
+#define PIN_B    0x10u                                   /* GPIOB (else GPIOA) */
+#define PIN_HI   0x20u                                   /* ODR 1 first (BSHR set) */
+#define PIN_LO   0x40u                                   /* ODR 0 first (BSHR reset) */
+#define PIN_CLR  0x80u                                   /* ODR 0 first (BCR) */
+#define PIN(port, pin, odr, cfg) ((uint16_t)((pin) | (port) | (odr) | ((cfg) << 8)))
+static const uint16_t pin_tab[] = {
+    PIN(0, 0, 0, CFG_ANALOG),                            /* PA0: the spare input on TP8 (receiver: V_B) */
+    PIN(0, 6, 0, CFG_IN_FLOAT),                          /* PA6: DIN */
+    PIN(0, 5, 0, CFG_AF_PP),                             /* PA5: SPI1_SCK, internal only (pad not connected) */
+    PIN(0, FWD_PIN, PIN_LO, CFG_OUT_PP),                 /* PA1: FWD_EN, the gate closed */
+    PIN(0, 2, 0, CFG_AF_PP),                             /* PA2 / PA3: the console */
+    PIN(0, 3, 0, CFG_IN_FLOAT),
+    PIN(0, 4, 0, CFG_ANALOG),                            /* PA4: the supply / bus voltage (R36 / R37 / C29) */
+    PIN(0, 7, 0, CFG_ANALOG),                            /* PA7: the current sense */
+    PIN(0, 8, 0, CFG_AF_PP),                             /* PA8 / PA9: PWM G / R */
+    PIN(0, 9, 0, CFG_AF_PP),
+#if BOARD_RETURN
+    PIN(0, 10, PIN_HI, CFG_OUT_PP),                      /* PA10: forward mode, the output transceiver drives downstream */
+    PIN(PIN_B, 14, PIN_CLR, CFG_OUT_PP),                 /* PB14: ... the input one listens upstream */
+#else
+    PIN(0, 10, PIN_CLR, CFG_IN_PULL),                    /* PA10, PB14: pull-down, unused here */
+    PIN(PIN_B, 14, PIN_CLR, CFG_IN_PULL),
+#endif
+#if BOARD_TESTJIG
+    PIN(PIN_B, 10, PIN_HI, CFG_IN_PULL),                 /* PB10 (TP9): pull-up, the test jig's pad (TIM2 CC3E stays 0) */
+#else
+    PIN(PIN_B, 10, PIN_CLR, CFG_IN_PULL),
+#endif
+    PIN(PIN_B, 15, PIN_LO, CFG_OUT_PP),                  /* PB15: status LED D9, off */
+    PIN(PIN_B, 11, 0, CFG_AF_PP),                        /* PB11: PWM B */
+    PIN(PIN_B, 0, 0, CFG_AF_PP),                         /* PB0 / PB1: PWM W2 / W1 */
+    PIN(PIN_B, 1, 0, CFG_AF_PP),
+};
 
 /* ---------------------------------------------------------------------------------------------------- clock */
 /* HSI 8 MHz, undivided into the PLL (EXTEN HSIPRE = 1), x18 = 144 MHz. HCLK and PCLK1 undivided (allowed up to
@@ -658,8 +694,87 @@ void led_set(uint8_t on)
     GPIOB->BSHR = on ? (1u << 15) : (1u << (15 + 16));  /* D9 on PB15 */
 }
 
-/* the stack (Link_sections.ld: _susrstack .. _eusrstack, 2 KB at the top of RAM): painted below the caller's frame at
- * boot; the lowest word no longer holding the pattern is the deepest the stack (main loop + nested ISRs) went */
+#if BOARD_RETURN
+/* ------------------------------------------------------------------------------------------- return channel */
+/* USART3 TX only (RE 0: its RX pin PB11 is PWM_B), 8N1, by interrupt: every DMA channel is taken (USART3_TX's, ch2,
+ * is the DIN sampler's). Its entry: VTF slot 1 (0.6.5's unified trap_entry dispatches only SysTick and TIM2-4;
+ * slot 0 is flash_op's), priority 0x00, so it preempts the poll tick (a byte every 10 us at 1 Mbaud; a late one only
+ * stretches the stop bit). PB10 is driven only during a burst; otherwise an input with its weak pull-down, and the relay node
+ * follows the output transceiver's RO (1 k against the 100 R from PB10). BENCH: the node's levels, DIN's read-back. */
+static const uint8_t *rc_next;
+static uint32_t rc_left;
+extern void rc_uart_entry(void);                         /* isr.S */
+
+static void rc_release(void)
+{
+    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* no TXE / TC interrupt */
+    pin_cfg(GPIOB, 10, CFG_IN_PULL);
+}
+
+static void rc_hw_init(void)
+{
+    RCC->APB1PCENR |= 1u << 18;                          /* USART3EN */
+    USART3->BRR = 144u;                                  /* 1 Mbaud at PCLK1 144 MHz (rc_brr per burst) */
+    rc_release();
+    NVIC_SetPriority(USART3_IRQn, 0x00);
+    PFIC->VTFIDR[1] = USART3_IRQn;
+    PFIC->VTFADDR[1] = (uint32_t)rc_uart_entry | 1u;
+    NVIC_EnableIRQ(USART3_IRQn);
+}
+
+void rc_hw_dir(uint32_t mode)
+{
+    if (mode == RC_DIR_FORWARD) {
+        rc_release();
+        GPIOB->BCR = 1u << 14;                           /* input transceiver: listen (DE 0) */
+        GPIOA->BSHR = 1u << 10;                          /* output transceiver: drive downstream (DE 1) */
+    } else {
+        GPIOA->BCR = 1u << 10;                           /* output transceiver: listen */
+        GPIOB->BSHR = mode == RC_DIR_ANSWER ? 1u << 14 : 1u << (14 + 16);   /* input: drive upstream from the node,
+                                                                                or listen too (RC_DIR_QUIET) */
+    }
+}
+
+uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
+{
+    uint32_t t = (uint32_t)SysTick->CNT, low;            /* (early in the tick: no reload during the wait) */
+    USART3->BRR = brr;
+    pin_cfg(GPIOB, 10, CFG_AF_PP);                       /* the line HIGH: the USART idles high */
+    while ((uint32_t)SysTick->CNT - t < RC_PREAMBLE_CYC) {
+    }
+    low = (GPIOA->INDR & (1u << 6)) == 0u;               /* DIN (the input RO) LOW: another driver on the segment */
+    if (low || n == 0u) {                                /* (n 0: the turnaround check only) */
+        rc_release();
+        return low;
+    }
+    rc_next = b + 1;
+    rc_left = n - 1u;
+    USART3->STATR = (uint16_t)~USART_STATR_TC;
+    USART3->DATAR = b[0];
+    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
+    return 0;
+}
+
+void rc_uart_isr(void);                                  /* USART3, entered via isr.S (VTF, HPE + mret) */
+void rc_uart_isr(void)
+{
+    if (USART3->CTLR1 & USART_CTLR1_TXEIE) {
+        if (rc_left != 0u) {
+            rc_left--;
+            USART3->DATAR = *rc_next++;
+            return;
+        }
+        USART3->STATR = (uint16_t)~USART_STATR_TC;       /* the last byte is in the shift register: its stop bit */
+        USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TCIE;
+        return;
+    }
+    rc_release();                                        /* TC: the line back to the relay node (LOW idle) */
+}
+#endif
+
+/* the stack (Link_sections.ld: _susrstack .. _eusrstack, 2 KB at the top of RAM; tools/build_target.sh STACK_SIZE):
+ * painted below the caller's frame at boot; the lowest word no longer holding the pattern is the deepest the stack (main loop +
+ * nested ISRs) went */
 #define STACK_PAINT 0xC5A3965Au
 extern uint32_t _susrstack[], _eusrstack[];
 
@@ -750,17 +865,22 @@ uint32_t uart_busy(void)
     return uart_tx_len != 0u || uart_tx_busy() || !(USART2->STATR & USART_STATR_TC);
 }
 
-void uart_kick(void)
+/* the DMA start (out of line: uart_kick's every-pass test stays a leaf without a frame) */
+static NOINLINE void uart_kick_tx(void)
 {
-    if (uart_tx_len == 0u || uart_tx_busy()) {
-        return;
-    }
     DMA1_Channel7->CFGR = 0;
     DMA1_Channel7->MADDR = (uint32_t)uart_tx[uart_tx_fill];
     DMA1_Channel7->CNTR = uart_tx_len;
     DMA1_Channel7->CFGR = DMA_CFGR1_DIR | DMA_CFGR1_MINC | DMA_CFGR1_EN;
     uart_tx_fill ^= 1u;
     uart_tx_len = 0;
+}
+
+void uart_kick(void)
+{
+    if (uart_tx_len != 0u && !uart_tx_busy()) {
+        uart_kick_tx();
+    }
 }
 
 void uart_write(const char *s)
@@ -791,32 +911,24 @@ void hw_init(void)
      * Others default: TIM1 CH1 / CH2 = PA8 / PA9, TIM3 CH1 / CH3 / CH4 = PA6 / PB0 / PB1, SPI1 SCK / MISO =
      * PA5 / PA6, USART2 = PA2 / PA3 */
     AFIO->PCFR1 = (AFIO->PCFR1 & ~AFIO_PCFR1_TIM2_REMAP) | AFIO_PCFR1_TIM2_REMAP_PARTIALREMAP2;
-    pin_cfg(GPIOA, 0, CFG_ANALOG);                       /* the spare input on TP8 (receiver: V_B) */
-    pin_cfg(GPIOA, 6, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 5, CFG_AF_PP);                        /* SPI1_SCK, internal only (pad not connected) */
-    GPIOA->BSHR = 1u << (FWD_PIN + 16u);                 /* gate closed */
-    pin_cfg(GPIOA, FWD_PIN, CFG_OUT_PP);
-    pin_cfg(GPIOA, 2, CFG_AF_PP);
-    pin_cfg(GPIOA, 3, CFG_IN_FLOAT);
-    pin_cfg(GPIOA, 4, CFG_ANALOG);                       /* the supply / bus voltage (R36 / R37 / C29) */
-    pin_cfg(GPIOA, 7, CFG_ANALOG);                       /* the current sense */
-    pin_cfg(GPIOA, 8, CFG_AF_PP);
-    pin_cfg(GPIOA, 9, CFG_AF_PP);
-    GPIOA->BCR = 1u << 10;                               /* ODR 0: pull-down. PA10, PB14: unused here */
-    pin_cfg(GPIOA, 10, CFG_IN_PULL);
-    GPIOB->BCR = 1u << 14;
-    pin_cfg(GPIOB, 14, CFG_IN_PULL);
-#if BOARD_TESTJIG
-    GPIOB->BSHR = 1u << 10;                              /* ODR 1: pull-up. PB10 (TP9): the test jig's pad */
-#else
-    GPIOB->BCR = 1u << 10;
-#endif
-    pin_cfg(GPIOB, 10, CFG_IN_PULL);                     /* input (TIM2 CC3E stays 0: no output) */
-    led_set(0);
-    pin_cfg(GPIOB, 15, CFG_OUT_PP);                      /* status LED D9 */
-    pin_cfg(GPIOB, 11, CFG_AF_PP);
-    pin_cfg(GPIOB, 0, CFG_AF_PP);
-    pin_cfg(GPIOB, 1, CFG_AF_PP);
+    /* the pins (board.h), in this order, each with its ODR write first where one is needed (PIN_HI / PIN_LO before a
+     * pull input or an output: the level before the mode). One table (0.6.6, review round 5: the 20 pin_cfg calls
+     * inlined were ~210 B more). PIN_LO writes BSHR's reset half, PIN_CLR the BCR, as the 0.6.5 code did. */
+    {
+        uint32_t i;
+        for (i = 0; i < sizeof pin_tab / sizeof pin_tab[0]; i++) {
+            uint32_t t = pin_tab[i], pin = t & 15u;
+            GPIO_TypeDef *g = (t & PIN_B) ? GPIOB : GPIOA;
+            if (t & PIN_HI) {
+                g->BSHR = 1u << pin;
+            } else if (t & PIN_LO) {
+                g->BSHR = 1u << (pin + 16u);
+            } else if (t & PIN_CLR) {
+                g->BCR = 1u << pin;
+            }
+            pin_cfg(g, pin, t >> 8);
+        }
+    }
 
     /* interrupt priorities (nesting on, bit 7 = preemption): the gate ISR has a 100 us deadline (the first
      * toggle itself is written by DMA), so it may preempt the 20 kHz poll tick (longest path: ring copy) */
@@ -868,6 +980,9 @@ void hw_init(void)
     DMA1_Channel6->CNTR = UART_RX_SIZE;
     DMA1_Channel6->CFGR = DMA_CFGR1_CIRC | DMA_CFGR1_MINC | DMA_CFGR1_EN;
     DMA1_Channel7->PADDR = (uint32_t)&USART2->DATAR;
+#if BOARD_RETURN
+    rc_hw_init();
+#endif
 
     watchdog_start();
 }
@@ -953,8 +1068,14 @@ static void flash_clock(uint32_t cfgr, uint32_t slow)
     SysTick->CTLR = ctl;
 }
 
-/* the slew and gate interrupts (hw_init enables them with SysTick; nothing else is enabled, and no VTF slot is used) */
+/* the slew and gate interrupts (hw_init enables them with SysTick; nothing else is enabled, and no VTF slot is used;
+ * the receiver: also its return channel's USART3, on VTF slot 1) */
+#if BOARD_RETURN
+#define FLASH_IRQ1 ((1u << (TIM2_IRQn - 32)) | (1u << (TIM3_IRQn - 32)) | (1u << (TIM4_IRQn - 32)) | \
+                    (1u << (USART3_IRQn - 32)))
+#else
 #define FLASH_IRQ1 ((1u << (TIM2_IRQn - 32)) | (1u << (TIM3_IRQn - 32)) | (1u << (TIM4_IRQn - 32)))
+#endif
 
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {

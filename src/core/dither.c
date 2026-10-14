@@ -114,10 +114,19 @@ MEASURED void dither_build(uint16_t v16, uint32_t steps, uint8_t len, const dith
 
 /* the ideal counts of each entry, v x period / 65535 = q + r / 65535, computed once per table: in the main loop's
  * shared scratch (scratch.h; the stagger search uses it at other times) */
-uint32_t core_scratch[CORE_SCRATCH_WORDS];
-#define var_q (core_scratch)
-#define var_r ((uint16_t *)(core_scratch + VAR_MAX))
-typedef char var_fits_scratch[(VAR_MAX * 4u + VAR_MAX * 2u <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
+uint32_t core_scratch[CORE_SCRATCH_WORDS] SCRATCH_ALIGN;
+/* Full-on returns before filling this table: v <= 65534 and p <= 65536, so
+ * floor(v*p/65535) <= 65534. Both quotient and remainder fit in 16 bits. */
+/* The storage is a uint32_t array. Tell GCC that these halfword views may
+ * alias its words (MSVC does not apply GCC's type-based alias optimization). */
+#if defined(__GNUC__)
+typedef uint16_t scratch_half_t __attribute__((may_alias));
+#else
+typedef uint16_t scratch_half_t;
+#endif
+#define var_q ((scratch_half_t *)core_scratch)
+#define var_r ((scratch_half_t *)core_scratch + VAR_MAX)
+typedef char var_fits_scratch[(VAR_MAX * 2u + VAR_MAX * 2u <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
 
 /* x / 65535 without a divide: exact for x < 65535 x 65536 (v < 65535, period <= 65536) */
 static uint32_t div65535(uint32_t x)
@@ -175,7 +184,8 @@ static void var_store(const uint16_t *arr, uint32_t len, uint16_t *dst, uint8_t 
 MEASURED void dither_build_var(uint16_t v16, uint32_t steps, const uint16_t *arr, uint8_t len, uint8_t min_len,
                       const dither_opts_t *o, uint8_t phase, uint16_t *dst, uint8_t stride, uint8_t right_aligned)
 {
-    uint32_t floor = o->floor_policy == FLOOR_OFF ? 0u : o->floor, v = v16, rem = 32767u, i, on = 0, sum_p = 0;
+    uint32_t policy = o->floor_policy;        /* options are fixed for this build; scratch may alias words */
+    uint32_t floor = policy == FLOOR_OFF ? 0u : o->floor, v = v16, rem = 32767u, i, on = 0, sum_p = 0;
     int nodither = len == 1u || o->mode == DITHER_OFF || (o->mode == DITHER_OFF_LOW && v16 < o->threshold16);
     int32_t acc = 0;
 
@@ -222,7 +232,7 @@ MEASURED void dither_build_var(uint16_t v16, uint32_t steps, const uint16_t *arr
     /* the ideal counts of each entry, and the table's exact on-time (rounded to a count) */
     for (i = 0; i < len; i++) {
         uint32_t p = (uint32_t)arr[i] + 1u, prod = v * p, q = div65535(prod), r = prod - q * 65535u;
-        var_q[i] = q;
+        var_q[i] = (uint16_t)q;
         var_r[i] = (uint16_t)r;
         rem += r;
         if (rem >= 65535u) {
@@ -237,7 +247,7 @@ MEASURED void dither_build_var(uint16_t v16, uint32_t steps, const uint16_t *arr
         /* below the minimum pulse on average: the table's on-time in evenly spaced pulses of at least the floor,
          * at least one per min_len periods (the plain table's rate, >= 2 kHz), else off. CLAMP: 0 or the floor. */
         if (on < len * floor) {
-            if (o->floor_policy == FLOOR_CLAMP) {
+            if (policy == FLOOR_CLAMP) {
                 uint32_t e = 2u * on >= len * floor ? floor : 0u;
                 for (i = 0; i < len; i++) {
                     dst[i * stride] = (uint16_t)e;
@@ -253,7 +263,7 @@ MEASURED void dither_build_var(uint16_t v16, uint32_t steps, const uint16_t *arr
         }
         /* the same for the off-time near 100 % (no sliver off-pulses) */
         if (off < len * floor) {
-            if (o->floor_policy == FLOOR_CLAMP) {
+            if (policy == FLOOR_CLAMP) {
                 uint32_t e = 2u * off >= len * floor ? floor : 0u;
                 for (i = 0; i < len; i++) {
                     dst[i * stride] = (uint16_t)e;

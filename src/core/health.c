@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 /* Channel health: see health.h. */
 #include "health.h"
+#include "rc.h"                          /* rc_pack */
 #include "lto.h"
 
 MEASURED void health_init(health_t *h)
@@ -22,13 +23,6 @@ uint32_t health_i100(const isense_cal_t *c, uint32_t ch)
         return c->ma[ch][ISENSE_LEVELS - 1u];
     }
     return c->levels == 1u && c->pct[0] ? (uint32_t)c->ma[ch][0] * 100u / c->pct[0] : 0u;
-}
-
-/* (a - b) in % of b, clamped to int8 (-127..127) */
-static int8_t dev_pct(int32_t a, int32_t b)
-{
-    int32_t d = (a - b) * 100 / b;
-    return (int8_t)(d > 127 ? 127 : d < -127 ? -127 : d);
 }
 
 /* the zero (logic + offset) against a reference zero: the dark flag */
@@ -140,7 +134,12 @@ void health_page(const health_t *h, int16_t temp_peak, uint32_t peak_age_s, uint
         out[ULTRA_HE_TEST_DEV + i] = (uint8_t)h->test_dev[i];
         out[ULTRA_HE_MODEL_DEV + i] = (uint8_t)h->model_dev[i];
     }
-    ultra_put16(out + ULTRA_HE_DARK_MA, (uint16_t)h->dark_ma);
-    ultra_put16(out + ULTRA_HE_TEMP_PEAK, (uint16_t)temp_peak);
-    ultra_put24(out + ULTRA_HE_TEMP_AGE, peak_age_s > 0xFFFFFEu ? 0xFFFFFEu : peak_age_s);
+    {                                    /* ULTRA_HE_DARK_MA, _TEMP_PEAK, _TEMP_AGE */
+        static const uint8_t len[3] = { 2, 2, 3 };
+        uint32_t v[3];
+        v[0] = (uint16_t)h->dark_ma;
+        v[1] = (uint16_t)temp_peak;
+        v[2] = peak_age_s > 0xFFFFFEu ? 0xFFFFFEu : peak_age_s;
+        rc_pack(out + ULTRA_HE_DARK_MA, v, len, 3);
+    }
 }

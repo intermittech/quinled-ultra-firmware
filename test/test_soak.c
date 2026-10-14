@@ -194,8 +194,9 @@ uint32_t hw_reset_flags(void) { return soak_reset_flags; }
 void pwm_start(uint32_t s, uint8_t l, uint8_t st) { (void)s; (void)l; (void)st; }
 uint8_t pwm_right_aligned(uint8_t ch) { (void)ch; return 0; }
 void pwm_set_phase(uint16_t o2, uint16_t o3) { (void)o2; (void)o3; }
-void gate_rearm(const gate_plan_t *g) { (void)g; edges_rearm = edges_total; sim_rearms++; }
-void gate_force_closed(void) {}
+static uint8_t sim_gate_forced;                          /* gate_force_closed since the last gate_rearm */
+void gate_rearm(const gate_plan_t *g) { (void)g; edges_rearm = edges_total; sim_rearms++; sim_gate_forced = 0; }
+void gate_force_closed(void) { sim_gate_forced = 1; }
 uint32_t din_ring_pos(void) { return (uint32_t)(ring_words % DIN_RING_WORDS); }
 void hw_adc_init(void) {}
 /* the temperature's injected sequence (hw_temp_start, then the next ms): 84 us without a PA7 conversion, so the
@@ -229,7 +230,13 @@ void watchdog_kick(void) { SwitchToFiber(fib_main); }   /* every main loop pass:
 /* ---- console */
 static char con_in[512], con_out[1u << 16];
 static uint32_t con_in_r, con_in_w, con_out_n;
-int uart_getc(void) { return con_in_r < con_in_w ? (int)(unsigned char)con_in[con_in_r++] : -1; }
+/* (0.6.6) con_rx_paced = 1: con_in's bytes arrive at 115200 baud (11.52 a ms, sim_tick) into the board's 64-byte RX
+ * DMA ring (hal/hw.c uart_rx: 63 bytes unread at most); one arriving onto 63 unread overwrites one: rx_overruns */
+static uint32_t con_rx_paced, con_in_due, rx_acc, rx_overruns;
+int uart_getc(void)
+{
+    return con_in_r < (con_rx_paced ? con_in_due : con_in_w) ? (int)(unsigned char)con_in[con_in_r++] : -1;
+}
 /* (0.6.5) the UART's 2 x 512-byte TX buffers draining at 115200 baud (11.52 bytes a ms, sim_tick): a write beyond
  * them would make uart_write wait on the board (the main loop stalls): counted in tx_blocks */
 static uint32_t tx_q, tx_acc, tx_blocks;
@@ -284,6 +291,9 @@ static uint32_t fl_bright(void)
     return b;
 }
 
+#if BOARD_RETURN
+static uint32_t rc_flash_in_window;                      /* flash operations while a response window ran (must be 0) */
+#endif
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr)
 {
     uint32_t i, us = halfwords * FL_HW_US, a = erase_addr ? erase_addr : addr;
@@ -292,6 +302,9 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     }
     fl_outside += !((a >= RECORDS_BASE && a + 2u * halfwords <= RECORDS_END) ||
                     (a >= UPD_APP_DESC + UPD_DESC_BYTES && a + 2u * halfwords <= UPD_APP_DESC + UPD_PAGE_BYTES));
+#if BOARD_RETURN
+    rc_flash_in_window += rc_state != RC_IDLE;
+#endif
     if (fl_fail && (((addr | erase_addr) & ~0xFFu) == SETTINGS_ADDR || ((addr | erase_addr) & ~0xFFu) == SETTINGS_B_ADDR)) {
         fl_fail--;
         sim_stall(FL_HW_US);
@@ -343,6 +356,9 @@ static uint32_t writes_in(uint32_t addr, uint32_t pages)
 #define W_FX()       (writes_in(SCENE_FX_ADDR, 2u) + (SCENE_FX_B_ADDR != SCENE_FX_ADDR ? writes_in(SCENE_FX_B_ADDR, 2u) : 0u))
 #define W_LIFE()     (writes_in(LIFE_PAGE0_ADDR, 1u) + writes_in(LIFE_PAGE1_ADDR, 1u))
 #define W_CAL()      (writes_in(CAL_PAGE_ADDR, 1u) + writes_in(CAL_B_ADDR, 1u))
+#if MON_EXTRA
+#define W_HIST()     (writes_in(CALHIST_ADDR, 1u) + writes_in(CALHIST_B_ADDR, 1u))   /* (0.6.6, M2) */
+#endif
 
 /* ================================================================================================ the host (hub) */
 static int host_on;
@@ -522,6 +538,12 @@ static void sim_tick(void)
     sim_ticks++;
     for (tx_acc += 576u; tx_acc >= 1000u; tx_acc -= 1000u) {   /* 11.52 bytes a ms */
         tx_q -= tx_q != 0u;
+    }
+    for (rx_acc += con_rx_paced ? 576u : 0u; rx_acc >= 1000u; rx_acc -= 1000u) {
+        if (con_in_due < con_in_w) {
+            rx_overruns += con_in_due - con_in_r >= 63u;
+            con_in_due++;
+        }
     }
     wave_to(sim_ns);
     soak_tim4.CNT = (uint16_t)(edges_total - edges_rearm);
@@ -1121,6 +1143,16 @@ static void sc_cfg(void)
         CHECK(W_CAL() - c0 == CAL_BUDGET_CAP + 1u && cal_load(&c, &n) == 0 && c.levels == 1u && c.pct[0] == 50u,
               "cfg: the newest test stored when the token came (%u, levels %u)", W_CAL() - c0, c.levels);
     }
+#if MON_EXTRA
+    {                                                    /* (0.6.6, M2) the calibration history: a record per stored test */
+        calhist_t r;
+        memset(&r, 0, sizeof r);
+        printf("  calibration history: %u tests, %u entries, %u records\n", chist.tests, chist.n, W_HIST());
+        CHECK(chist.tests == CAL_BUDGET_CAP + 1u && chist.n == CALHIST_N && W_HIST() == CAL_BUDGET_CAP + 1u &&
+              calhist_load(&r) && r.seq == chist.seq && r.tests == chist.tests && !chist_pend,
+              "cfg: the calibration history: %u tests, %u records, stored as in RAM", chist.tests, W_HIST());
+    }
+#endif
     CHECK((events_seen & ~0x18u) == 0u, "cfg: no false events (%X)", events_seen);
     /* a factory reset (console `defaults`, as a config frame or TP9's gesture): settings, scene, effects, calibration
      * cleared; the lifetime record kept, its pages untouched */
@@ -1152,6 +1184,13 @@ static void sc_cfg(void)
               "cfg: factory reset: calibration, effects, limit, scene cleared");
         CHECK(fl_erases[page_of(LIFE_PAGE0_ADDR)] == e0p && fl_erases[page_of(LIFE_PAGE1_ADDR)] == e1p &&
               W_LIFE() == wl, "cfg: factory reset: the lifetime pages untouched");
+#if MON_EXTRA
+        {                                                /* (0.6.6, M2) the calibration history begins anew */
+            calhist_t hr;
+            CHECK(calhist_load(&hr) && hr.n == 0u && hr.tests == 0u && chist.n == 0u && !chist_pend,
+                  "cfg: factory reset: the calibration history begins anew (%u entries stored)", hr.n);
+        }
+#endif
         CHECK(en.lt.ups == ups && en.lt.on_s >= on && energy_total_wh(&en) - wh <= 1u && en.lt.writes == wr && found &&
               r.writes == wr && wh - r.wh <= 1u && r.ups == ups, "cfg: factory reset: the lifetime record kept (RAM %u Wh, "
               "flash %u Wh, %u writes)", energy_total_wh(&en), r.wh, r.writes);
@@ -1164,6 +1203,7 @@ static void sc_cfg(void)
 #include "test_r4_reset.c"
 #include "test_r4_gate.c"
 #include "test_r5.c"                             /* (0.6.5: the upper flash, dip writes) */
+#include "test_soak_rc.c"                        /* (BOARD=2: the return channel; soak_rc.exe) */
 
 /* spec (review round 4): main.c behaviours of README / ULTRA_PROTOCOL.md that had no test. The power-on scene's
  * take-over 3 s after the first Ultra header without a light command (SCENE_TAKEOVER_MS); CONFIG 22 written only when
@@ -1337,7 +1377,9 @@ static void sc_d1(void)
     CHECK(p && strncmp(p, "before_reset=1d 1:02:03 up, pc 18990, fault 5\r\n", 47) == 0, "d1: the last run's line");
     CHECK(strstr(con_out, "reset=watchdog") != NULL, "d1: the reset line says watchdog");
 }
+#if BOARD_TESTJIG                                /* (the receiver has no test pad: no jig there) */
 #include "test_r5_jig_soak.c"                    /* (0.6.5 D10: r5jig) */
+#endif
 
 /* tripreset (r4): a factory reset while a trip holds the outputs off (a short; the retry 1 s later). The reset sets the
  * current sense up again (isense_setup): 0.6.2 cleared the trip there, but the outputs stayed forced off (only the
@@ -1596,11 +1638,19 @@ static void sc_minmax(void)
     CHECK(mn >= 23900 && mn <= 24100, "minmax: the next status starts again (min %d mV)", (int)mn);
 }
 
+
+#include "test_r5_retry.c"
+#include "test_r5_age.c"                         /* (0.6.6: r5age) */
+
 int main(int argc, char **argv)
 {
     const char *sc = argc > 1 ? argv[1] : "wrap";
     flash_init();
-    if (verify_scenario(sc) || r4_scenario(sc) || r5_scenario(sc)) {
+    if (strcmp(sc, "r5retry") == 0) {
+        sc_r5retry();
+    } else if (strcmp(sc, "r5age") == 0) {
+        sc_r5age();
+    } else if (verify_scenario(sc) || r4_scenario(sc) || r5_scenario(sc) || rc_scenario(sc)) {
     } else if (strcmp(sc, "wrap") == 0) {
         sc_wrap();
     } else if (strcmp(sc, "r5cpu") == 0) {
@@ -1629,8 +1679,10 @@ int main(int argc, char **argv)
         sc_d5();
     } else if (strcmp(sc, "race") == 0) {
         sc_race();
+#if BOARD_TESTJIG
     } else if (strcmp(sc, "r5jig") == 0) {
         sc_r5jig();
+#endif
     } else if (strcmp(sc, "tripreset") == 0) {
         sc_tripreset();
     } else if (strcmp(sc, "longws") == 0) {

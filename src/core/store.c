@@ -18,6 +18,7 @@ static uint8_t slot_crc(const store_slot_t *sl)
  * reserved byte takes another value instead), so a record whose CRC byte reads erased was never completed. */
 static int crc_erased(uint32_t c)
 {
+    (void)c;
     return UPPER_RECORDS && (c == 0xFFu || c == 0xE3u);   /* (0.6.4's layout: 0.6.4's rule, its records as before) */
 }
 
@@ -31,11 +32,7 @@ void store_ext_clear(store_ext_t *e)
 
 void store_pack_ext(const settings_t *s, const store_ext_t *e, uint32_t seq, store_slot_t *slot)
 {
-    uint32_t i;
-    uint8_t *b = (uint8_t *)slot;
-    for (i = 0; i < STORE_SLOT_BYTES; i++) {
-        b[i] = 0xFF;
-    }
+    /* Every byte is assigned below; store_slot_size_check proves there is no padding. */
     slot->magic = STORE_MAGIC;
     slot->seq = seq;
     slot->s = *s;

@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 #include "cz.h"
+#include "calhist.h"
 #include "config.h"
 #include "energy.h"
 #include "health.h"
@@ -129,6 +130,10 @@ typedef struct {
     /* CPU load (core/cpuload.h): busy share of the last second, of the busiest second since the last status, 0.1 % */
     uint16_t cpu_pm, cpu_peak;
     const struct evlog *ev;        /* (0.6.5, D2) the event log (below), NULL = none */
+#if MON_EXTRA
+    const calhist_t *ch;           /* (0.6.6, M2) the calibration history (core/calhist.h), NULL = none. (New fields at
+                                      the end: test_console_cz.c's random states stay as they were) */
+#endif
 } cli_status_t;
 
 typedef struct {
@@ -140,8 +145,8 @@ typedef struct {
     const scene_t *scene;          /* power-on scene (stored, or about to be) */
     const cli_status_t *st;
     char line[48];
-    uint8_t len;
     uint16_t watch_ms;             /* `watch`: a status line every watch_ms (main.c), 0 = off; any key stops it */
+    uint8_t len;
     uint8_t  st_part;              /* (0.6.5) `status` / `help` in progress: the next part + 1 (0 = none; cli_poll) */
 } cli_t;
 /* (0.6.5) the console output's next part (a `status` or `help` in progress): 1 while more remain. main.c calls it

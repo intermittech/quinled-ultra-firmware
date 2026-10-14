@@ -77,6 +77,7 @@ static uint32_t lf_store(lflash_t *f, energy_t *e, uint32_t cut)
         d[2u * i + 1u] = s[2u * i + 1u];
     }
     f->writes++;
+    pp_done(&f->pos, at, cut >= LIFE_REC_BYTES / 2u);   /* (0.6.6: as flashrec.c life_store) */
     return cut >= LIFE_REC_BYTES / 2u;
 }
 
@@ -858,6 +859,7 @@ static void pc_write(pcut_t *c)
         d[2u * i] = src[2u * i];
         d[2u * i + 1u] = src[2u * i + 1u];
     }
+    pp_done(&c->f.pos, at, 1u);                          /* (0.6.6: as flashrec.c life_store) */
     c->committed = c->e.lt.writes;
     c->have = 1;
 }

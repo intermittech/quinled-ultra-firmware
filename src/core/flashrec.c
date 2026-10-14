@@ -14,45 +14,99 @@ typedef char rec_fits_scratch[(sizeof(cal_rec_t) <= CORE_SCRATCH_WORDS * 4u &&
                                sizeof(store_slot_t) <= CORE_SCRATCH_WORDS * 4u &&
                                sizeof(scene_rec_t) <= CORE_SCRATCH_WORDS * 4u) ? 1 : -1];
 
-/* a pair's page and an entry's address */
-static uint32_t pp_addr(uint32_t page0, uint32_t page1, uint32_t at, uint32_t bytes)
+/* ---- the A/B page pairs (pagepair.h; 0.6.6: + the calibration history), one descriptor and one path each (0.6.6,
+ * review round 5: a copy of the path per store with its two page addresses was ~190 B more). REC_* (flashrec.h) in
+ * main.c's erase order. */
+typedef struct {
+    const pp_desc_t *pp;
+    uint32_t page[2];                                    /* A, B (hal/board.h) */
+} rec_t;
+
+static const pp_desc_t set_pp = { STORE_SLOT_BYTES, STORE_SLOTS, 4u, 0u, store_valid };
+static const pp_desc_t cal_pp = { CAL_REC_BYTES, CAL_RECS, 4u, 0u, cal_valid };
+#if MON_EXTRA
+static const pp_desc_t hist_pp = { CALHIST_REC_BYTES, CALHIST_RECS, 4u, 0u, calhist_valid };
+#endif
+
+static const rec_t recs[REC_COUNT] = {
+    /* the lifetime record (core/energy.h): its A/B pair */
+    [REC_LIFE] = { &life_pp, { LIFE_PAGE0_ADDR, LIFE_PAGE1_ADDR } },
+    /* settings: an A/B pair (0.6.4; 0.6.3 erased its one page when full, and a power cut right after that erase lost
+     * the stored settings), 8 records of 32 bytes per page, the same records as before (page A is 0.6.3's page) */
+    [REC_SET] = { &set_pp, { SETTINGS_ADDR, SETTINGS_B_ADDR } },
+    /* current calibration: an A/B pair (0.6.4), 4 records of 64 bytes per page (page A is 0.6.3's page) */
+    [REC_CAL] = { &cal_pp, { CAL_PAGE_ADDR, CAL_B_ADDR } },
+    /* power-on scene log: an A/B pair (0.6.4, core/scene.h scene_pp; 0.6.3: a ring that erased the page it entered),
+     * 16 records of 16 bytes per page */
+    [REC_SCENE] = { &scene_pp, { SCENE_LOG_ADDR, SCENE_B_ADDR } },
+#if MON_EXTRA
+    /* the calibration history (core/calhist.h, M2, 0.6.6): an A/B pair, 4 records of 64 bytes per page */
+    [REC_CALHIST] = { &hist_pp, { CALHIST_ADDR, CALHIST_B_ADDR } },
+#endif
+};
+static pp_pos_t rec_pos[REC_COUNT];
+static uint32_t set_seq, cal_seq;
+static uint16_t cal_cnt, scene_seq;
+
+/* a pair's page p (0 / 1), and an entry's address */
+static uint32_t rec_page(uint32_t i, uint32_t p)
 {
-    return (PP_PAGE(at) ? page1 : page0) + PP_ENTRY(at) * bytes;
+    return recs[i].page[p];
+}
+
+static uint32_t rec_addr(uint32_t i, uint32_t at)
+{
+    return rec_page(i, PP_PAGE(at)) + PP_ENTRY(at) * recs[i].pp->bytes;
+}
+
+/* the newest valid record (NULL: none) and the pair's write position */
+static const uint8_t *rec_find(uint32_t i)
+{
+    return pp_find(recs[i].pp, (const uint8_t *)(uintptr_t)rec_page(i, 0), (const uint8_t *)(uintptr_t)rec_page(i, 1),
+                   &rec_pos[i]);   /* (uintptr_t: the 64-bit host build) */
+}
+
+MEASURED uint32_t flash_rec_pending(uint32_t i)   /* (tools/flash_stores.py: by name) */
+{
+    uint32_t p;
+    return pp_erase_due(&rec_pos[i], &p);
 }
 
 /* a pair's erase: the one due, else one ahead (pagepair.h) */
-static uint32_t pp_prepare(pp_pos_t *pos, uint32_t page0, uint32_t page1)
+MEASURED uint32_t flash_rec_prepare(uint32_t i)
 {
     uint32_t p, r;
-    if (!pp_erase_due(pos, &p)) {
+    if (!pp_erase_due(&rec_pos[i], &p)) {
         return FLASH_NONE;
     }
-    r = flash_op(p ? page1 : page0, 0, 0u, p ? page1 : page0);
+    r = flash_op(rec_page(i, p), 0, 0u, rec_page(i, p));
     if (r == FLASH_OK) {
-        pp_erased(pos);
+        pp_erased(&rec_pos[i]);
     }
     return r;
 }
 
 /* a store's position: the erase that is due first (main.c asks for it only while low: flash_may), then the entry.
  * PP_NONE: *r says why (that erase failed) */
-static uint32_t pp_write_at(const pp_desc_t *d, pp_pos_t *pos, uint32_t page0, uint32_t page1, uint32_t *r)
+static uint32_t rec_write_at(uint32_t i, uint32_t *r)
 {
-    uint32_t p;
-    *r = pp_erase_due(pos, &p) == 2u ? pp_prepare(pos, page0, page1) : FLASH_OK;
-    return *r == FLASH_OK ? pp_plan(d, pos) : PP_NONE;
+    *r = flash_rec_pending(i) == 2u ? flash_rec_prepare(i) : FLASH_OK;
+    return *r == FLASH_OK ? pp_plan(recs[i].pp, &rec_pos[i]) : PP_NONE;
 }
 
-/* ---- settings: an A/B pair (0.6.4; 0.6.3 erased its one page when full, and a power cut right after that erase
- * lost the stored settings), 8 records of 32 bytes per page, the same records as before (page A is 0.6.3's page) */
-static const pp_desc_t set_pp = { STORE_SLOT_BYTES, STORE_SLOTS, 4u, 0u, store_valid };
-static pp_pos_t set_pos;
-static uint32_t set_seq;
+/* the record (its bytes: the descriptor's) programmed at `at` (rec_write_at's, pp_plan's), and the pair's position told
+ * how it went (0.6.6, review round 5: pagepair.h pp_done; a failed write never counts as the newest record) */
+static uint32_t rec_program(uint32_t i, uint32_t at, const void *src)
+{
+    uint32_t r = flash_op(rec_addr(i, at), (const uint16_t *)src, recs[i].pp->bytes / 2u, 0u);
+    pp_done(&rec_pos[i], at, r == FLASH_OK);
+    return r;
+}
 
+/* ---- settings */
 MEASURED int settings_load(settings_t *s, store_ext_t *ext)
 {
-    const store_slot_t *r = (const store_slot_t *)pp_find(&set_pp, (const uint8_t *)SETTINGS_ADDR,
-                                                          (const uint8_t *)SETTINGS_B_ADDR, &set_pos);
+    const store_slot_t *r = (const store_slot_t *)rec_find(REC_SET);
     if (!r) {
         store_ext_clear(ext);
         return -1;
@@ -65,36 +119,18 @@ MEASURED int settings_load(settings_t *s, store_ext_t *ext)
 
 MEASURED uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
 {
-    uint32_t r, at = pp_write_at(&set_pp, &set_pos, SETTINGS_ADDR, SETTINGS_B_ADDR, &r);
+    uint32_t r, at = rec_write_at(REC_SET, &r);
     if (at == PP_NONE) {
         return r;
     }
     store_pack_ext(s, ext, ++set_seq, (store_slot_t *)core_scratch);
-    return flash_op(pp_addr(SETTINGS_ADDR, SETTINGS_B_ADDR, at, STORE_SLOT_BYTES), (const uint16_t *)core_scratch,
-                    STORE_SLOT_BYTES / 2u, 0u);
+    return rec_program(REC_SET, at, core_scratch);
 }
 
-uint32_t settings_pending(void)
-{
-    uint32_t p;
-    return pp_erase_due(&set_pos, &p);
-}
-
-uint32_t settings_prepare(void)
-{
-    return pp_prepare(&set_pos, SETTINGS_ADDR, SETTINGS_B_ADDR);
-}
-
-/* ---- current calibration: an A/B pair (0.6.4), 4 records of 64 bytes per page (page A is 0.6.3's page) */
-static const pp_desc_t cal_pp = { CAL_REC_BYTES, CAL_RECS, 4u, 0u, cal_valid };
-static pp_pos_t cal_pos;
-static uint32_t cal_seq;
-static uint16_t cal_cnt;
-
+/* ---- current calibration */
 MEASURED int cal_load(isense_cal_t *c, uint16_t *count)
 {
-    const cal_rec_t *r = (const cal_rec_t *)pp_find(&cal_pp, (const uint8_t *)CAL_PAGE_ADDR,
-                                                    (const uint8_t *)CAL_B_ADDR, &cal_pos);
+    const cal_rec_t *r = (const cal_rec_t *)rec_find(REC_CAL);
     if (!r) {
         cal_cnt = 0;
         *count = 0;
@@ -108,40 +144,23 @@ MEASURED int cal_load(isense_cal_t *c, uint16_t *count)
 
 MEASURED uint32_t cal_store(const isense_cal_t *c, uint16_t *count)
 {
-    uint32_t r, at = pp_write_at(&cal_pp, &cal_pos, CAL_PAGE_ADDR, CAL_B_ADDR, &r);
+    uint32_t r, at = rec_write_at(REC_CAL, &r);
     uint16_t n = (uint16_t)(cal_cnt + (c->levels != 0u));
     if (at == PP_NONE) {
         return r;
     }
     cal_pack(c, ++cal_seq, n, (cal_rec_t *)core_scratch);
-    r = flash_op(pp_addr(CAL_PAGE_ADDR, CAL_B_ADDR, at, CAL_REC_BYTES), (const uint16_t *)core_scratch,
-                 CAL_REC_BYTES / 2u, 0u);
+    r = rec_program(REC_CAL, at, core_scratch);
     if (r == FLASH_OK) {
         *count = cal_cnt = n;                            /* (a failed write is not counted) */
     }
     return r;
 }
 
-uint32_t cal_pending(void)
-{
-    uint32_t p;
-    return pp_erase_due(&cal_pos, &p);
-}
-
-uint32_t cal_prepare(void)
-{
-    return pp_prepare(&cal_pos, CAL_PAGE_ADDR, CAL_B_ADDR);
-}
-
-/* ---- power-on scene log: an A/B pair (0.6.4, core/scene.h scene_pp; 0.6.3: a ring that erased the page it entered),
- * 16 records of 16 bytes per page */
-static pp_pos_t scene_pos;
-static uint16_t scene_seq;
-
+/* ---- power-on scene log */
 MEASURED int scene_load(scene_t *sc)
 {
-    const scene_rec_t *r = (const scene_rec_t *)pp_find(&scene_pp, (const uint8_t *)SCENE_LOG_ADDR,
-                                                        (const uint8_t *)SCENE_B_ADDR, &scene_pos);
+    const scene_rec_t *r = (const scene_rec_t *)rec_find(REC_SCENE);
     if (!r) {
         return -1;
     }
@@ -152,60 +171,60 @@ MEASURED int scene_load(scene_t *sc)
 
 MEASURED uint32_t scene_store(const scene_t *sc)
 {
-    uint32_t r, at = pp_write_at(&scene_pp, &scene_pos, SCENE_LOG_ADDR, SCENE_B_ADDR, &r);
+    uint32_t r, at = rec_write_at(REC_SCENE, &r);
     if (at == PP_NONE) {
         return r;
     }
     scene_log_pack(sc, ++scene_seq, (scene_rec_t *)core_scratch);
-    return flash_op(pp_addr(SCENE_LOG_ADDR, SCENE_B_ADDR, at, SCENE_REC_BYTES), (const uint16_t *)core_scratch,
-                    SCENE_REC_BYTES / 2u, 0u);
+    return rec_program(REC_SCENE, at, core_scratch);
 }
 
-uint32_t scene_pending(void)
-{
-    uint32_t p;
-    return pp_erase_due(&scene_pos, &p);
-}
-
-uint32_t scene_prepare(void)
-{
-    return pp_prepare(&scene_pos, SCENE_LOG_ADDR, SCENE_B_ADDR);
-}
-
-/* ---- the lifetime record (core/energy.h): its A/B pair */
-static life_pos_t life_pos;
-
+/* ---- the lifetime record (core/energy.h): its write never erases (FLASH_NONE while its erase is due) */
 MEASURED uint32_t life_load(life_rec_t *r)
 {
-    return life_find((const uint8_t *)LIFE_PAGE0_ADDR, (const uint8_t *)LIFE_PAGE1_ADDR, r, &life_pos);
+    const uint8_t *best = rec_find(REC_LIFE);
+    if (best) {
+        *r = *(const life_rec_t *)best;
+    }
+    return best != 0;
 }
 
 MEASURED uint32_t life_store(energy_t *e)
 {
-    uint32_t at = life_plan(&life_pos);
-    if (at == LIFE_PLAN_NONE) {
+    uint32_t at = pp_plan(&life_pp, &rec_pos[REC_LIFE]);
+    if (at == PP_NONE) {
         return FLASH_NONE;
     }
     energy_pack(e);                                      /* (programmed from e->lt itself) */
-    return flash_op(pp_addr(LIFE_PAGE0_ADDR, LIFE_PAGE1_ADDR, at, LIFE_REC_BYTES), (const uint16_t *)&e->lt,
-                    LIFE_REC_BYTES / 2u, 0u);
-}
-
-MEASURED uint32_t life_pending(void)
-{
-    uint32_t p;
-    return pp_erase_due(&life_pos, &p);
+    return rec_program(REC_LIFE, at, &e->lt);
 }
 
 uint32_t life_room(void)
 {
-    return life_free(&life_pos);
+    return pp_free(&life_pp, &rec_pos[REC_LIFE]);
 }
 
-MEASURED uint32_t life_prepare(void)
+#if MON_EXTRA
+/* ---- the calibration history (M2, 0.6.6): programmed from *h itself, as the lifetime record */
+MEASURED uint32_t calhist_load(calhist_t *h)
 {
-    return pp_prepare(&life_pos, LIFE_PAGE0_ADDR, LIFE_PAGE1_ADDR);
+    const calhist_t *r = (const calhist_t *)rec_find(REC_CALHIST);
+    if (r) {
+        *h = *r;
+    }
+    return r != 0;
 }
+
+MEASURED uint32_t calhist_store(calhist_t *h)
+{
+    uint32_t r, at = rec_write_at(REC_CALHIST, &r);
+    if (at == PP_NONE) {
+        return r;
+    }
+    calhist_pack(h);
+    return rec_program(REC_CALHIST, at, h);
+}
+#endif
 
 /* ---- the power-on effect store (core/ultra.h ULTRA_FX_*): both pages erased, the heads, the header last */
 #ifdef __riscv                                           /* (the heads' layout is the target's; host tests differ) */
@@ -310,5 +329,6 @@ uint32_t hw_flash_half(uint32_t addr, uint16_t v)
 
 uint32_t flash_rejected(void)
 {
-    return set_pos.bad | (uint32_t)cal_pos.bad << 6 | (uint32_t)scene_pos.bad << 12 | (uint32_t)life_pos.bad << 18;
+    return rec_pos[REC_SET].bad | (uint32_t)rec_pos[REC_CAL].bad << 6 | (uint32_t)rec_pos[REC_SCENE].bad << 12 |
+           (uint32_t)rec_pos[REC_LIFE].bad << 18;
 }

@@ -34,6 +34,7 @@ const uint8_t *pp_find(const pp_desc_t *d, const uint8_t *page0, const uint8_t *
             pos->next = (uint8_t)(at << 4 | after);
             pos->erase = 0;
             pos->ahead = (uint8_t)store_erased(pg[at ^ 1u], bytes);   /* (only older records there) */
+            pos->held = 1;
             return best;
         }
         after = d->recs;                                 /* cut short by a power loss: as if full */
@@ -45,6 +46,7 @@ const uint8_t *pp_find(const pp_desc_t *d, const uint8_t *page0, const uint8_t *
     pos->next = (uint8_t)(at << 4);
     pos->erase = (uint8_t)!store_erased(pg[at], bytes);
     pos->ahead = 0;                                      /* (the other page holds the newest, or nothing is stored) */
+    pos->held = 0;
     return best;
 }
 
@@ -65,6 +67,21 @@ uint32_t pp_plan(const pp_desc_t *d, pp_pos_t *pos)
     return at;
 }
 
+void pp_done(pp_pos_t *pos, uint32_t at, uint32_t ok)
+{
+    if (PP_PAGE(at) == PP_PAGE(pos->next)) {
+        pos->held |= (uint8_t)ok;                        /* (a failed entry is used up, never a record) */
+    } else if (ok || pos->held) {
+        pos->held = 0;                                   /* it filled its page, which holds the newest: the other page
+                                                            next (pp_plan), nothing committed there yet */
+    } else {
+        pos->next = (uint8_t)(at & 16u);                 /* it filled a page that holds no record: the newest is on
+                                                            the other one, which must not be erased; this one again */
+        pos->erase = 1;
+        pos->ahead = 0;
+    }
+}
+
 uint32_t pp_erase_due(const pp_pos_t *pos, uint32_t *page)
 {
     *page = PP_PAGE(pos->next);
@@ -72,7 +89,7 @@ uint32_t pp_erase_due(const pp_pos_t *pos, uint32_t *page)
         return 2;
     }
     *page ^= 1u;                                         /* ahead: the other page, once this one holds the newest */
-    return !pos->ahead && PP_ENTRY(pos->next) != 0u ? 1u : 0u;
+    return !pos->ahead && pos->held ? 1u : 0u;
 }
 
 void pp_erased(pp_pos_t *pos)

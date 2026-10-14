@@ -6,7 +6,7 @@
 #include "scratch.h"
 
 #define N        STAGGER_GRID
-typedef char grid_fits_scratch[(4u * N <= CORE_SCRATCH_WORDS) ? 1 : -1];
+typedef char grid_fits_scratch[(3u * N <= CORE_SCRATCH_WORDS) ? 1 : -1];
 #define FULL     65536u
 #define DEADBAND 4                         /* counts: phase close enough (register read skew is ~2) */
 
@@ -173,6 +173,26 @@ uint32_t stagger_ripple_ma(const uint16_t *duty, const uint16_t *peak_ma, uint16
 static const uint8_t cap_lim25[PWM_PRESET_COUNT] = { 118, 116, 108, 108, 119, 105, 117, 124, 138, 149, 158, 166, 180,
                                                      206, 246 };
 
+/* the 32-bit square root (the C10 load's heat < 2^30 >> 6: 32 bits; isqrt64 then has ripple_of alone to inline into,
+ * as before 0.6.5's M5: stagger_choose -6 cycles) */
+static uint32_t isqrt32(uint32_t v)
+{
+    uint32_t r = 0, bit = 1u << 30;
+    while (bit > v) {
+        bit >>= 2;
+    }
+    while (bit != 0u) {
+        if (v >= r + bit) {
+            v -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return r;
+}
+
 MEASURED void stagger_cap_second(stagger_cap_t *c, uint32_t ripple_ma, uint32_t steps)
 {
     uint32_t p = 0, v;
@@ -183,7 +203,7 @@ MEASURED void stagger_cap_second(stagger_cap_t *c, uint32_t ripple_ma, uint32_t 
     v = v > 4095u ? 4095u : v;
     c->now = (uint16_t)v;
     c->heat += v * v - (c->heat >> 6);                   /* (< 2^24 x 64) */
-    v = isqrt64(c->heat >> 6);
+    v = isqrt32(c->heat >> 6);
     c->avg = (uint16_t)v;
     if (v > c->peak) {
         c->peak = (uint16_t)v;
@@ -203,10 +223,16 @@ uint16_t stagger_gap_q16(uint32_t steps)
 }
 
 /* ---------------------------------------------------------------------------------------------- search */
-static uint32_t grid(uint32_t i)
-{
-    return ((i % N) * FULL + N / 2u) / N;
-}
+/* Exact compile-time grid for i < N; only the three cost arrays need RAM. */
+#define GRID(i) (((i) * FULL + N / 2u) / N)
+typedef char fixed_grid_size[N == 24u ? 1 : -1];
+static const uint16_t go[N] = {
+    GRID(0), GRID(1), GRID(2), GRID(3), GRID(4), GRID(5),
+    GRID(6), GRID(7), GRID(8), GRID(9), GRID(10), GRID(11),
+    GRID(12), GRID(13), GRID(14), GRID(15), GRID(16), GRID(17),
+    GRID(18), GRID(19), GRID(20), GRID(21), GRID(22), GRID(23)
+};
+#undef GRID
 
 #define INVALID 0xFFFFFFFFu                /* a cost: the edge rule broken, or beyond o_max */
 
@@ -257,8 +283,8 @@ void stagger_choose(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap,
 MEASURED void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, uint16_t gap, uint16_t cur_o2,
                         uint16_t cur_o3, uint16_t o_max, stagger_result_t *r)
 {
-    /* cost per offset and the grid offsets: in the main loop's shared scratch */
-    uint32_t *c2 = core_scratch, *c3 = core_scratch + N, *c23 = core_scratch + 2u * N, *go = core_scratch + 3u * N;
+    /* Three cost tables in the main loop scratch; grid offsets are constant flash data. */
+    uint32_t *c2 = core_scratch, *c3 = core_scratch + N, *c23 = core_scratch + 2u * N;
     search_t sc;
     uint32_t i, j, best = INVALID, bi = 0, bj = 0, b2, b3, c, m3 = INVALID, m23 = INVALID;
     int32_t a, b;
@@ -270,8 +296,7 @@ MEASURED void stagger_choose_max(const uint16_t *duty, const uint16_t *peak_ma, 
 
     /* one-dimensional tables: TIM1-TIM2 by o2, TIM1-TIM3 by o3, TIM2-TIM3 by o3 - o2, and their smallest entries */
     for (i = 0; i < N; i++) {
-        uint32_t o = grid(i);
-        go[i] = o;
+        uint32_t o = go[i];
         c2[i] = cost2(&sc, o);
         c3[i] = cost3(&sc, o);
         c23[i] = cost23(&sc, o);

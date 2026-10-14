@@ -2,12 +2,14 @@
  * Copyright (C) 2026 QuinLED */
 #define CZ_TEXT_DATA                       /* (the compressed text's blob and tokens live here: core/cz.h) */
 #include <stdarg.h>
+#include <stddef.h>
 #include "cli.h"
 #include "perf.h"
 #include "climit.h"
 #include "ultra_protocol.h"
 #include "presets.h"
 #include "testjig.h"
+#include "../hal/board.h"               /* BOARD_TESTJIG: the jig's report */
 #include "cz.h"
 
 /* The settings keys, one compressed string of records: the command byte, the key and its short help (the values;
@@ -170,6 +172,39 @@ static uint32_t clamp0(int32_t v)
     return v > 0 ? (uint32_t)v : 0u;
 }
 
+/* the fixed-point codes, one table (0.6.6, review round 5: a case each was ~150 B more): the code, how the value's
+ * sign is treated (CF_CLAMP: negative shows as 0; CF_NEG: a '-' and its magnitude), x 1000 for the Q16 levels, the
+ * divisor and the decimals of cf_fix. %P / %A take the %p / %a entries per element. */
+#define CF_CLAMP 1u
+#define CF_NEG   2u
+#define CF_K1000 4u
+typedef struct {
+    char    code;
+    uint8_t kind;                          /* CF_* */
+    uint8_t dec;                           /* decimals */
+    uint8_t div;                           /* cf_divs[] index */
+} cf_num_t;
+static const uint32_t cf_divs[5] = { 1u, 10u, 100u, 65535u, 65536u };
+static const cf_num_t cf_nums[9] = {
+    { 'v', 0u, 2u, 1u }, { 'a', CF_CLAMP, 2u, 1u }, { 'V', CF_NEG, 2u, 1u }, { 'p', CF_K1000, 1u, 3u },
+    { 'k', 0u, 1u, 0u }, { 'K', CF_NEG, 1u, 0u }, { 'h', 0u, 1u, 2u }, { 'H', 0u, 2u, 2u }, { 'q', CF_K1000, 1u, 4u },
+};
+#define CF_NUM_P (&cf_nums[3])
+#define CF_NUM_A (&cf_nums[1])
+
+static void cf_num(cf_out_t *o, const cf_num_t *n, uint32_t v)
+{
+    if (n->kind & CF_CLAMP) {
+        v = clamp0((int32_t)v);
+    } else if (n->kind & CF_NEG) {
+        v = cf_neg(o, (int32_t)v);
+    }
+    if (n->kind & CF_K1000) {
+        v *= 1000u;
+    }
+    cf_fix(o, v, cf_divs[n->div], n->dec);
+}
+
 static void cf(cli_t *c, int f, ...)
 {
     cf_out_t o;
@@ -186,7 +221,14 @@ static void cf(cli_t *c, int f, ...)
             cf_ch(&o, (char)ch);
             continue;
         }
-        switch (ch = cz_next(&d)) {
+        ch = cz_next(&d);
+        for (i = 0; i < 9u && cf_nums[i].code != (char)ch; i++) {
+        }
+        if (i < 9u) {
+            cf_num(&o, &cf_nums[i], va_arg(ap, uint32_t));
+            continue;
+        }
+        switch (ch) {
         case 'z':
             t.p = cz_at(va_arg(ap, int));
             t.n = 0;
@@ -199,15 +241,6 @@ static void cf(cli_t *c, int f, ...)
             c->write(va_arg(ap, const char *));
             break;
         case 'u': cf_dec(&o, va_arg(ap, uint32_t), 1u); break;
-        case 'v': cf_fix(&o, va_arg(ap, uint32_t), 10u, 2u); break;
-        case 'a': cf_fix(&o, clamp0(va_arg(ap, int32_t)), 10u, 2u); break;
-        case 'V': cf_fix(&o, cf_neg(&o, va_arg(ap, int32_t)), 10u, 2u); break;
-        case 'p': cf_fix(&o, va_arg(ap, uint32_t) * 1000u, 65535u, 1u); break;
-        case 'k': cf_fix(&o, va_arg(ap, uint32_t), 1u, 1u); break;
-        case 'K': cf_fix(&o, cf_neg(&o, va_arg(ap, int32_t)), 1u, 1u); break;
-        case 'h': cf_fix(&o, va_arg(ap, uint32_t), 100u, 1u); break;
-        case 'H': cf_fix(&o, va_arg(ap, uint32_t), 100u, 2u); break;
-        case 'q': cf_fix(&o, va_arg(ap, uint32_t) * 1000u, 65536u, 1u); break;
         case 't': {
             uint32_t sec = va_arg(ap, uint32_t), m = sec / 60u, h = m / 60u;
             if (h >= 24u) {
@@ -229,9 +262,9 @@ static void cf(cli_t *c, int f, ...)
                     cf_ch(&o, '/');
                 }
                 if (ch == 'P') {
-                    cf_fix(&o, ((const uint16_t *)p)[i] * 1000u, 65535u, 1u);
+                    cf_num(&o, CF_NUM_P, ((const uint16_t *)p)[i]);
                 } else if (ch == 'A') {
-                    cf_fix(&o, clamp0(((const int32_t *)p)[i]), 10u, 2u);
+                    cf_num(&o, CF_NUM_A, (uint32_t)((const int32_t *)p)[i]);
                 } else if (((const int8_t *)p)[i] == ULTRA_HE_NA) {
                     cf_ch(&o, '-');
                 } else {
@@ -255,26 +288,28 @@ void cli_say(cli_t *c, int z)
 }
 
 /* ---------------------------------------------------------------------------------------------------- reports */
+#if BOARD_TESTJIG
 void cli_test_report(cli_t *c, const int32_t ma[5], uint32_t pct, uint32_t cycle, uint32_t supply_mv)
 {
     const uint32_t *u = c->st->uid;
     uint32_t i, k, fail = 0;
-    cf(c, Z(tr_head, "test @%u%%: "), pct);
+    cf(c, ZJ(tr_head, "test @%u%%: "), pct);
     for (k = 0; k < 2u; k++) {             /* as measured at pct %, then scaled to 100 % */
         for (i = 0; i < 5u; i++) {
             uint32_t v = clamp0(ma[i]);
             fail |= (uint32_t)(v < TJ_PASS_MIN_MA || v > TJ_PASS_MAX_MA) << i;   /* (0.6.5: the jig line's) */
-            cf(c, Z(tr_ch, "%z%H%z"), nth(Z(tr_names, "R \0G \0B \0W1 \0W2 "), i),
+            cf(c, ZJ(tr_ch, "%z%H%z"), nth(ZJ(tr_names, "R \0G \0B \0W1 \0W2 "), i),
                k == 0u ? v * 10u : (v * 1000u + pct / 2u) / (pct ? pct : 1u),
-               i < 4u ? (k == 0u ? Z(tr_a, " A, ") : Z(tr_comma, ", "))
-                      : (k == 0u ? Z(tr_est, " A; est. @100%: ") : Z(tr_supply, " A; supply ")));
+               i < 4u ? (k == 0u ? ZJ(tr_a, " A, ") : ZJ(tr_comma, ", "))
+                      : (k == 0u ? ZJ(tr_est, " A; est. @100%: ") : ZJ(tr_supply, " A; supply ")));
         }
     }
-    cf(c, supply_mv != 0u ? Z(tr_v, "%v V (cycle %u)\r\n") : Z(tr_na, "n/a (cycle %u)\r\n"),
+    cf(c, supply_mv != 0u ? ZJ(tr_v, "%v V (cycle %u)\r\n") : ZJ(tr_na, "n/a (cycle %u)\r\n"),
        supply_mv != 0u ? supply_mv : cycle, cycle);
-    cf(c, Z(jig, "jig cycle=%u %z fail=%u a=%A supply=%v uid=%u,%u,%u fw=%s\r\n"), cycle,
-       fail ? Z(jig_fail, "FAIL") : Z(jig_pass, "PASS"), fail, ma, supply_mv, u[0], u[1], u[2], c->st->version);
+    cf(c, ZJ(jig, "jig cycle=%u %z fail=%u a=%A supply=%v uid=%u,%u,%u fw=%s\r\n"), cycle,
+       fail ? ZJ(jig_fail, "FAIL") : ZJ(jig_pass, "PASS"), fail, ma, supply_mv, u[0], u[1], u[2], c->st->version);
 }
+#endif
 
 void cli_banner(cli_t *c)
 {
@@ -290,27 +325,31 @@ void cli_banner(cli_t *c)
            s->app_state < 3u ? s->app_state : 0u));
 }
 
+/* a key's value: the settings field of its command (a table by command, 0.6.6: the switch was ~130 B more), else the
+ * scene's / the status's (the commands main.c keeps outside settings_t) */
 static uint8_t get_key(const cli_t *c, uint8_t cmd)
 {
-    const settings_t *s = c->set;
+#define SF(f) ((uint8_t)offsetof(settings_t, f))
+#define SX 0xFFu                           /* not a settings_t field (below) */
+    static const uint8_t ofs[CMD_SOFT_START] = {   /* [cmd - 1] */
+        SF(protocol), SF(pwm_preset), SF(dither_mode), SF(dither_thresh), SF(feedback_ch), SF(stagger),
+        SF(dim_floor), SF(signal_loss), SF(gamma), SF(gamma), SF(smoothing), SF(gamma), SF(min_pulse), SX, SX,
+        SF(gamma), SF(gamma), SX, SX, SX,  /* (IDENTIFY / FACTORY_RESET / PERIOD_*: not keys; gamma, as the default) */
+    };
+#undef SF
+    uint32_t o = (uint32_t)(cmd - 1u) < CMD_SOFT_START ? ofs[cmd - 1u] : SX;
+    if (o != SX) {
+        return ((const uint8_t *)c->set)[o];
+    }
     switch (cmd) {
     case CMD_SCENE:         return (uint8_t)(c->scene && c->scene->mask != 0u);
     case CMD_SCENE_FADE:    return c->scene ? c->scene->fade : 0u;
     case CMD_ISENSE_LIMIT:  return c->st ? c->st->ilimit50 : 0u;
     case CMD_ISENSE_CAL:    return 0u;
     case CMD_SOFT_START:    return c->st ? c->st->softstart : 1u;
-    case CMD_PROTOCOL:      return s->protocol;
-    case CMD_PWM_PRESET:    return s->pwm_preset;
-    case CMD_DITHER_MODE:   return s->dither_mode;
-    case CMD_DITHER_THRESH: return s->dither_thresh;
-    case CMD_FEEDBACK_CH:   return s->feedback_ch;
-    case CMD_STAGGER:       return s->stagger;
-    case CMD_DIM_FLOOR:     return s->dim_floor;
-    case CMD_MIN_PULSE:     return s->min_pulse;
-    case CMD_SIGNAL_LOSS:   return s->signal_loss;
-    case CMD_SMOOTHING:     return s->smoothing;
-    default:                return s->gamma;
+    default:                return c->set->gamma;
     }
+#undef SX
 }
 
 /* parse an unsigned decimal; returns -1 if none */
@@ -364,7 +403,27 @@ static void events(cli_t *c)
  * part only when the console has room for it (main.c, uart_room) and never waits for the UART (a whole status of
  * ~1,400 bytes held the main loop ~44 ms before). The values: the snapshot taken at the command (cli_status_t), the
  * pointed-to logs as they are when their part is written. Returns 1 while parts remain. */
-#define STATUS_PARTS 10u
+#define STATUS_PARTS (10u + MON_EXTRA)   /* (0.6.6: + the calibration history's, M2) */
+#if MON_EXTRA
+/* (0.6.6, M2) the calibration history (core/calhist.h): each stored test at 100 %, then the newest against the first */
+static void calhist_lines(cli_t *c, const calhist_t *h)
+{
+    int32_t a[5];
+    int8_t t[5];
+    uint32_t k, i;
+    for (k = 0; h && k < h->n; k++) {
+        for (i = 0; i < 5u; i++) {
+            a[i] = h->e[k].ma[i];
+        }
+        cf(c, ZU(cal_hist, "cal_history %u h lit=%A A\r\n"), (uint32_t)h->e[k].lit_h, a);
+    }
+    if (h && h->n) {
+        k = calhist_trend(h, t);
+        cf(c, ZU(cal_trend, "cal_trend R/G/B/W1/W2=%e %% over %u h lit, %u tests\r\n"), t, k, (uint32_t)h->tests);
+    }
+}
+#endif
+
 static uint32_t status_part(cli_t *c, uint32_t part)
 {
     const cli_status_t *s = c->st;
@@ -372,6 +431,13 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     const int cause = Z(cause, "-\0short\0overload");
     const int empty = Z(empty, "");
     uint32_t i;
+#if MON_EXTRA
+    if (part == 5u) {                      /* (0.6.6, M2) its own part, after the calibration's (that one is full) */
+        calhist_lines(c, s->ch);
+        return 1;
+    }
+    part -= part > 5u;
+#endif
     switch (part) {
     case 0:
     cli_banner(c);
@@ -631,7 +697,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     events(c);                             /* (0.6.5, D2) */
         break;
     }
-    return part + 1u < STATUS_PARTS;
+    return part < 9u;                      /* (the last: 9) */
 }
 
 /* `help` in parts too (0.6.5 D8: 672 bytes at once could wait for the UART): the commands and the first HELP_KEYS

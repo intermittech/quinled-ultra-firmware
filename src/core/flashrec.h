@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "config.h"
 #include "store.h"
+#include "calhist.h"
 #include "calstore.h"
 #include "scene.h"
 #include "energy.h"
@@ -37,29 +38,40 @@
  * `halfwords` half-words from src at addr (erased flash). Returns FLASH_OK or FLASH_ERR_*. */
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr);
 
+/* the four A/B page pairs (0.6.6: one descriptor each, flashrec.c; in main.c's erase order) */
+enum { REC_LIFE = 0, REC_SET, REC_CAL, REC_SCENE,
+#if MON_EXTRA
+       REC_CALHIST,                    /* (0.6.6, M2) the calibration history */
+#endif
+       REC_COUNT };
+/* a pair's erase: 2 = due before its next write, 1 = possible ahead (pagepair.h), 0 = none; ... and that erase */
+uint32_t flash_rec_pending(uint32_t rec);
+uint32_t flash_rec_prepare(uint32_t rec);
 /* settings + their extension (store_ext_t: the board current limit): the newest record (0; -1 = none) */
 int      settings_load(settings_t *s, store_ext_t *ext);
 uint32_t settings_store(const settings_t *s, const store_ext_t *ext);
-uint32_t settings_pending(void);    /* an erase: 2 = due before the next write, 1 = possible ahead (pagepair.h) */
-uint32_t settings_prepare(void);    /* ... that erase */
+static inline uint32_t settings_pending(void) { return flash_rec_pending(REC_SET); }   /* an erase: 2 = due before
+                                       the next write, 1 = possible ahead (pagepair.h) */
+static inline uint32_t settings_prepare(void) { return flash_rec_prepare(REC_SET); }   /* ... that erase */
 /* current calibration (core/calstore.h): the newest record (-1: none, or cleared); store one (levels 0 = clear).
  * *count: calibrations stored on this board (changes only when written) */
 int      cal_load(isense_cal_t *c, uint16_t *count);
 uint32_t cal_store(const isense_cal_t *c, uint16_t *count);
-uint32_t cal_pending(void);
-uint32_t cal_prepare(void);
+static inline uint32_t cal_pending(void) { return flash_rec_pending(REC_CAL); }
+static inline uint32_t cal_prepare(void) { return flash_rec_prepare(REC_CAL); }
 /* power-on scene log (core/scene.h) */
 int      scene_load(scene_t *sc);
 uint32_t scene_store(const scene_t *sc);
-uint32_t scene_pending(void);       /* 2: the next record enters a page that must be erased first; 1: the next page
-                                       can be erased ahead (it holds only the oldest records) */
-uint32_t scene_prepare(void);
+static inline uint32_t scene_pending(void) { return flash_rec_pending(REC_SCENE); }   /* 2: the next record enters a
+                                       page that must be erased first; 1: the next page can be erased ahead (it holds
+                                       only the oldest records) */
+static inline uint32_t scene_prepare(void) { return flash_rec_prepare(REC_SCENE); }
 /* the lifetime record (core/energy.h, two pages; nothing erases them but a full chip erase): the newest stored one
  * into *r (1; 0 = none); store e's into the next erased entry (energy_pack) */
 uint32_t life_load(life_rec_t *r);
 uint32_t life_store(energy_t *e);
-uint32_t life_pending(void);
-uint32_t life_prepare(void);
+static inline uint32_t life_pending(void) { return flash_rec_pending(REC_LIFE); }
+static inline uint32_t life_prepare(void) { return flash_rec_prepare(REC_LIFE); }
 uint32_t life_room(void);           /* erased entries left (main.c keeps one for a dip write while bright) */
 /* the power-on effects (core/ultra.h ULTRA_FX_*), 0.6.5: two banks of two pages (SCENE_FX_ADDR / SCENE_FX_B_ADDR): the
  * newest valid one into the engine (core/scene.c ultra_fx_load); returns the lights loaded */
@@ -68,6 +80,14 @@ uint8_t  scene_fx_load(ultra_t *u, uint8_t crc[ULTRA_LIGHTS]);
  * lights in mask with their CRC-8s (none: the store is erased), the header last. Erases both pages: only where erases
  * are admitted. */
 uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS]);
+#if MON_EXTRA
+/* (0.6.6, M2) the calibration history (core/calhist.h): the newest record into *h (1; 0 = none: *h untouched); store *h
+ * (calhist_pack, programmed from *h itself); the erases as the other pairs' */
+uint32_t calhist_load(calhist_t *h);
+uint32_t calhist_store(calhist_t *h);
+static inline uint32_t calhist_pending(void) { return flash_rec_pending(REC_CALHIST); }
+static inline uint32_t calhist_prepare(void) { return flash_rec_prepare(REC_CALHIST); }
+#endif
 /* firmware update (core/upd_app.h): one half-word into the app descriptor page's status records (no erase) */
 uint32_t hw_flash_half(uint32_t addr, uint16_t v);
 /* (0.6.5, D5) the records the loaders rejected at boot (pagepair.h pp_pos_t.bad), 6 bits each: settings, calibration

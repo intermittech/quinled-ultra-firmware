@@ -80,6 +80,7 @@ typedef struct {
     volatile uint8_t  fast_cnt;
     volatile uint8_t  tripped;        /* ISENSE_TRIP_*: outputs are forced off */
     volatile uint16_t peak_raw;       /* highest sample since the main loop's last take */
+    uint16_t cal_duty;                /* single level: Q16 */
 
     /* ---- configuration ---- */
     uint32_t ma_per_lsb_q16;          /* gain: mA per ADC count, Q16 (default from the circuit, factory-trimmable) */
@@ -87,6 +88,7 @@ typedef struct {
     uint16_t board_ma;                /* board rating: default and maximum of the limit */
     uint16_t limit_ma;                /* soft limit in effect (remote: Ultra CONFIG 21 / config frame), <= board_ma */
     uint8_t  enabled;                 /* hardware present (runtime check) */
+    uint8_t  win_n;
 
     /* ---- measurement ---- */
     int32_t  i_ms;                    /* last ms: board current, mA (incl. zero) */
@@ -94,6 +96,7 @@ typedef struct {
     int32_t  i_acc;                   /* ... as it is filtered: i_avg x 64 (6 fraction bits), so it settles on i_ms */
     int32_t  zero_ma;                 /* logic current + amplifier offset, mA */
     uint8_t  zero_valid;
+    uint8_t  win_dark;                /* every ms of the window had all outputs at 0 */
     uint16_t peak_ma;                 /* highest sample of the last ms, mA */
 
     /* ---- limiter ---- */
@@ -112,6 +115,7 @@ typedef struct {
     uint16_t shape[ISENSE_CH][ISENSE_LEVELS - 1u];  /* current at 25 / 50 / 75 % over that at 100 %, Q15
                                                        (linear: 8192 / 16384 / 24576) */
     uint8_t  calibrated;              /* ch_ma from a calibration (or restored from flash) */
+    uint8_t  dark_ms;                 /* consecutive dark ms before the window */
     uint16_t conf;                    /* regression confidence (windows with a small prediction error) */
 
     /* ---- trips ---- */
@@ -126,7 +130,6 @@ typedef struct {
     uint8_t  cal_step;                /* 0 idle, 1 zero, 2.. channel (step - 2) / levels, level (step - 2) % levels */
     uint8_t  cal_levels;              /* ISENSE_LEVELS (the standard test) or 1 (one level at cal_duty) */
     uint16_t cal_t;                   /* ms in the step */
-    uint16_t cal_duty;                /* single level: Q16 */
     int32_t  cal_sum;                 /* <= 30 ms of i_ms (< 2^21 mA even at a gain of 1): 32 bits (fable-flash) */
     uint32_t cal_n;
     int32_t  cal_res[ISENSE_CAL_STEPS_MAX];   /* zero, then each step, mA */
@@ -138,9 +141,6 @@ typedef struct {
     /* ---- regression / zero windows ---- */
     int32_t  win_i;                   /* sum of i_ms over the window (16 ms: < 2^21 mA; fable-flash) */
     uint32_t win_d[ISENSE_CH];        /* sum of the applied duties (Q16) over the window */
-    uint8_t  win_n;
-    uint8_t  win_dark;                /* every ms of the window had all outputs at 0 */
-    uint8_t  dark_ms;                 /* consecutive dark ms before the window */
 } isense_t;
 
 /* gain of the planned circuit: 2 mohm x 100 = 0.2 V/A, 12-bit ADC at 3.28 V -> 4.004 mA per count */

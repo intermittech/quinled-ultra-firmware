@@ -53,7 +53,11 @@ typedef struct {                          /* one interpolation from `from` to `t
 
 typedef struct {
     uint16_t dur, trans;
-    ultra_vals_t v;
+    /* Steps are read field by field, never passed to vals_cpy / ramp_eval.
+     * Halfword alignment is sufficient here; preserve word-aligned ramp values. */
+    struct {
+        uint16_t m, a[5], b[5];
+    } v;
 } ultra_step_t;
 
 #define ULTRA_SCENE_FX_PARAMS 14u          /* the power-on effect's parameters kept (the effects' longest: 13) */
@@ -78,13 +82,19 @@ typedef struct {
     uint8_t defined;                      /* LIGHT_DEF received since the init */
     uint8_t scene_have, scene_fx_have;    /* SCENE / SCENE_EFFECT received since the init */
     uint8_t scene_run;                    /* the power-on effect runs (from power-up until the take-over) */
+    uint8_t step_count, step_seq;          /* fill the gap before the word-aligned ramps */
     /* state: `cur` from t0 on, `prev` before (a command scheduled in the future) */
     ultra_ramp_t cur, prev;
     /* effect: the active one, and the next one (switches at its start time, also to FX_NONE) */
     uint8_t fx, fx_seq;
     uint8_t pend, pend_fx, pend_seq;
+    uint8_t step_have;                    /* received steps for step_seq: fill the gap before fx_t0 */
+    uint8_t out_ok;                       /* render cache valid */
+    uint8_t settled;                      /* cur / prev as settle() leaves them (only t0 moves on) */
     uint32_t fx_t0, pend_t0;
-    uint8_t fxp[ULTRA_FX_PARAMS], pend_p[ULTRA_FX_PARAMS];
+    /* Implemented effects use at most 13 bytes (pulse); keep 14 to fit the scene
+     * boot copy. The wire payload stays 22 and the persisted head stays unchanged. */
+    uint8_t fxp[ULTRA_SCENE_FX_PARAMS], pend_p[ULTRA_SCENE_FX_PARAMS];
     ultra_ramp_t fx_ramp;                 /* random / flicker / candle working values */
     uint32_t fx_next;                     /* next update, host ms */
     uint32_t fx_k;                        /* > 0 after fx_t0 was moved forward by whole periods (long runs) */
@@ -94,10 +104,7 @@ typedef struct {
     /* render cache: light_out's outputs (the light's channels) for `last`, valid while out_ok. light_out depends on
      * `last` and the head only; every slot to the light, and the init, clears out_ok. */
     uint16_t out_y[5];
-    uint8_t out_ok;
-    uint8_t settled;                      /* `cur` / `prev` as settle() leaves them (only their t0 moves on) */
     /* strobe steps */
-    uint8_t step_count, step_seq, step_have;   /* step_have: bit mask of received steps for step_seq */
     ultra_step_t step[ULTRA_MAX_STEPS];
 } ultra_light_t;
 
@@ -110,9 +117,9 @@ typedef struct {
 typedef struct {
     uint8_t synced, rated;                /* rated: rate measured at least once */
     uint8_t gap;                          /* the local tick stopped for a while: restart the rate interval */
+    uint32_t rate_q16;                    /* host us per local tick, Q16; fills the alignment hole */
     uint32_t ref_tick, last_tick;
     uint64_t ref_us, last_us;             /* host time, unwrapped to 64 bit */
-    uint32_t rate_q16;                    /* host us per local tick, Q16 */
 } ultra_clock_t;
 
 typedef struct {

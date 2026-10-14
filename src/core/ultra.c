@@ -616,7 +616,7 @@ MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
         L->pend_seq = seq;
         L->pend_t0 = u->frame_ms + ultra_get32(p + 1);
         n = ultra_fx_param_bytes(L->pend_fx);
-        for (i = 0; i < ULTRA_FX_PARAMS; i++) {
+        for (i = 0; i < sizeof(L->pend_p); i++) {
             L->pend_p[i] = i < n ? p[5 + i] : 0u;         /* the spare bytes: ignored (the state is the same) */
         }
         return ULTRA_EV_LIGHT | ULTRA_EV_STATE;
@@ -922,7 +922,7 @@ static void fx_activate(ultra_light_t *L, uint32_t now)
     L->fx_seq = L->pend_seq;
     L->fx_t0 = L->pend_t0;
     L->fx_k = 0;
-    for (i = 0; i < ULTRA_FX_PARAMS; i++) {
+    for (i = 0; i < sizeof(L->pend_p); i++) {
         L->fxp[i] = L->pend_p[i];
     }
     L->fx_next = now;

@@ -45,6 +45,13 @@ HardFault_Handler:
     sw      t0, %lo(bcrumb + 12)(t2)
     sw      t1, %lo(bcrumb + 8)(t2)
 1:  j       1b
+#if BOARD_RETURN
+    .align 2
+    .global rc_uart_entry                   /* USART3 (VTF slot 1, hw.c): the return channel's bytes */
+rc_uart_entry:
+    call    rc_uart_isr
+    mret
+#endif
 
     /* 0.6.4: during a flash operation (hw.c flash_op) the tick comes through VTF slot 0, straight to this stub in
      * SRAM (nothing fetched from the flash); mtvec points to flash_fault meanwhile: an exception or NMI forces the

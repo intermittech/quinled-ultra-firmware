@@ -20,10 +20,10 @@
 typedef struct {
     uint16_t cur[5];        /* output now */
     uint16_t from[5], to[5];
+    uint8_t  have_frame;
     uint32_t t0, dur;       /* ramp start / length, ticks; dur 0 = no ramp running */
     uint32_t last_frame;    /* tick of the previous frame */
     uint32_t interval;      /* EMA of the frame interval, ticks */
-    uint8_t  have_frame;
 } smooth_t;
 
 void smooth_init(smooth_t *s);

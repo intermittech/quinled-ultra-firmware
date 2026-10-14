@@ -356,6 +356,116 @@ static void r5_console(void)
     printf("  7 x status: %u complete (%u bytes), writes past the UART's buffers: %u\n", n, con_out_n, tx_blocks - b0);
     CHECK(n == 7u && cli.st_part == 0u && tx_blocks == b0, "console: seven statuses, complete, the UART never full "
           "(%u, %u blocked bytes)", n, tx_blocks - b0);
+    /* (0.6.6, review round 5: the regression) seven queued `get`s: each reply waits for the UART's room */
+    b0 = tx_blocks;
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = 0;
+    for (k = 0; k < 7u; k++) {
+        memcpy(con_in + con_in_w, "get\r", 4u);
+        con_in_w += 4u;
+    }
+    run_ms(1000);
+    for (p = con_out, n = 0; (p = strstr(p, "period=")) != 0; p++) {
+        n++;
+    }
+    printf("  7 x get: %u complete (%u bytes), writes past the UART's buffers: %u\n", n, con_out_n, tx_blocks - b0);
+    CHECK(n == 7u && tx_blocks == b0, "console: seven gets, complete, the UART never full (%u, %u blocked bytes)", n,
+          tx_blocks - b0);
+    /* (0.6.6) the input at 115200 baud into the board's 64-byte RX ring while the replies wait for the UART's room: a
+     * pasted 64 bytes of `get`s (2.9 KB of replies), then 400 bytes of lines with short replies; the ring holds what
+     * waits (63 bytes), so a host sends at most that much past a long reply (a positive control of the model) */
+    b0 = tx_blocks;
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = con_in_due = rx_overruns = 0;
+    con_rx_paced = 1;
+    for (k = 0; k < 16u; k++) {
+        memcpy(con_in + con_in_w, "get\r", 4u);
+        con_in_w += 4u;
+    }
+    run_ms(1500);
+    for (p = con_out, n = 0; (p = strstr(p, "period=")) != 0; p++) {
+        n++;
+    }
+    printf("  16 x get at the line rate: %u complete (%u bytes), RX overruns %u, writes past the buffers: %u\n", n,
+           con_out_n, rx_overruns, tx_blocks - b0);
+    CHECK(n == 16u && rx_overruns == 0u && tx_blocks == b0, "console: a 64-byte paste of gets (%u complete, %u RX "
+          "overruns, %u blocked bytes)", n, rx_overruns, tx_blocks - b0);
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = con_in_due = 0;
+    for (k = 0; k < 25u; k++) {
+        memcpy(con_in + con_in_w, "set softstart 0\r", 16u);
+        con_in_w += 16u;
+    }
+    run_ms(500);
+    for (p = con_out, n = 0; (p = strstr(p, "ok")) != 0; p++) {
+        n++;
+    }
+    printf("  25 x set at the line rate (400 bytes): %u ok, RX overruns %u, writes past the buffers: %u\n", n,
+           rx_overruns, tx_blocks - b0);
+    CHECK(n == 25u && rx_overruns == 0u && tx_blocks == b0, "console: 400 bytes of sets (%u ok, %u RX overruns, %u "
+          "blocked bytes)", n, rx_overruns, tx_blocks - b0);
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = con_in_due = 0;
+    memcpy(con_in, "status\r", 7u);
+    con_in_w = 7u;
+    for (k = 0; k < 6u; k++) {
+        memcpy(con_in + con_in_w, "set softstart 0\r", 16u);
+        con_in_w += 16u;
+    }
+    run_ms(1000);
+    printf("  status and 96 bytes behind it (the model's positive control): RX overruns %u\n", rx_overruns);
+    CHECK(rx_overruns != 0u && tx_blocks == b0, "console: the RX model counts an overrun (%u)", rx_overruns);
+    con_rx_paced = 0;
+    rx_overruns = 0;
+    /* (0.6.6) the firmware's own messages while a status fills the UART: queued, in order, none lost, none blocking;
+     * then `watch 100` with messages: its lines wait for the room too, a second still has ~10 */
+    b0 = tx_blocks;
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = 0;
+    memcpy(con_in, "status\r", 7u);
+    con_in_w = 7u;
+    run_ms(30);                                          /* (its first parts are out) */
+    say(CZ_m_flash_err);
+    say(CZ_m_tj_off);
+    say(CZ_m_flash_err);
+    run_ms(1000);
+    p = strstr(con_out, "flash: error\r\n");
+    k = p != 0 && strstr(p, "test mode: off\r\n") != 0 && strstr(strstr(p, "test mode: off\r\n"), "flash: error\r\n");
+    printf("  messages during a status: in order %u, the status complete %u, writes past the buffers: %u\n", k,
+           strstr(con_out, "lifetime=") != 0, tx_blocks - b0);
+    CHECK(k && strstr(con_out, "lifetime=") != 0 && say_n == 0u && tx_blocks == b0, "console: messages queued in "
+          "order during a status (%u, %u blocked bytes)", k, tx_blocks - b0);
+    b0 = tx_blocks;
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = 0;
+    memcpy(con_in, "watch 100\r", 10u);
+    con_in_w = 10u;
+    run_ms(500);
+    for (k = 0; k < 6u; k++) {                           /* a burst: four queued, two written at once (never seen) */
+        say(CZ_m_flash_err);
+    }
+    run_ms(600);
+    for (p = con_out, n = 0; (p = strstr(p, "  k ")) != 0; p++) {
+        n++;
+    }
+    for (p = con_out, k = 0; (p = strstr(p, "flash: error")) != 0; p++) {
+        k++;
+    }
+    printf("  watch 100 for 1.1 s with six messages: %u lines, %u messages, writes past the buffers: %u\n", n, k,
+           tx_blocks - b0);
+    CHECK(n >= 10u && k == 6u && tx_blocks == b0, "console: watch lines and messages (%u, %u, %u blocked bytes)", n, k,
+          tx_blocks - b0);
+    con_out_n = 0;
+    con_out[0] = 0;
+    con_in_r = con_in_w = 0;
+    con_in_w = (uint32_t)strlen(strcpy(con_in, "\r"));   /* (any key stops watch) */
+    run_ms(50);
     con_out_n = 0;
     con_out[0] = 0;
     con_in_r = con_in_w = 0;

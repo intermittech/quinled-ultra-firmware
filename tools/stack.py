@@ -67,7 +67,7 @@ def depth(f, stack=()):
             best, path = d, p
     memo[f] = (frame.get(f, 0) + best, [f] + path)
     return memo[f]
-for root in ("main", "poll_isr", "slew2_isr", "slew3_isr", "gate_isr"):
+for root in ("main", "poll_isr", "slew2_isr", "slew3_isr", "gate_isr", "rc_uart_isr"):   # (rc_uart_isr: BOARD=2)
     if root in frame:
         d, p = depth(root)
         print("%-10s %5d B  %s" % (root, d, " > ".join("%s(%d)" % (x, frame.get(x.split(" ")[0], 0)) for x in p)))

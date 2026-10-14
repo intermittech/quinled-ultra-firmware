@@ -11,7 +11,9 @@
  * RAM starts after the 32-byte hand-over block at 0x20000000 (upd_handover_t). Same sections as Link.ld. */
 ENTRY( _start )
 
-__stack_size = 2048;
+/* the stack: 2 KB. tools/build_target.sh STACK_SIZE=<bytes> (QL_STACK_SIZE, 0.6.6): 1536 is ready (the static worst
+ * case 832 B with the ISRs nested, tools/stack.py) and waits for the painted `stack=` of the bench's 30-day soak */
+__stack_size = DEFINED(QL_STACK_SIZE) ? QL_STACK_SIZE : 2048;
 
 PROVIDE( _stack_size = __stack_size );
 

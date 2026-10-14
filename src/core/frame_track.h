@@ -125,6 +125,19 @@ static inline uint32_t ftrack_tick(ftrack_t *t, uint16_t c, uint16_t own_bits, u
     return ev;
 }
 
+/* The return channel's response window ended (main.c, BOARD_RETURN): DIN carried answers, not a frame, and the gate
+ * was re-armed (the edge count from 0). Nothing of it is a frame: the next edges start a clean one. */
+static inline void ftrack_window_end(ftrack_t *t)
+{
+    t->last_cnt = 0;
+    t->idle = 0;
+    t->armed = 1;
+    t->cap_state = 0;
+    t->partial = 0;
+    t->paused = 0;
+    t->wraps = 0;
+}
+
 /* Samples and edge counts are unreliable (flash write: interrupts off, SPI at half clock): drop a capture in
  * progress and treat the running frame as partial; the next idle gap arms again. Call with interrupts off. */
 static inline void ftrack_disarm(ftrack_t *t)

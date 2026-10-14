@@ -119,37 +119,41 @@ static int is_config(const slot_t *slot)
     return 1;
 }
 
+/* the byte settings a command sets: its field, its range and whether the ACK blinks the value (0.6.6, review round 5: a
+ * table instead of a case each; MIN_PULSE / DITHER_THRESH: an ACK without the value code) */
+static const uint8_t cmd_field[CMD_MIN_PULSE][4] = {   /* [cmd - 1]: offset (0xFF: not a byte setting), min, max, code */
+    { offsetof(settings_t, protocol), 0, 3, 1 },
+    { offsetof(settings_t, pwm_preset), 0, PWM_PRESET_COUNT - 1u, 1 },
+    { offsetof(settings_t, dither_mode), 0, 2, 1 },
+    { offsetof(settings_t, dither_thresh), 1, 255, 0 },
+    { offsetof(settings_t, feedback_ch), 0, 2, 1 },
+    { offsetof(settings_t, stagger), 0, STAGGER_MODES - 1u, 1 },
+    { offsetof(settings_t, dim_floor), 0, 2, 1 },
+    { offsetof(settings_t, signal_loss), 0, 2, 1 },
+    { 0xFF, 0, 0, 0 },                                /* CMD_IDENTIFY */
+    { 0xFF, 0, 0, 0 },                                /* CMD_FACTORY_RESET */
+    { offsetof(settings_t, smoothing), 0, 2, 1 },
+    { offsetof(settings_t, gamma), 0, 2, 1 },
+    { offsetof(settings_t, min_pulse), 5, 100, 0 },
+};
+
 /* apply one command; returns ACK / SAME / NACK and the blink value code */
 cfg_result_t config_apply(config_rx_t *r, settings_t *s, uint8_t cmd, uint8_t arg)
 {
     cfg_result_t res = { CFG_NACK, cmd, 0, arg };
-    uint8_t *field = 0;
-    uint8_t max = 0;
 
+    if ((uint32_t)(cmd - 1u) < CMD_MIN_PULSE && cmd_field[cmd - 1u][0] != 0xFFu) {
+        const uint8_t *f = cmd_field[cmd - 1u];
+        uint8_t *field = (uint8_t *)s + f[0];
+        if (arg < f[1] || arg > f[2]) {
+            return res;
+        }
+        res.event = (*field == arg) ? CFG_SAME : CFG_ACK;
+        *field = arg;
+        res.value_code = f[3] ? (uint8_t)(arg + 1u) : 0u;
+        return res;
+    }
     switch (cmd) {
-    case CMD_PROTOCOL:      field = &s->protocol;      max = 3;  break;
-    case CMD_PWM_PRESET:    field = &s->pwm_preset;    max = PWM_PRESET_COUNT - 1u; break;
-    case CMD_DITHER_MODE:   field = &s->dither_mode;   max = 2;  break;
-    case CMD_FEEDBACK_CH:   field = &s->feedback_ch;   max = 2;  break;
-    case CMD_STAGGER:       field = &s->stagger;       max = STAGGER_MODES - 1u;  break;
-    case CMD_DIM_FLOOR:     field = &s->dim_floor;     max = 2;  break;
-    case CMD_SIGNAL_LOSS:   field = &s->signal_loss;   max = 2;  break;
-    case CMD_SMOOTHING:     field = &s->smoothing;     max = 2;  break;
-    case CMD_GAMMA:         field = &s->gamma;         max = 2;  break;
-    case CMD_MIN_PULSE:
-        if (arg < 5u || arg > 100u) {
-            return res;
-        }
-        res.event = (s->min_pulse == arg) ? CFG_SAME : CFG_ACK;
-        s->min_pulse = arg;
-        return res;                                   /* ACK only, no value code */
-    case CMD_DITHER_THRESH:
-        if (arg == 0u) {
-            return res;
-        }
-        res.event = (s->dither_thresh == arg) ? CFG_SAME : CFG_ACK;
-        s->dither_thresh = arg;
-        return res;                                   /* ACK only, no value code */
     case CMD_IDENTIFY:
         res.event = CFG_IDENTIFY;
         return res;
@@ -210,13 +214,6 @@ cfg_result_t config_apply(config_rx_t *r, settings_t *s, uint8_t cmd, uint8_t ar
     default:
         return res;
     }
-    if (arg > max) {
-        return res;
-    }
-    res.event = (*field == arg) ? CFG_SAME : CFG_ACK;
-    *field = arg;
-    res.value_code = (uint8_t)(arg + 1u);
-    return res;
 }
 
 cfg_result_t config_process(config_rx_t *r, settings_t *s, const slot_t *slot)

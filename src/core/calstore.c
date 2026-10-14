@@ -1,18 +1,20 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
+#include <stddef.h>
 #include "calstore.h"
 #include "store.h"
 #include "ultra_protocol.h"
 
-typedef char cal_rec_size_check[(sizeof(cal_rec_t) == CAL_REC_BYTES) ? 1 : -1];
+typedef char cal_rec_size_check[(sizeof(cal_rec_t) == CAL_REC_BYTES &&
+    offsetof(cal_rec_t, c) == 12u && sizeof(isense_cal_t) == 48u &&
+    offsetof(cal_rec_t, rsv2) == 60u && offsetof(cal_rec_t, crc) == 62u) ? 1 : -1];
 
 void cal_pack(const isense_cal_t *c, uint32_t seq, uint16_t count, cal_rec_t *rec)
 {
-    uint32_t i;
     uint8_t *b = (uint8_t *)rec;
-    for (i = 0; i < CAL_REC_BYTES; i++) {
-        b[i] = 0xFF;
-    }
+    /* The payload is copied below; only reserved bytes need the erased value. */
+    rec->rsv = 0xFFFFu;
+    rec->rsv2[0] = rec->rsv2[1] = 0xFFu;
     rec->magic = CAL_MAGIC;
     rec->seq = seq;
     rec->count = count;

@@ -66,6 +66,7 @@ static uint32_t sf_store(slog_t *l, const scene_t *sc, uint32_t torn_bytes)
     at = pp_plan(&scene_pp, &l->pos);
     scene_log_pack(sc, ++l->seq, &rec);
     sf_program(sf_index(at), &rec, torn_bytes ? torn_bytes : SCENE_REC_BYTES);
+    pp_done(&l->pos, at, torn_bytes == 0u);              /* (0.6.6: as flashrec.c scene_store) */
     return sf_index(at);
 }
 

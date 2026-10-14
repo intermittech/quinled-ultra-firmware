@@ -136,6 +136,17 @@ void flash_poll_isr(void);
 void hw_flash_trip(void);
 /* (0.6.5) the record pages' reads at boot, before hw_init: open = HCLK / 2 (the upper CodeFlash, board.h), 0 = back */
 void hw_records_window(uint32_t open);
+#if BOARD_RETURN
+/* the return channel (core/rc.h; the window runs in main.c's poll ISR). rc_hw_dir: RC_DIR_ANSWER turn around (the
+ * input transceiver drives upstream from the relay node, the output one listens), RC_DIR_QUIET both listen (the
+ * turnaround check failed), RC_DIR_FORWARD forward again (a burst still running is cut, the line released) */
+enum { RC_DIR_FORWARD = 0, RC_DIR_ANSWER = 1, RC_DIR_QUIET = 2 };
+void     rc_hw_dir(uint32_t mode);
+/* poll ISR: the line HIGH (USART3 idles high on PB10), after RC_PREAMBLE_CYC DIN read back: LOW = another driver on
+ * the segment (1: aborted, the line released); else the n bytes at brr by interrupt, the line released after them
+ * (n 0: the turnaround check, the line released at once) */
+uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr);
+#endif
 /* UART: RX by DMA into a ring, TX by DMA from a buffer (non-blocking unless the buffer is full) */
 int  uart_getc(void);                           /* -1 if nothing new; -2 once after a flash operation dropped
                                                    received bytes: cancel the line being typed */

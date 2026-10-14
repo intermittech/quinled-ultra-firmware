@@ -21,6 +21,7 @@
 #define Z(name, text) CZ_##name
 #define ZP(name, text) CZ_##name           /* (a PERF build's text: tools/gen_console_text.py --perf) */
 #define ZU(name, text) CZ_##name           /* (an upper-layout build's text, MON_EXTRA: --upper) */
+#define ZJ(name, text) CZ_##name           /* (the test jig's text: not with --no-jig, the receiver's build) */
 #define ZL(name, text) CZ_##name           /* (0.6.4's layout's instead: without --upper) */
 
 #endif

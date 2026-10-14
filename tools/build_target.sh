@@ -22,11 +22,29 @@ PFX="${GCC%gcc}"
 # cache then took 230-2,000 off each), the SET slot -48, the flicker render -151; the rest the same.
 if "$GCC" --version | head -1 | grep -q " 8\."; then ARCH="-march=rv32imc -mabi=ilp32"; LTO="${LTO:-0}"; else ARCH="-march=rv32imc_zicsr_zifencei -mabi=ilp32 -mtune=size"; fi
 LDARCH="-march=rv32imc -mabi=ilp32"   # selects the rv32imc multilib (libgcc)
+# STRICT_ALIGN=1 (0.6.6): -mstrict-align, no load / store at a misaligned address. -mtune=size lets GCC merge byte
+# accesses into halfword / word ones at odd offsets (0.6.5: 17 in the release app); the QingKe V4 manual lists the
+# misaligned-access exceptions (mcause 4 / 6) without saying the core handles them: BENCH. Cost: README "New in 0.6.6".
+if [ "${STRICT_ALIGN:-0}" = 1 ]; then ARCH="$ARCH -mstrict-align"; fi
 OUT="${OUT:-$FW/build/target}"
 mkdir -p "$OUT"
+# the Diff-Power receiver (BOARD=2): its own set (0.6.6): no MON_EXTRA monitoring (D5 / M5 / M3 / D6: the console
+# only; the return channel carries its values), so 0.6.4's layout's texts (ZL), the records still upper; no test jig
+# (--no-jig: it has no test pad); RC_PAGES_024=<0 / 1>: the three pages only the 0.2.4 proposal defines (OUTPUTS, ACKS,
+# ERRORS), 0 = UNSUPPORTED until its review
+RECEIVER=0
+case " $EXTRA_CFLAGS " in *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0 -DRC_PAGES_024=${RC_PAGES_024:-0}" ;; esac
+# STACK_SIZE=<bytes> (0.6.6): the stack, 2048 by default. 1536 is ready (static worst case 832 B with the ISRs nested,
+# tools/stack.py: main 720 + poll 64 + a slew 48; the QingKe V4B nests two levels) and waits for the bench: the painted
+# `stack=` high-water mark of the 30-day soak (test/ROUND4_BENCH_PLAN.md). The receiver needs at least 1792 B (its main
+# loop 928 B: 1,040 B nested). The linker scripts put the reset breadcrumbs right below it (Link_sections.ld).
+SS="${STACK_SIZE:-2048}"
+if [ "$RECEIVER" = 1 ] && [ "$SS" -lt 1792 ]; then SS=1792; fi
+STACK_LD=""
+if [ "$SS" != 2048 ]; then STACK_LD="-Wl,--defsym=QL_STACK_SIZE=$SS"; fi
 # the console's text, compressed (core/cz.h: tools/gen_console_text.py writes $OUT/gen/cz_text.h; Python 3, stdlib)
 "${PYTHON:-python}" "$FW/tools/gen_console_text.py" "$OUT/gen" $([ "${PERF:-0}" != 0 ] && echo --perf) \
-    $([ "${UPPER_RECORDS:-1}" != 0 ] && echo --upper)
+    $([ "${UPPER_RECORDS:-1}" != 0 ] && [ "$RECEIVER" = 0 ] && echo --upper) $(echo " $EXTRA_CFLAGS " | grep -q -- " -DBOARD=2 " && echo --no-jig)
 echo "compiler: $("$GCC" --version | head -1)"
 # -msmall-data-limit=400: every variable up to 400 bytes goes to .sbss / .sdata, in reach of gp (one instruction
 # less per access); the big buffers (ul, din_ring / din_copy, tail_copy, uart_tx, the PWM tables) stay outside.
@@ -49,8 +67,12 @@ if [ "${PERF:-0}" != 0 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DPERF_BUILD=$PERF"; 
 # cycles (taken: Quindor); -fno-ipa-icf / -cp-clone / -ra / -reference-addressable / -stack-alignment, -fno-tree-vrp 0 B;
 # -fno-ipa-cp, -fno-inline-small-functions, -fno-tree-loop-distribute-patterns, -fno-ipa-reference / -pure-const /
 # -bit-cp / -vrp, -fno-tree-pre, small-data limits 200 / 800 / 2048: larger.
-OPT="-Os -g -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
-CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -I$FW/vendor/wch -I$FW/src/hal -I$FW/src -I$OUT/gen $EXTRA_CFLAGS"
+# 0.6.6 (review round 5): -malign-data=natural for every file (the cold ones had it; explicit DMA / copy alignment
+# stays; two duplicate CRC tables merge: -56 B, 16 B RAM), -fno-partial-inlining (-84 B); no measured row slower.
+# Then (a 270-option sweep, each with measure.py): --param max-inline-insns-auto=5, max-hoist-depth=0 and
+# max-grow-copy-bb-insns=4 (alone +16 / +64 / +36 B: LTO's choices interact; the set is what pays), no row slower.
+OPT="-Os -g -fno-partial-inlining -malign-data=natural --param=max-inline-insns-auto=5 --param=max-hoist-depth=0 --param=max-grow-copy-bb-insns=4 -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
+CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -DUPD_CRC_ULTRA -I$FW/vendor/wch -I$FW/src/hal -I$FW/src -I$OUT/gen $EXTRA_CFLAGS"
 SRC="$FW/src/app/main.c $FW/src/hal/hw.c"
 for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
 # GCC 15 turns bitwise CRC loops into 256-entry tables (-foptimize-crc). The firmware update's CRCs (upd_app.c) run
@@ -59,7 +81,7 @@ for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
 NOCRC=""
 # cold files (the console, records, ...): -msave-restore, and -malign-data=natural (GCC otherwise aligns every
 # string literal and byte array to 4 bytes: ~1.5 bytes of padding per string)
-COLD="${COLD_CFLAGS--msave-restore -malign-data=natural}"
+COLD="${COLD_CFLAGS--msave-restore}"   # (-malign-data=natural: every file since 0.6.6, OPT above)
 if echo "int x;" | "$GCC" -fno-optimize-crc -x c -c - -o "$OUT/nocrc_probe.o" 2>/dev/null; then NOCRC="-fno-optimize-crc"; fi
 rm -f "$OUT/nocrc_probe.o"
 "$GCC" $CFLAGS -x assembler-with-cpp -c "$FW/vendor/wch/startup_ch32v20x_D6.S" -o "$OUT/startup.o"
@@ -89,7 +111,7 @@ LDSCRIPT="${LDSCRIPT:-$FW/vendor/wch/Link.ld}"
 if [ "$UPPER_RECORDS" = 0 ]; then
   case "$LDSCRIPT" in */Link.ld|*/Link_app.ld) LDSCRIPT="${LDSCRIPT%.ld}_lower.ld" ;; esac
 fi
-"$GCC" $LDARCH $LDLTO -nostartfiles -Wl,--gc-sections -Wl,-Map="$OUT/fw.map" -L"$FW/vendor/wch" -T "$LDSCRIPT" \
+"$GCC" $LDARCH $LDLTO $STACK_LD -nostartfiles -Wl,--gc-sections -Wl,-Map="$OUT/fw.map" -L"$FW/vendor/wch" -T "$LDSCRIPT" \
   $OBJS -o "$OUT/fw.elf" -lgcc
 "${PFX}objcopy" -O binary "$OUT/fw.elf" "$OUT/fw.bin"
 "${PFX}objcopy" -O ihex "$OUT/fw.elf" "$OUT/fw.hex"
