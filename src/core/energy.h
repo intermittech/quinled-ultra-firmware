@@ -8,13 +8,17 @@
  *    trips, supply dips, the MCU temperature and board current peaks, watchdog resets and firmware updates (a new app
  *    version at boot). A factory reset never clears it, a firmware update never touches it: only a full chip erase.
  *
- * STABLE FORMAT (LIFE_MAGIC 0x4D = format 2, from 0.6.9 on; format 1, 0x4C, 0.6.3-0.6.8, 40 bytes, isn't read: no
- * board had shipped, Quindor): a firmware that changes the record must still read this one (by its magic) and carry
- * its values over. life_rec_t is little-endian, 48 bytes, programmed in address order: the magic (byte 45) in the
- * second-last half-word, the CRC-16 (bytes 46-47, ultra_crc16 over bytes 0..45) in the last. Format 2 added the fault
- * memory (0.6.9, B2): the last trip, the last supply dip and the last abnormal reset, set in RAM when they happen and
- * stored with the record's next write (never a write of their own). An entry cut short by a power loss either reads its magic as erased flash (0xFF / 0xE3: never taken) or
- * lacks only its CRC (its data complete). A page whose erase was cut short passes as a record 1 in 65,536.
+ * STABLE FORMAT (LIFE_MAGIC 0x4E = format 3, from 0.6.10 on; format 2, 0x4D, 0.6.9, is read and carried over: bytes
+ * 20..23 held the version word, now its CRC-8 and `merged` (0, 24 bits), the rest the same; format 1, 0x4C,
+ * 0.6.3-0.6.8, 40 bytes, isn't read: no board had shipped, Quindor): a firmware that changes the record must still read
+ * this one (by its magic) and carry its values over. Format 3 keeps format 2's size and positions, so a 0.6.9
+ * firmware reads its magic byte as another and never takes a format 3 record (it starts its own). life_rec_t is
+ * little-endian, 48 bytes, programmed in address order: the magic (byte 45) in the second-last half-word, the CRC-16
+ * (bytes 46-47, ultra_crc16 over bytes 0..45) in the last. Format 2 added the fault memory (0.6.9, B2): the last trip,
+ * the last supply dip and the last abnormal reset, set in RAM when they happen and stored with the record's next write
+ * (never a write of their own). An entry cut short by a power loss either reads its magic as erased flash (0xFF / 0xE3:
+ * never taken) or lacks only its CRC (its data complete). A page whose erase was cut short passes as a record 1 in
+ * 65,536.
  *
  * Storage: an A/B page pair (hal/board.h LIFE_PAGE0_ADDR / LIFE_PAGE1_ADDR), LIFE_RECS records each, appended in
  * turn. The valid record with the most writes is the newest. A write only ever goes into an erased entry, never
@@ -33,7 +37,9 @@
  * the lifetime allowance: at most LIFE_RESERVE + one per LIFE_EARN_S of powered time over the board's life, which
  * counts across power cycles, so a board powered on and off all day can't wear the flash either):
  *  - at the start of a supply dip (core/vdip.h): the supply may be going away (a wall switch). Only with >= 1 Wh new,
- *    a counter event, or LIFE_DIP_S powered since the last write;
+ *    a counter event, or LIFE_DIP_S powered since the last write. One that can't be made then (below the PVD, no
+ *    token, a failed program) stays pending as a regular write, the next second on: the regular admission (the
+ *    hold-off after a failure, the tokens), but no dark wait;
  *  - when the outputs have been dark for ENERGY_DARK_MS after being lit (a controller switched off), or LIFE_SAVE_S
  *    since the last write (then at the first dark moment): with >= 1 Wh new while lit, a counter event, or LIFE_IDLE_S
  *    powered since the last write (a dark board's own logic current never asks for more than a write a day).
@@ -45,6 +51,18 @@
  * Wear (10k erase cycles, the datasheet minimum; LIFE_RECS writes per erase of a page): a board powered all the
  * time, any pattern: <= 8 writes a day, 0.8 erases a day per page: 34 years (format 1, 6 a page: 41). Any pattern at
  * all, with power cycles: <= LIFE_RESERVE + 8 a powered day (test/test_energy.c simulates both, and prints the years).
+ * The allowance's limit (review round 8, R5; kept by decision): powered time is earned only through a write, so once
+ * the allowance is used up a run shorter than the time to the next earned write (at most LIFE_EARN_S) writes nothing
+ * and its time is lost; such runs never add up. A run of LIFE_EARN_S writes again (in standby use: the evening). Only a
+ * board that wrote ~LIFE_RESERVE more than it earned gets there: about 10 power cuts a day that each have something
+ * to store (1 Wh, 10 min powered, an event) for ~9 years; the receiver's planned cuts alone write nothing. The
+ * receiver's DIAG page shows it (ULTRA_DG_FP_EXHAUSTED).
+ * The hub's counters (0.6.10, protocol 0.2.6, the receiver's LIFE_SYNC page, energy_sync): a hub that keeps each
+ * board's counters sends them back after its power-up; what the board lost at a cut (a short wake's time, energy and
+ * power-up) comes back into RAM, a bounded step per counter, once a boot. A merged step counts as stored (saved_on_s /
+ * saved_wh with it): it never makes a write due, it rides along with the board's own next write. The allowance counts
+ * only the board's own powered time (on_s - merged x 360 s, format 3's `merged`, exact in 0.1 h, 24 bits: 190 years),
+ * so no hub, buggy or hostile, raises the write rate.
  *
  * Energy per channel (0.6.5): the measured input energy split over the five channels by the channel model. Every ms
  * the outputs in effect (core/isense.h `applied`, after the limiter and the soft start) and the board current are
@@ -63,7 +81,8 @@
 #include "store.h"
 #include "pagepair.h"
 
-#define LIFE_MAGIC         0x4Du    /* format 2 (not 0xFF / 0xE3: erased flash; 0x4C: format 1) */
+#define LIFE_MAGIC         0x4Eu    /* format 3 (not 0xFF / 0xE3: erased flash; 0x4C: format 1) */
+#define LIFE_MAGIC_F2      0x4Du    /* format 2: read and carried over (energy_init) */
 #define LIFE_REC_BYTES     48u
 #define LIFE_RECS          5u       /* per 256-byte page (the last 16 bytes stay unused) */
 #define ENERGY_DARK_MS     30000u   /* dark this long after being lit: a write */
@@ -76,20 +95,32 @@
 #define LIFE_RESERVE       32768u   /* lifetime allowance: these writes ... */
 #define LIFE_EARN_S        10800u   /* ... plus one per 3 h of powered time */
 #define ENERGY_UJ_PER_MWH  3600000u
+/* (0.6.10, protocol 0.2.6) the hub's counters (LIFE_SYNC page, energy_sync): the steps a merge takes at most */
+#define LIFE_SYNC_MAX_H10  7200u    /* powered time: 30 days (0.1 h) */
+#define LIFE_SYNC_EV_S     10u      /* power-ups, trips, dips: one per this much of the powered time raised ... */
+#define LIFE_SYNC_EV_MIN   64u      /* ... + this */
+#define LIFE_SYNC_MAX_W    1000u    /* energy: this power over the powered time raised + 1 h, Wh */
 
 /* why energy_due() wants a write (either goes into an erased entry); also the bits of its `admit` argument */
 #define ENERGY_DUE_NONE    0u
 #define ENERGY_DUE_SAVE    1u       /* a regular write */
 #define ENERGY_DUE_DIP     2u       /* a supply dip */
+#define ENERGY_PLANNED     4u       /* (0.6.10) admit: the planned cut starts now (the receiver: a dip during its
+                                       IDENTIFY 7 notice, core/vdip.h in_dip 2; `dips` unchanged): not counted, and
+                                       written only for something worth storing (not the power-up alone) */
 
-typedef struct {                    /* the lifetime record, format 2 (STABLE: see above) */
+typedef struct {                    /* the lifetime record, format 3 (STABLE: see above) */
     uint32_t wh;                    /*  0: input energy, Wh */
     uint32_t on_s;                  /*  4: powered time, s */
     uint32_t lit_s;                 /*  8: time with an output on, s */
     uint32_t ups;                   /* 12: power-ups */
     uint32_t dips;                  /* 16: supply dips */
-    uint32_t ver;                   /* 20: the app version last seen (core/fwver.h word; 0 = development builds only) */
-    uint32_t writes;                /* 24: records written, this one included (the newest has the most) */
+    uint8_t  ver;                   /* 20: the app version last seen: the CRC-8 of its core/fwver.h word (energy_ver;
+                                       development builds aren't compared); format 2: bytes 20..23 the word itself */
+    uint8_t  merged_hi;             /* 21: (format 3) the powered time a hub merged in (LIFE_SYNC), 0.1 h, 24 bits: */
+    uint16_t merged;                /* 22: ... its low 16 (LIFE_MERGED). The board's own powered time is on_s - merged x
+                                       360 s, its write allowance's */
+    uint32_t writes;                /* 24: records written, this one included (the newest has the most; one a write) */
     uint16_t trips[2];              /* 28: overload trips, 30: short-circuit trips (saturating) */
     uint16_t updates;               /* 32: firmware updates: boots with a new app version */
     uint8_t  wd;                    /* 34: watchdog resets (saturating) */
@@ -124,13 +155,24 @@ typedef struct {
     uint32_t saved_s;               /* uptime of the last write, s (the page's age, LIFE_SAVE_S) */
     uint32_t lit_ms;                /* the last ms with an output on (settled: never more than 2^30 back) */
     uint8_t  lit_new;               /* an output was on since the last write (a flag: no time compare that can age) */
-    uint8_t  ev;                    /* a counter event since the last write */
-    uint8_t  due;                   /* energy_second: a regular write is due (and allowed) */
-    uint8_t  dip_ok;                /* energy_second: a dip would have something to store (and is allowed); these
-                                       four in one word: energy_saved clears them at once */
+    uint8_t  ev;                    /* a counter event since the last write: bit 0 a trip, watchdog reset or update,
+                                       bit 1 the power-up (0.6.10: alone it writes nothing at a planned power-off);
+                                       bit 2 (review round 8) a dip's write not made yet (not admitted, no token,
+                                       failed): energy_second makes it a regular one, without the dark wait */
+    uint8_t  due;                   /* energy_second: a regular write is due (and allowed); also a dip's pending
+                                       one (ev bit 2), without the dark wait (DIAG FP_LIFETIME) */
+    uint8_t  dip_ok;                /* energy_second: a dip would have something to store (and is allowed); bit 1:
+                                       a planned power-off's too (0.6.10); these four in one word: energy_saved clears
+                                       them at once */
+    uint8_t  ev_save;               /* (0.6.10) the ev bits a regular write takes: 3 (energy_init); the receiver 1:
+                                       its power-up alone is stored by an unplanned cut's dip write only, so a standby
+                                       cycle (power-up, a light, dark, the notice) writes nothing for itself */
+    uint8_t  held;                  /* (0.6.10, review round 8, R5) energy_second: the lifetime allowance is used
+                                       up (the receiver's DIAG EXHAUSTED; see the limit above) */
     uint16_t dips;                  /* the supply dips since boot, as last seen (vdip's count, u16: differences) */
     uint16_t trips_seen[2];         /* the trips since boot (core/pwrev.h's u16 counts), as last seen */
     uint8_t  saved;                 /* stored since boot */
+    uint8_t  synced;                /* (0.6.10) energy_sync applied a merge this boot (one a boot) */
     scene_budget_t budget;
     /* energy per channel (0.6.5, RAM only) */
     uint32_t ch_d[ISENSE_CH];       /* this second: each output's sum (16-bit levels x ms) */
@@ -159,6 +201,21 @@ uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips, uint32_t admit);
 /* e->lt as the record to write now: the energy, the next write count, the check */
 void     energy_pack(energy_t *e);
 void     energy_saved(energy_t *e, uint32_t now_s);
+/* (0.6.10, protocol 0.2.6, the receiver's LIFE_SYNC page) a = the POLL arguments (ULTRA_LS_*), uid16 = the board's:
+ * the hub's counters merged, once a boot, when its UID16 and RECORDS low 8 bits match. Each counter is raised by the
+ * hub's step d ahead (wire units: 0.1 h, Wh, counts; a 24-bit field ahead below 2^23, modular; the others plain: a
+ * lower value never) when 0 < d <= its step: powered LIFE_SYNC_MAX_H10 (and `merged` below 2^24); lit the powered
+ * step + 1; both also no further than the room below their seconds' ceiling (round 9 phase B: 2^32 - 1 s, ~136 years;
+ * a merge never wraps them: further ahead, CAPPED); power-ups, trips, dips one per LIFE_SYNC_EV_S of the powered time
+ * raised + LIFE_SYNC_EV_MIN; the energy LIFE_SYNC_MAX_W over it + 1 h. At the ceiling the board's own counting stops
+ * too (on_s, lit_s, the energy: they stay, never lowered; its own time, and so the allowance, stop growing).
+ * A merged step counts as stored (saved_on_s / saved_wh too): it never makes a write due; it rides along with the
+ * board's own next one. Returns the applied fields (ULTRA_LS_F_*) | ULTRA_LS_R_* << 8 */
+uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16);
+/* the record's version field for a core/fwver.h word: its CRC-8 (crc8_smbus over its 4 bytes) */
+uint32_t energy_ver(uint32_t ver);
+/* the powered time a hub merged in, 0.1 h (format 3's 24 bits) */
+#define LIFE_MERGED(r)     ((uint32_t)(r)->merged_hi << 16 | (r)->merged)
 /* the pair's description (core/pagepair.h; flashrec.c's descriptor, 0.6.6): a record valid (magic, CRC-16) */
 extern const pp_desc_t life_pp;
 /* the two pages: the newest valid record into *r (returns 1; 0 = none) and where the next one goes (the entry after

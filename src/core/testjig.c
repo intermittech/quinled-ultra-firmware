@@ -1,35 +1,22 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
 /* Test jig mode: see testjig.h. */
+#include <stddef.h>
+#include <string.h>
 #include "testjig.h"
 
 void tj_init(testjig_t *t, uint32_t cycle_ms)
 {
-    uint8_t i;
     if (cycle_ms < 1000u) {
         cycle_ms = 1000u;
     }
     if (cycle_ms > 2000u) {
         cycle_ms = 2000u;
     }
-    t->active = 0;
-    t->pad_low = 0;
-    t->run_ms = 0;
-    t->t0 = 0;
+    memset(t, 0, sizeof *t);                             /* off, TJ_RST_IDLE, no measurement (a call: ~20 stores) */
     t->cycle_ms = cycle_ms;
     t->slot_ms = (cycle_ms - TJ_GAP_MS) / 5u;            /* 180..380 ms per channel */
-    t->acc = 0;
-    t->n = 0;
     t->meas_ch = 0xFFu;
-    for (i = 0; i < 5u; i++) {
-        t->ma[i] = 0;
-    }
-    t->cycles = 0;
-    t->fail = 0;
-    t->rst = TJ_RST_IDLE;
-    t->rst_ok = 0;
-    t->rst_ms = 0;
-    t->rx_pos = 0;
 }
 
 uint8_t tj_pads(testjig_t *t, uint8_t tp6_low, uint32_t rx_pos, uint8_t tp9_low)
@@ -41,7 +28,7 @@ uint8_t tj_pads(testjig_t *t, uint8_t tp6_low, uint32_t rx_pos, uint8_t tp9_low)
 
 uint8_t tj_pad(testjig_t *t, uint32_t now, uint8_t pad_low)
 {
-    uint8_t i, ev = 0;
+    uint8_t ev = 0;
     uint32_t el = now - t->rst_ms;
     pad_low = (uint8_t)(pad_low != 0u);
     if (pad_low != t->pad_low) {
@@ -54,13 +41,9 @@ uint8_t tj_pad(testjig_t *t, uint32_t now, uint8_t pad_low)
     if (!t->active && pad_low && t->run_ms >= TJ_ENTER_MS) {
         t->active = 1;
         t->t0 = now;
-        t->acc = 0;
-        t->n = 0;
+        memset((uint8_t *)t + offsetof(testjig_t, acc), 0,   /* acc, n, ma, cycles (offsets within *t: round 8) */
+               offsetof(testjig_t, fail) - offsetof(testjig_t, acc));
         t->meas_ch = 0xFFu;
-        for (i = 0; i < 5u; i++) {
-            t->ma[i] = 0;
-        }
-        t->cycles = 0;
         /* the reset gesture: its second hold, or a first one on a running board */
         t->rst = t->rst == TJ_RST_WAIT ? TJ_RST_CONFIRM : t->rst_ok ? TJ_RST_HOLD : TJ_RST_IDLE;
         t->rst_ms = now;

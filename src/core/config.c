@@ -15,6 +15,13 @@ uint16_t crc16_ccitt(const uint8_t *d, uint32_t n)
     return ultra_crc16(d, n);
 }
 
+#if UPPER_RECORDS
+int crc16_erased(uint32_t c)
+{
+    return c == 0xFFFFu || c == 0xE339u;
+}
+#endif
+
 void settings_default(settings_t *s)
 {
     s->protocol = PMODE_AUTO;
@@ -32,31 +39,36 @@ void settings_default(settings_t *s)
     s->last_proto = PROTO_NONE; /* nothing locked yet: the first frames decide */
 }
 
+/* the byte settings (config.h setdesc_t), in the console's order: the field, its range, the config-frame command (the
+ * ACK blinks the value, except DITHER_THRESH / MIN_PULSE), the Ultra CONFIG id (entries 2..8). The preset / period pair
+ * (CMD_PERIOD_*, ULTRA_CFG_PWM_PRESET / PWM_PERIOD) is code: config_apply, main.c ultra_overlay. (round 9: one table
+ * instead of settings_sanitize's, config_apply's, ultra_overlay's and the console's two) */
+const setdesc_t settings_desc[SETD_N] = {
+    { offsetof(settings_t, protocol),      0, PMODE_ULTRA,           CMD_PROTOCOL,                     0 },
+    { offsetof(settings_t, pwm_preset),    0, PWM_PRESET_COUNT - 1u, CMD_PWM_PRESET,                   0 },
+    { offsetof(settings_t, dither_mode),   0, 2,                     CMD_DITHER_MODE,                  ULTRA_CFG_DITHER },
+    { offsetof(settings_t, dither_thresh), 1, 255,                   CMD_DITHER_THRESH | SETD_NO_CODE, ULTRA_CFG_DITHER_THRESH },
+    { offsetof(settings_t, dim_floor),     0, 2,                     CMD_DIM_FLOOR,                    ULTRA_CFG_DIM_FLOOR },
+    { offsetof(settings_t, min_pulse),     5, 100,                   CMD_MIN_PULSE | SETD_NO_CODE,     ULTRA_CFG_MIN_PULSE },
+    { offsetof(settings_t, stagger),       0, STAGGER_MODES - 1u,    CMD_STAGGER,                      ULTRA_CFG_STAGGER },
+    { offsetof(settings_t, signal_loss),   0, 3,                     CMD_SIGNAL_LOSS,                  ULTRA_CFG_LOSS },   /* (0.6.9, B10: 3 = scene) */
+    { offsetof(settings_t, feedback_ch),   0, 2,                     CMD_FEEDBACK_CH,                  ULTRA_CFG_FEEDBACK },
+    { offsetof(settings_t, smoothing),     0, 2,                     CMD_SMOOTHING,                    0 },
+    { offsetof(settings_t, gamma),         0, 2,                     CMD_GAMMA,                        0 },
+    { offsetof(settings_t, last_proto),    0, PROTO_ULTRA,           0,                                0 },
+};
+
 int settings_sanitize(settings_t *s)
 {
-    /* the byte fields: offset, lowest and highest value (pwm_preset also takes 0xFF: a raw period) */
-    static const uint8_t lim[12][3] = {
-        { offsetof(settings_t, protocol), 0, PMODE_ULTRA },
-        { offsetof(settings_t, pwm_preset), 0, PWM_PRESET_COUNT - 1u },
-        { offsetof(settings_t, dither_mode), 0, 2 },
-        { offsetof(settings_t, dither_thresh), 1, 255 },
-        { offsetof(settings_t, feedback_ch), 0, 2 },
-        { offsetof(settings_t, stagger), 0, STAGGER_MODES - 1u },
-        { offsetof(settings_t, dim_floor), 0, 2 },
-        { offsetof(settings_t, min_pulse), 5, 100 },
-        { offsetof(settings_t, signal_loss), 0, 3 },   /* (0.6.9, B10: 3 = scene) */
-        { offsetof(settings_t, smoothing), 0, 2 },
-        { offsetof(settings_t, gamma), 0, 2 },
-        { offsetof(settings_t, last_proto), 0, PROTO_ULTRA },
-    };
     settings_t d;
     uint32_t i;
     int fixed = 0;
     settings_default(&d);
-    for (i = 0; i < 12u; i++) {
-        uint8_t *f = (uint8_t *)s + lim[i][0];
-        if ((*f < lim[i][1] || *f > lim[i][2]) && !(i == 1u && *f == 0xFFu)) {
-            *f = ((const uint8_t *)&d)[lim[i][0]];
+    for (i = 0; i < SETD_N; i++) {                    /* (entry 1, pwm_preset, also takes 0xFF: a raw period) */
+        const setdesc_t *t = &settings_desc[i];
+        uint8_t *f = (uint8_t *)s + t->ofs;
+        if ((*f < t->lo || *f > t->hi) && !(i == 1u && *f == 0xFFu)) {
+            *f = ((const uint8_t *)&d)[t->ofs];
             fixed = 1;
         }
     }
@@ -119,39 +131,26 @@ static int is_config(const slot_t *slot)
     return 1;
 }
 
-/* the byte settings a command sets: its field, its range and whether the ACK blinks the value (0.6.6, review round 5: a
- * table instead of a case each; MIN_PULSE / DITHER_THRESH: an ACK without the value code) */
-static const uint8_t cmd_field[CMD_MIN_PULSE][4] = {   /* [cmd - 1]: offset (0xFF: not a byte setting), min, max, code */
-    { offsetof(settings_t, protocol), 0, 3, 1 },
-    { offsetof(settings_t, pwm_preset), 0, PWM_PRESET_COUNT - 1u, 1 },
-    { offsetof(settings_t, dither_mode), 0, 2, 1 },
-    { offsetof(settings_t, dither_thresh), 1, 255, 0 },
-    { offsetof(settings_t, feedback_ch), 0, 2, 1 },
-    { offsetof(settings_t, stagger), 0, STAGGER_MODES - 1u, 1 },
-    { offsetof(settings_t, dim_floor), 0, 2, 1 },
-    { offsetof(settings_t, signal_loss), 0, 3, 1 },
-    { 0xFF, 0, 0, 0 },                                /* CMD_IDENTIFY */
-    { 0xFF, 0, 0, 0 },                                /* CMD_FACTORY_RESET */
-    { offsetof(settings_t, smoothing), 0, 2, 1 },
-    { offsetof(settings_t, gamma), 0, 2, 1 },
-    { offsetof(settings_t, min_pulse), 5, 100, 0 },
-};
-
 /* apply one command; returns ACK / SAME / NACK and the blink value code */
 cfg_result_t config_apply(config_rx_t *r, settings_t *s, uint8_t cmd, uint8_t arg)
 {
     cfg_result_t res = { CFG_NACK, cmd, 0, arg };
+    uint32_t i;
 
-    if ((uint32_t)(cmd - 1u) < CMD_MIN_PULSE && cmd_field[cmd - 1u][0] != 0xFFu) {
-        const uint8_t *f = cmd_field[cmd - 1u];
-        uint8_t *field = (uint8_t *)s + f[0];
-        if (arg < f[1] || arg > f[2]) {
+    /* a byte setting (settings_desc: the field, its range, whether the ACK blinks the value; 0.6.6, review round 5: a
+     * table instead of a case each) */
+    for (i = 0; i < SETD_SHOWN; i++) {
+        const setdesc_t *t = &settings_desc[i];
+        if ((t->cmd & ~SETD_NO_CODE) == cmd) {
+            uint8_t *field = (uint8_t *)s + t->ofs;
+            if (arg < t->lo || arg > t->hi) {
+                return res;
+            }
+            res.event = (*field == arg) ? CFG_SAME : CFG_ACK;
+            *field = arg;
+            res.value_code = (t->cmd & SETD_NO_CODE) ? 0u : (uint8_t)(arg + 1u);
             return res;
         }
-        res.event = (*field == arg) ? CFG_SAME : CFG_ACK;
-        *field = arg;
-        res.value_code = f[3] ? (uint8_t)(arg + 1u) : 0u;
-        return res;
     }
     switch (cmd) {
     case CMD_IDENTIFY:

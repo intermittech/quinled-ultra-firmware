@@ -336,8 +336,8 @@ static void sc_rcpages(void)
     pg = rc_ask(ULTRA_PAGE_IDENTITY, 0, 0, &o);
     CHECK(pg == ULTRA_PAGE_IDENTITY && memcmp(D(&o), rc_uid, 12) == 0 &&
           ultra_get32(D(&o) + ULTRA_ID_FW_VERSION) == fw_version && D(&o)[17] == BOARD &&
-          ultra_get16(D(&o) + 18) == 0x000Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x1FFFBFu,   /* (0.6.9:
-                                                                     LIFETIME, DIAG, RETRY, LOSS_SCENE) */
+          ultra_get16(D(&o) + 18) == 0x000Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x7FFFBFu,   /* (0.6.9:
+                                                    LIFETIME, DIAG, RETRY, LOSS_SCENE; 0.6.10 STANDBY, LIFE_SYNC) */
           "rcpages: IDENTITY version %08X, hw %u, caps %04X, features %08X", ultra_get32(D(&o) + 12), D(&o)[17],
           ultra_get16(D(&o) + 18), ultra_get32(D(&o) + 20));
 
@@ -389,10 +389,10 @@ static void sc_rcpages(void)
     }
 
     /* pages this firmware doesn't have */
-    CHECK(rc_ask(ULTRA_PAGE_FW_UPDATE, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(0x0E, 0, 0, &o) ==
+    CHECK(rc_ask(ULTRA_PAGE_FW_UPDATE, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(0x0F, 0, 0, &o) ==
           ULTRA_PAGE_UNSUPPORTED && rc_ask(0x80, 0, 0, &o) == ULTRA_PAGE_UNSUPPORTED && rc_ask(0xFE, 0, 0, &o) ==
-          ULTRA_PAGE_UNSUPPORTED, "rcpages: FW_UPDATE, 0x0E (0.6.9: 0x0C / 0x0D defined), 0x80, 0xFE answer "
-          "UNSUPPORTED");
+          ULTRA_PAGE_UNSUPPORTED, "rcpages: FW_UPDATE, 0x0F (0.6.9: 0x0C / 0x0D defined; 0.6.10: 0x0E), 0x80, 0xFE "
+          "answer UNSUPPORTED");
     for (i = 0, j = 0; i < 24; i++) {
         j |= D(&o)[i];
     }

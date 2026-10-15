@@ -228,7 +228,7 @@ static void test_energy_rules(void)
     memset(&b, 0, sizeof b);
     lf_init(&b.f, 0xFFFFu);
     bd_boot(&b, 0, 0x00060300u, 0);
-    CHECK(b.e.lt.ups == 1u && b.e.lt.updates == 0u && b.e.lt.ver == 0x00060300u && b.e.ev,
+    CHECK(b.e.lt.ups == 1u && b.e.lt.updates == 0u && b.e.lt.ver == energy_ver(0x00060300u) && b.e.ev,
           "a new board: 1 power-up, no update, its version");
     b.mv = 24000;
     b.ma = 2000;
@@ -400,8 +400,8 @@ static void test_energy_record(void)
         CHECK(lf_store(&b.f, &b.e, LH) == 1u, "stored");
         r = bd_stored(&b, &found);
         CHECK(found && r.wh == 1000u + 1284u && r.on_s == 77u && r.lit_s == 66u && r.ups == 1u && r.dips == 14u &&
-              r.ver == 0x00060300u && r.writes == 1u && r.trips[0] == 3u && r.trips[1] == 2u && r.updates == 0u &&
-              r.wd == 1u && r.peak_t == 137u && r.peak_a == 79u && r.magic == LIFE_MAGIC,
+              r.ver == energy_ver(0x00060300u) && r.writes == 1u && r.trips[0] == 3u && r.trips[1] == 2u &&
+              r.updates == 0u && r.wd == 1u && r.peak_t == 137u && r.peak_a == 79u && r.magic == LIFE_MAGIC,
               "every field back (%04X)", erased);
         CHECK(b.f.pos.next == 1u && !b.f.pos.erase, "next: entry 1");
         {                                                /* the writes counter across its 32-bit wrap */
@@ -541,7 +541,7 @@ static void test_energy_boots(void)
     bd_ms(&b, 700000u);
     bd_dip(&b);
     r = bd_stored(&b, &found);
-    CHECK(found && r.ups == 1u && r.updates == 0u && r.ver == 0x00060300u, "boot 1: stored, no update");
+    CHECK(found && r.ups == 1u && r.updates == 0u && r.ver == energy_ver(0x00060300u), "boot 1: stored, no update");
     bd_boot(&b, 0, 0x00060400u, 0);                      /* v0.6.4, the power goes before anything is stored */
     CHECK(b.e.lt.updates == 1u && b.e.lt.ups == 2u, "boot 2 (new version): the update counted in RAM");
     bd_ms(&b, 5000u);
@@ -555,7 +555,8 @@ static void test_energy_boots(void)
     bd_ms(&b, 700000u);
     bd_dip(&b);
     bd_boot(&b, 0, 0, 0);                                /* a development build: not compared, the version kept */
-    CHECK(b.e.lt.updates == 1u && b.e.lt.ver == 0x00060400u, "a development build: no update, version kept");
+    CHECK(b.e.lt.updates == 1u && b.e.lt.ver == energy_ver(0x00060400u), "a development build: no update, version "
+          "kept");
     bd_ms(&b, 700000u);
     bd_dip(&b);
     bd_boot(&b, 0, 0x00070000u, 1);                      /* v0.7.0 after a watchdog reset */
@@ -563,7 +564,8 @@ static void test_energy_boots(void)
     bd_ms(&b, 700000u);
     bd_dip(&b);
     r = bd_stored(&b, &found);
-    CHECK(found && r.ups == 5u && r.updates == 2u && r.wd == 1u && r.ver == 0x00070000u, "stored: 5 power-ups (%u; "
+    CHECK(found && r.ups == 5u && r.updates == 2u && r.wd == 1u && r.ver == energy_ver(0x00070000u),
+          "stored: 5 power-ups (%u; "
           "the 6th boot was never stored), 2 updates, 1 watchdog reset", r.ups);
     b.e.lt.wd = 254u;
     for (k = 0; k < 3u; k++) {
@@ -753,6 +755,18 @@ static void test_energy_wear(void)
     }
     wear_report(&b, "power cycled 24/7: on 30 s, off, again", 366.0 / 365.25, 366.0 * 24.0, k, 0);
     CHECK(b.f.writes >= LIFE_RESERVE, "on 30 s: the lifetime reserve stored every boot first (%u)", b.f.writes);
+    /* 4b. (round 9 phase B) a flicker: on 0.5 s with a dip, off, 60,000 times: the dip in the first second writes
+     * (energy_init's dip_ok; before, nothing), the reserve first; no second ever passes, no own time earns more */
+    memset(&b, 0, sizeof b);
+    lf_init(&b.f, 0xFFFFu);
+    for (k = 0; k < 60000u; k++) {
+        bd_boot(&b, 0, 1u, 0);
+        b.ms += 500u;
+        bd_dip(&b);
+    }
+    wear_report(&b, "a flicker: on 0.5 s with a dip, off, 60,000 x", 60000.0 / 86400.0 / 365.25, 60000.0 / 7200.0, k,
+                0);
+    CHECK(b.f.writes == LIFE_RESERVE, "flicker: the reserve, then nothing (%u writes)", b.f.writes);
     /* 5. a hallway on a wall switch: 30 times a day for 3 min, 25 years */
     memset(&b, 0, sizeof b);
     lf_init(&b.f, 0xFFFFu);
@@ -797,6 +811,143 @@ static void test_energy_wear(void)
         }
     }
     wear_report(&b, "always powered, light on / off 4 x a day", days / 365.25, days * 24.0, 1u, 0);
+}
+
+/* ---- (0.6.10) the receiver's standby cycles over 10 years ---- */
+static void bd_planned(ebd_t *b)                         /* the cut after a planned power-off notice (main.c: vdip
+                                                            doesn't count it, ENERGY_PLANNED at its start) */
+{
+    bd_write(b, energy_due(&b->e, b->ms, b->dips, bd_admit(b) | ENERGY_PLANNED));
+}
+
+static uint32_t bd_exhausted(const ebd_t *b)             /* the allowance used up (main.c: DIAG's EXHAUSTED) */
+{
+    return b->e.lt.writes >= LIFE_RESERVE + b->e.lt.on_s / LIFE_EARN_S;
+}
+
+/* a day: an evening lit 3 h at 30 W (dark 10 min, then the port off), and n standby cycles: a wake, lit 1 min at
+ * 30 W (0.5 Wh) and dark 3 min (pre: dark 2 min, a pre-wake; pre 2: lit 2 min, 1 Wh: worth a write), then the port
+ * off. rx: the receiver's rules (ev_save 1, the notice); else 0.6.9's (a cut is a dip, the power-up an event).
+ * Returns the day the lifetime reserve ran out (an allowance-limited write: 0 = never); sb_exh: the cycles that
+ * ended with the allowance used up, sb_last: the writes in the last year */
+static uint32_t sb_exh, sb_last;
+
+static uint32_t standby_run(ebd_t *b, uint32_t days, uint32_t n, uint32_t pre, uint32_t rx)
+{
+    uint32_t d, k, out = 0, w = 0;
+    sb_exh = 0;
+    memset(b, 0, sizeof *b);
+    lf_init(&b->f, 0xFFFFu);
+    for (d = 0; d < days; d++) {
+        for (k = 0; k <= n; k++) {
+            bd_boot(b, 0, 1u, 0);
+            if (rx) {
+                b->e.ev_save = 1u;
+            }
+            b->lit = 1;
+            if (k == n) {
+                bd_fast(b, 1080u, 10u, 30000u);          /* the evening */
+                b->lit = 0;
+                bd_fast(b, 60u, 10u, 1000u);
+            } else if (pre != 1u) {
+                bd_fast(b, pre ? 12u : 6u, 10u, 30000u);
+                b->lit = 0;
+                bd_fast(b, 18u, 10u, 1000u);
+            } else {
+                b->lit = 0;
+                bd_fast(b, 12u, 10u, 1000u);
+            }
+            if (rx) {
+                bd_planned(b);
+            } else {
+                bd_dip(b);
+            }
+            if (!out && b->e.lt.writes >= LIFE_RESERVE) {
+                out = d + 1u;
+            }
+            sb_exh += bd_exhausted(b);
+        }
+        if (d + 365u == days) {
+            w = b->f.writes;
+        }
+    }
+    sb_last = b->f.writes - w;
+    return out;
+}
+
+static void test_energy_standby(void)
+{
+    static ebd_t b;
+    static const uint32_t cyc[2] = { 50u, 300u };
+    uint32_t i, k, rx, out, days = 10u * 365u + 2u;
+    printf("energy: the receiver's standby cycles, 10 years (0.6.10: the planned power-off's write gate)\n");
+    for (i = 0; i < 2u; i++) {
+        for (rx = 1u; rx <= 1u; rx--) {
+            uint32_t emax;
+            out = standby_run(&b, days, cyc[i], i, rx);
+            emax = b.f.erases[0] > b.f.erases[1] ? b.f.erases[0] : b.f.erases[1];
+            printf("  %3u %s a day + an evening, %-28s %7u writes (%5.2f/day), erases %5u/%5u, the reserve %s",
+                   cyc[i], i ? "pre-wakes" : "lit wakes", rx ? "with the gate (0.6.10):" : "each cut a dip (0.6.9):",
+                   b.f.writes, b.f.writes / (double)days, b.f.erases[0], b.f.erases[1],
+                   out ? "gone on day " : "kept");
+            if (out) {
+                printf("%u\n", out);
+            } else {
+                printf(" (%u of %u)\n", b.f.writes, LIFE_RESERVE);
+            }
+            if (rx) {
+                CHECK(!out && !sb_exh && b.f.writes <= 2u * days && emax < 10000u / 4u,
+                      "standby %u a day: the gate keeps the reserve, the allowance and the pages (%u writes, %u "
+                      "erases, %u cycles exhausted)", cyc[i], b.f.writes, emax, sb_exh);
+            } else {
+                CHECK(out != 0u && out < days, "standby %u a day as 0.6.9: a write per cycle, the reserve gone "
+                      "(day %u)", cyc[i], out);
+            }
+        }
+    }
+    /* (review round 8, R5) wakes worth a write each (1 Wh: stored 30 s into their dark, notice or not): the reserve
+     * goes, then the evenings' 3 h keep earning (about one write a day: the DIAG flag between) */
+    out = standby_run(&b, days, 50u, 2u, 1u);
+    printf("  %3u wakes of 1 Wh a day + an evening, with the gate: %7u writes, the reserve gone on day %u, then %u "
+           "writes in the last year (the evenings), %u of %u cycles ended exhausted\n", 50u, b.f.writes, out, sb_last,
+           sb_exh, days * 51u);
+    CHECK(out != 0u && sb_last >= 300u && sb_exh != 0u, "wakes of 1 Wh: the reserve used up, the evenings recharge "
+          "(%u writes in the last year)", sb_last);
+    /* (R5) a forced exhaustion: short runs (10 min, a dip each) write nothing and their time is lost (the limit,
+     * documented); one run of 3 h earns a write again */
+    {
+        life_rec_t r;
+        uint32_t found, w0;
+        memset(&b, 0, sizeof b);
+        lf_init(&b.f, 0xFFFFu);
+        bd_boot(&b, 0, 1u, 0);
+        b.e.lt.writes = LIFE_RESERVE - 1u;
+        b.e.lt.on_s = 0;
+        bd_ms(&b, 700000u);
+        bd_dip(&b);                                      /* the reserve's last write */
+        r = bd_stored(&b, &found);
+        w0 = b.f.writes;
+        for (k = 0; k < 1000u; k++) {
+            bd_boot(&b, 0, 1u, 0);
+            b.e.ev_save = 1u;
+            b.lit = 1;
+            bd_fast(&b, 60u, 10u, 30000u);               /* 10 min at 30 W: worth a dip write if allowed */
+            CHECK(bd_exhausted(&b), "exhausted: run %u flagged", k);
+            bd_dip(&b);
+        }
+        printf("  forced exhaustion: 1000 runs of 10 min: %u writes, stored %u h of %u h powered; ", b.f.writes - w0,
+               bd_stored(&b, &found).on_s / 3600u, r.on_s / 3600u + 1000u / 6u);
+        CHECK(b.f.writes == w0, "exhausted: short runs write nothing (%u)", b.f.writes - w0);
+        bd_boot(&b, 0, 1u, 0);
+        b.e.ev_save = 1u;
+        b.lit = 1;
+        bd_fast(&b, 1080u, 10u, 30000u);                 /* one evening: 3 h */
+        b.lit = 0;
+        bd_fast(&b, 60u, 10u, 1000u);
+        bd_dip(&b);
+        printf("then one run of 3 h: %u write(s), the flag %s\n", b.f.writes - w0, bd_exhausted(&b) ? "set" : "clear");
+        CHECK(b.f.writes > w0, "exhausted: one 3 h run writes again (%u)", b.f.writes - w0);
+    }
 }
 
 /* ---- every flash step cut in turn ---- */
@@ -1037,6 +1188,1002 @@ static void test_energy_ch(void)
           "status: energy per channel");
 }
 
+/* ---- (0.6.10, protocol 0.2.6) the hub's counters: energy_sync (the review's tests 1-6 and 8-11), format 3 ---- */
+#define LS_UID 0x1234u
+#define LS_ALL (ULTRA_LS_F_POWERED | ULTRA_LS_F_LIT | ULTRA_LS_F_UPS | ULTRA_LS_F_TRIPS | ULTRA_LS_F_DIPS | \
+                ULTRA_LS_F_WH)
+
+typedef struct { uint32_t on, lit, ups, ovl, sht, dips, wh; } ls_led_t;   /* a hub's ledger, wire units */
+
+/* the LIFE_SYNC POLL arguments for board e: UID16, LIFETIME bytes 0..15, the Wh, RECORDS low 8 bits */
+static void ls_args(uint8_t a[23], const energy_t *e, const ls_led_t *l)
+{
+    memset(a, 0, 23);
+    ultra_put16(a + ULTRA_LS_UID16, LS_UID);
+    ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_POWERED, l->on);
+    ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_LIT, l->lit);
+    ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_POWER_UPS, l->ups);
+    ultra_put16(a + ULTRA_LS_LIFETIME + ULTRA_LT_OVERLOAD_TRIPS, l->ovl);
+    ultra_put16(a + ULTRA_LS_LIFETIME + ULTRA_LT_SHORT_TRIPS, l->sht);
+    ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_DIPS, l->dips);
+    ultra_put32(a + ULTRA_LS_TOTAL_WH, l->wh);
+    a[ULTRA_LS_RECORDS] = (uint8_t)e->lt.writes;
+}
+
+/* the board's counters now, as a ledger */
+static ls_led_t ls_live(const energy_t *e)
+{
+    ls_led_t l;
+    l.on = (e->lt.on_s / 360u) & 0xFFFFFFu;
+    l.lit = (e->lt.lit_s / 360u) & 0xFFFFFFu;
+    l.ups = e->lt.ups & 0xFFFFFFu;
+    l.ovl = e->lt.trips[0];
+    l.sht = e->lt.trips[1];
+    l.dips = e->lt.dips & 0xFFFFFFu;
+    l.wh = energy_total_wh(e);
+    return l;
+}
+
+static uint32_t ls_sync(energy_t *e, const ls_led_t *l)
+{
+    uint8_t a[23];
+    ls_args(a, e, l);
+    return energy_sync(e, a, LS_UID);
+}
+
+/* a board as booted from a record: 1000 h powered, 400 h lit, 500 power-ups, trips 3 / 1, 20 dips, 9000 Wh */
+static void ls_board(energy_t *e)
+{
+    memset(e, 0, sizeof *e);
+    e->lt.on_s = 3600000u;
+    e->lt.lit_s = 1440000u;
+    e->lt.ups = 500u;
+    e->lt.trips[0] = 3u;
+    e->lt.trips[1] = 1u;
+    e->lt.dips = 20u;
+    e->lt.wh = 9000u;
+    e->lt.writes = 7u;
+    e->lt.magic = LIFE_MAGIC;
+    energy_init(e, 1u, 0, 0, 0);                         /* (the power-up: 501) */
+}
+
+/* one counter's step at its limit and one past it, on a fresh board each (dp: the powered step with it) */
+static void ls_cap(const char *name, uint32_t dp, uint32_t f, uint32_t step)
+{
+    static energy_t e;
+    ls_led_t l;
+    uint32_t k, r[2];
+    for (k = 0; k < 2u; k++) {
+        ls_board(&e);
+        l = ls_live(&e);
+        l.on += dp;
+        if (f == ULTRA_LS_F_LIT) l.lit += step + k;
+        if (f == ULTRA_LS_F_UPS) l.ups += step + k;
+        if (f == ULTRA_LS_F_TRIPS) l.ovl += step + k;
+        if (f == ULTRA_LS_F_DIPS) l.dips += step + k;
+        if (f == ULTRA_LS_F_WH) l.wh += step + k;
+        if (f == ULTRA_LS_F_POWERED) l.on += step + k;
+        r[k] = ls_sync(&e, &l);
+    }
+    CHECK((r[0] >> 8) == ULTRA_LS_R_APPLIED && (r[0] & f) && (r[1] >> 8) == ULTRA_LS_R_CAPPED &&
+          !(r[1] & f), "cap %s: %u applied (%04X), %u + 1 ignored (%04X)", name, step, r[0], step, r[1]);
+}
+
+static uint32_t ls_diff(uint32_t a, uint32_t b)
+{
+    return a > b ? a - b : b - a;
+}
+
+/* (round 9 phase B, Fable's items 1-2) a hub's ledger as the spec has it (the protocol wiki, Return channel, "0x0E
+ * LIFE_SYNC"): its own accounting in finer units than the wire's: each session's seconds (STATUS uptime / the port's
+ * on time), its lit seconds (its own count of the outputs on: here the board's own, the simulation's lit count being
+ * per step), ENERGY 0's mWh; POWER_UPS = the ledger + the power-on just performed; trips and dips from the reads (max).
+ * The board's reads raise the time / energy totals only by a lead beyond one wire unit (ls_raise, R9-R1). Sent: the
+ * whole wire units. (Before: an echo of the reads, max per field: it restores nothing of a session the board didn't
+ * store.) */
+typedef struct { uint64_t s, lit, mwh; uint32_t ups, ovl, sht, dips, lit0, naive, seen; } ls_fine_t;
+
+
+static uint64_t ls_max64(uint64_t a, uint64_t b)
+{
+    return a > b ? a : b;
+}
+
+/* (round 9 phase B re-check, R9-R1) a board read raises a fine total only by its lead beyond one wire unit: within
+ * one, it is the board's own rounding (a merge keeps the board's remainder below a unit, so after an honest hub's merge
+ * the board may lead by up to one); further, time the hub didn't see (first contact, a missed session, another hub).
+ * naive: the rules before, a plain max (the board's rounding taken back as elapsed time at every write: it drifts),
+ * and for the power-ups the max before this power-on's + 1 (the board's read already holds it: counted twice) */
+static uint64_t ls_raise(const ls_fine_t *h, uint64_t f, uint32_t w, uint32_t unit)
+{
+    uint64_t fl = f / unit;
+    if (h->naive) {
+        return ls_max64(f, (uint64_t)w * unit);
+    }
+    return w > fl + 1u ? f + (w - fl - 1u) * (uint64_t)unit : f;
+}
+
+/* after the board's power-up: the ledger + this power-on, raised to the board's reads; the LIFE_SYNC; returns its
+ * result */
+static uint32_t ls_fine_sync(ls_fine_t *h, energy_t *e)
+{
+    ls_led_t r = ls_live(e), l;
+    uint32_t m;
+    if (!h->seen) {                                      /* first contact: the board's values (its power-ups: this */
+        h->seen = 1u;                                    /* power-on in them already) */
+        h->s = (uint64_t)r.on * 360u;
+        h->lit = (uint64_t)r.lit * 360u;
+        h->mwh = (uint64_t)r.wh * 1000u;
+        h->ups = r.ups;
+    } else {
+        if (h->naive) {
+            h->ups = (h->ups > r.ups ? h->ups : r.ups) + 1u;   /* (the old order: the max, then + 1) */
+        } else {
+            h->ups++;                                    /* this power-on first, then the max */
+            h->ups = h->ups > r.ups ? h->ups : r.ups;
+        }
+        h->s = ls_raise(h, h->s, r.on, 360u);
+        h->lit = ls_raise(h, h->lit, r.lit, 360u);
+        h->mwh = ls_raise(h, h->mwh, r.wh, 1000u);
+    }
+    h->ovl = h->ovl > r.ovl ? h->ovl : r.ovl;
+    h->sht = h->sht > r.sht ? h->sht : r.sht;
+    h->dips = h->dips > r.dips ? h->dips : r.dips;
+    l.on = (uint32_t)(h->s / 360u);
+    l.lit = (uint32_t)(h->lit / 360u);
+    l.ups = h->ups;
+    l.ovl = h->ovl;
+    l.sht = h->sht;
+    l.dips = h->dips;
+    l.wh = (uint32_t)(h->mwh / 1000u);
+    m = ls_sync(e, &l);
+    h->lit0 = e->lt.lit_s;                               /* (the session's lit seconds from here) */
+    return m;
+}
+
+/* before the notice: the session added */
+static void ls_fine_end(ls_fine_t *h, const ebd_t *b)
+{
+    ls_led_t r = ls_live(&b->e);
+    h->s += b->s;
+    h->lit += b->e.lt.lit_s - h->lit0;
+    h->mwh += b->e.boot_mwh;
+    h->ovl = h->ovl > r.ovl ? h->ovl : r.ovl;
+    h->sht = h->sht > r.sht ? h->sht : r.sht;
+    h->dips = h->dips > r.dips ? h->dips : r.dips;
+}
+
+/* the board against the ledger's truth: the largest error, wire units */
+static uint32_t ls_fine_err(const ls_fine_t *h, const energy_t *e)
+{
+    ls_led_t r = ls_live(e);
+    uint32_t k = ls_diff((uint32_t)(h->s / 360u), r.on);
+    k = ls_diff((uint32_t)(h->lit / 360u), r.lit) > k ? ls_diff((uint32_t)(h->lit / 360u), r.lit) : k;
+    k = ls_diff(h->ups, r.ups) > k ? ls_diff(h->ups, r.ups) : k;
+    k = ls_diff((uint32_t)(h->mwh / 1000u), r.wh) > k ? ls_diff((uint32_t)(h->mwh / 1000u), r.wh) : k;
+    k = ls_diff(h->dips, r.dips) > k ? ls_diff(h->dips, r.dips) : k;
+    return k;
+}
+
+/* a day: n standby cycles (a wake, lit 1 min at 30 W, dark 3 min, the planned cut) and an evening (lit 3 h, dark 10
+ * min, the cut); hub 0 none, 1 a hub with its own ledger (the spec's), synced at every boot, 2 a hostile hub (every
+ * counter at its full step ahead). Returns the writes; *err: the honest hub's board against the truth (every
+ * session's own, summed apart from the ledger) at the end (wire units, the largest; + 1000 when the ledger itself
+ * isn't the truth) */
+static uint32_t sync_run(ebd_t *b, uint32_t days, uint32_t n, uint32_t hub, uint32_t *err, uint32_t *own_ok)
+{
+    static ls_fine_t h, t;                               /* the hub; the truth (an oracle of its own) */
+    ls_led_t l;
+    uint32_t d, k, ok = 1;
+    uint64_t own = 0;
+    memset(b, 0, sizeof *b);
+    memset(&h, 0, sizeof h);
+    memset(&t, 0, sizeof t);
+    lf_init(&b->f, 0xFFFFu);
+    for (d = 0; d <= days; d++) {
+        for (k = 0; k <= (d < days ? n : 20u); k++) {     /* (the last day: 20 cycles, no evening, nothing stored) */
+            bd_boot(b, 0, 1u, 0);
+            b->e.ev_save = 1u;
+            t.ups++;
+            if (hub == 1u) {
+                (void)ls_fine_sync(&h, &b->e);
+            } else if (hub == 2u) {
+                l = ls_live(&b->e);
+                l.on += LIFE_SYNC_MAX_H10;
+                l.lit += LIFE_SYNC_MAX_H10 + 1u;
+                l.ups += 259264u;
+                l.ovl = 0xFFFFu;
+                l.dips += 259264u;
+                l.wh += 721000u;
+                (void)ls_sync(&b->e, &l);
+            }
+            t.lit0 = b->e.lt.lit_s;
+            b->lit = 1;
+            if (k == n && d < days) {
+                bd_fast(b, 1080u, 10u, 30000u);          /* the evening */
+                b->lit = 0;
+                bd_fast(b, 60u, 10u, 1000u);
+                own += 11400u;
+            } else {
+                bd_fast(b, 6u, 10u, 30000u);
+                b->lit = 0;
+                bd_fast(b, 18u, 10u, 1000u);
+                own += 240u;
+            }
+            ls_fine_end(&h, b);                          /* the hub before the notice */
+            t.s += b->s;                                 /* (the truth: every session's own) */
+            t.lit += b->e.lt.lit_s - t.lit0;
+            t.mwh += b->e.boot_mwh;
+            bd_planned(b);
+        }
+    }
+    bd_boot(b, 0, 1u, 0);                                /* a last power-up: synced, then compared */
+    t.ups++;
+    if (hub == 1u) {
+        (void)ls_fine_sync(&h, &b->e);
+    }
+    *err = hub == 1u ? ls_fine_err(&t, &b->e) + (h.s != t.s || h.lit != t.lit || h.mwh != t.mwh) * 1000u : 0u;
+                                                         /* (the board against the truth; the ledger exactly it) */
+    *own_ok = ok && b->e.lt.on_s - LIFE_MERGED(&b->e.lt) * 360u <= own + 360u;   /* (the allowance's: the board's) */
+    return b->f.writes;
+}
+
+/* 10 years: 100 wakes a day worth a write each (lit 2 min at 30 W: 1 Wh) and an evening, the reserve used up from the
+ * start (the allowance decides). hub 0 none, 1 honest (its own ledger, the spec's), 2 hostile (every step at its
+ * most), 3 hostile: each merge lands just below a 3 h boundary (what an earn-credit count would have taken as the
+ * board's own). Returns the writes; *own: the powered time, s; *late: merges that raised the powered time in the
+ * last year */
+static uint32_t sync_run10(ebd_t *b, uint32_t hub, uint32_t *own, uint32_t *late)
+{
+    static ls_fine_t h;
+    ls_led_t l;
+    uint32_t d, k, m, on, bnd, w0;
+    memset(b, 0, sizeof *b);
+    memset(&h, 0, sizeof h);
+    lf_init(&b->f, 0xFFFFu);
+    *own = *late = 0;
+    bd_boot(b, 0, 1u, 0);
+    b->e.lt.writes = LIFE_RESERVE - 1u;
+    (void)lf_store(&b->f, &b->e, LH);                    /* (the reserve used up: stored) */
+    w0 = b->f.writes;
+    for (d = 0; d < 3652u; d++) {
+        for (k = 0; k <= 100u; k++) {
+            bd_boot(b, 0, 1u, 0);
+            b->e.ev_save = 1u;
+            m = 0;
+            l = ls_live(&b->e);
+            if (hub == 1u) {
+                m = ls_fine_sync(&h, &b->e);
+            } else if (hub == 2u) {
+                l.on += LIFE_SYNC_MAX_H10;
+                l.ups += 259264u;
+                l.wh += 721000u;
+                m = ls_sync(&b->e, &l);
+            } else if (hub == 3u) {
+                on = b->e.lt.on_s;
+                bnd = (on + 721u + LIFE_EARN_S - 1u) / LIFE_EARN_S * LIFE_EARN_S;
+                l.on += (bnd - 1u - on) / 360u;          /* (on_s then 1-360 s below the boundary) */
+                m = ls_sync(&b->e, &l);
+            }
+            *late += d >= 3652u - 365u && (m & ULTRA_LS_F_POWERED);
+            b->lit = 1;
+            if (k == 100u) {
+                bd_fast(b, 1080u, 10u, 30000u);          /* the evening */
+                b->lit = 0;
+                bd_fast(b, 60u, 10u, 1000u);
+                *own += 11400u;
+            } else {
+                bd_fast(b, 12u, 10u, 30000u);
+                b->lit = 0;
+                bd_fast(b, 18u, 10u, 1000u);
+                *own += 300u;
+            }
+            ls_fine_end(&h, b);
+            bd_planned(b);
+        }
+    }
+    return b->f.writes - w0;
+}
+
+/* (round 9 phase B, Fable's probe kept as a test) a standby-only receiver: 30 days of 100 wakes (4 min, lit 1 min at
+ * 30 W), none worth a write of its own, so it never stores anything. hub 0: an echo of the reads (the max per field,
+ * the counts as read: the negative control); 1: the spec's own ledger. Returns the board's error against the truth
+ * (wire units, the largest of powered, lit, power-ups, Wh); *got: the powered time the board shows, s */
+static uint32_t sync_standby(ebd_t *b, uint32_t hub, uint32_t *got_on, uint32_t *got_wh, uint32_t *got_ups,
+                             ls_fine_t *truth)
+{
+    static ls_fine_t h;
+    ls_led_t led, l;
+    uint32_t d, k;
+    memset(b, 0, sizeof *b);
+    memset(&h, 0, sizeof h);
+    memset(&led, 0, sizeof led);
+    memset(truth, 0, sizeof *truth);
+    lf_init(&b->f, 0xFFFFu);
+    for (d = 0; d <= 30u; d++) {
+        for (k = 0; k < (d < 30u ? 100u : 1u); k++) {    /* (the last: a power-up, synced, compared) */
+            bd_boot(b, 0, 1u, 0);
+            b->e.ev_save = 1u;
+            truth->ups++;
+            if (hub == 1u) {
+                (void)ls_fine_sync(&h, &b->e);
+            } else {
+                (void)ls_sync(&b->e, &led);
+            }
+            if (d == 30u) {
+                break;
+            }
+            b->lit = 1;
+            bd_fast(b, 6u, 10u, 30000u);                 /* 1 min at 30 W */
+            b->lit = 0;
+            bd_fast(b, 18u, 10u, 1000u);                 /* 3 min dark at 1 W */
+            truth->s += b->s;
+            truth->mwh += b->e.boot_mwh;
+            truth->lit += 6u;                            /* (the board's lit count: one a 10 s step) */
+            ls_fine_end(&h, b);
+            l = ls_live(&b->e);                          /* the echo: the reads before the notice, max per field */
+            led.on = l.on > led.on ? l.on : led.on;
+            led.lit = l.lit > led.lit ? l.lit : led.lit;
+            led.ups = l.ups > led.ups ? l.ups : led.ups;
+            led.dips = l.dips > led.dips ? l.dips : led.dips;
+            led.wh = l.wh > led.wh ? l.wh : led.wh;
+            bd_planned(b);
+        }
+    }
+    *got_on = b->e.lt.on_s;
+    *got_wh = energy_total_wh(&b->e);
+    *got_ups = b->e.lt.ups;
+    return ls_fine_err(truth, &b->e);
+}
+
+/* (round 9 phase B, Fable's power-up probe kept as a test) 30 days of 50 standby cycles and an evening a day: the
+ * spec's ledger (POWER_UPS = the ledger + the power-on just performed) restores every power-up the board didn't store;
+ * an echo of the reads restores none (the negative control). Returns the board's power-ups; *n: the true count */
+static uint32_t sync_ups(ebd_t *b, uint32_t hub, uint32_t *n)
+{
+    static ls_fine_t h;
+    ls_led_t led, l;
+    uint32_t d, k;
+    memset(b, 0, sizeof *b);
+    memset(&h, 0, sizeof h);
+    memset(&led, 0, sizeof led);
+    lf_init(&b->f, 0xFFFFu);
+    *n = 0;
+    for (d = 0; d <= 30u; d++) {
+        for (k = 0; k <= 50u; k++) {
+            bd_boot(b, 0, 1u, 0);
+            b->e.ev_save = 1u;
+            ++*n;
+            if (hub == 1u) {
+                (void)ls_fine_sync(&h, &b->e);
+            } else {
+                (void)ls_sync(&b->e, &led);
+            }
+            if (d == 30u) {
+                return b->e.lt.ups;                      /* (the last power-up: synced, compared) */
+            }
+            b->lit = 1;
+            if (k == 50u) {
+                bd_fast(b, 1080u, 10u, 30000u);          /* the evening: 3 h at 30 W, then dark: its write */
+                b->lit = 0;
+                bd_fast(b, 60u, 10u, 1000u);
+            } else {
+                bd_fast(b, 6u, 10u, 30000u);             /* a wake: 1 min lit, 3 min dark */
+                b->lit = 0;
+                bd_fast(b, 18u, 10u, 1000u);
+            }
+            ls_fine_end(&h, b);
+            l = ls_live(&b->e);
+            led.on = l.on > led.on ? l.on : led.on;
+            led.lit = l.lit > led.lit ? l.lit : led.lit;
+            led.ups = l.ups > led.ups ? l.ups : led.ups;
+            led.dips = l.dips > led.dips ? l.dips : led.dips;
+            led.wh = l.wh > led.wh ? l.wh : led.wh;
+            bd_planned(b);
+        }
+    }
+    return b->e.lt.ups;
+}
+
+static void test_energy_ledger(void)
+{
+    static ebd_t b;
+    ls_fine_t t;
+    uint32_t on[2], wh[2], ups[2], err[2], hub, n[2];
+    printf("energy: LIFE_SYNC's ledger (the spec: the hub's own accounting, POWER_UPS + this power-on)\n");
+    for (hub = 0; hub < 2u; hub++) {
+        err[hub] = sync_standby(&b, hub, &on[hub], &wh[hub], &ups[hub], &t);
+        printf("  a standby-only receiver, 30 days x 100 wakes, hub %s: powered %u h of %u, energy %u Wh of %u, %u "
+               "power-ups of %u, lit %u x 0.1 h of %u (the largest error %u units)\n", hub ? "with its own ledger" :
+               "echoing its reads ", on[hub] / 3600u, (uint32_t)(t.s / 3600u), wh[hub], (uint32_t)(t.mwh / 1000u),
+               ups[hub], t.ups, ls_live(&b.e).lit, (uint32_t)(t.lit / 360u), err[hub]);
+    }
+    CHECK(err[1] <= 1u, "LIFE_SYNC, the spec's ledger: a standby-only receiver within one unit of the truth (%u)",
+          err[1]);
+    CHECK(on[0] < (uint32_t)(t.s / 2u) && wh[0] < (uint32_t)(t.mwh / 2000u) && ups[0] <= 2u,
+          "LIFE_SYNC, an echo of the reads (the negative control): restores nothing (powered %u s, %u Wh, %u power-ups)",
+          on[0], wh[0], ups[0]);
+    for (hub = 0; hub < 2u; hub++) {
+        ups[hub] = sync_ups(&b, hub, &n[hub]);
+    }
+    printf("  30 days of 50 standby cycles and an evening: %u of %u power-ups with an echo hub, %u of %u with the "
+           "spec's ledger\n", ups[0], n[0], ups[1], n[1]);
+    CHECK(ups[1] + 1u >= n[1] && ups[1] <= n[1] && ups[0] <= 31u + 2u, "LIFE_SYNC power-ups: the spec's ledger "
+          "restores them (%u of %u), an echo doesn't (%u)", ups[1], n[1], ups[0]);
+}
+
+/* (round 9 phase B re-check, R9-R1: GPT's scenario) a year of 50 standby wakes and an evening a day (3 h lit at
+ * 30 W, then dark for 600-959 s: the cut's residue varies), an honest hub syncing at every power-up. The truth: every
+ * session's own seconds, lit seconds, mWh and power-ups, summed apart from the ledger. naive: the hub's reconcile a
+ * plain max (the rule before R9-R1); miss: a day whose evening the hub doesn't see (it was off: no sync, no
+ * accounting; the board stores that session itself): the truth counts it, the hub takes in the board's lead beyond
+ * one unit the next morning, and loses what cancels against its own merged wakes the board never stored; *u: the
+ * session it didn't see. */
+static void sync_round(ebd_t *b, uint32_t naive, uint32_t miss, ls_fine_t *h, ls_fine_t *t, ls_fine_t *u)
+{
+    uint32_t d, k, seen;
+    memset(b, 0, sizeof *b);
+    memset(h, 0, sizeof *h);
+    memset(t, 0, sizeof *t);
+    memset(u, 0, sizeof *u);
+    h->naive = naive;
+    lf_init(&b->f, 0xFFFFu);
+    for (d = 0; d <= 365u; d++) {
+        for (k = 0; k <= 50u; k++) {
+            bd_boot(b, 0, 1u, 0);
+            b->e.ev_save = 1u;
+            t->ups++;
+            seen = !(miss && d == miss && k == 50u);
+            if (seen) {
+                (void)ls_fine_sync(h, &b->e);
+            }
+            if (d == 365u) {
+                return;                                  /* (the last power-up: synced, compared) */
+            }
+            t->lit0 = b->e.lt.lit_s;
+            b->lit = 1;
+            if (k == 50u) {
+                bd_fast(b, 1080u, 10u, 30000u);          /* 3 h at 30 W */
+                b->lit = 0;
+                bd_fast(b, 600u + d * 37u % 360u, 1u, 1000u);   /* dark 600-959 s, then the cut */
+            } else {
+                bd_fast(b, 6u, 10u, 30000u);             /* a wake: 1 min lit, 3 min dark */
+                b->lit = 0;
+                bd_fast(b, 18u, 10u, 1000u);
+            }
+            t->s += b->s;
+            t->lit += b->e.lt.lit_s - t->lit0;
+            t->mwh += b->e.boot_mwh;
+            if (seen) {
+                ls_fine_end(h, b);
+            } else {
+                u->s += b->s;
+                u->lit += b->e.lt.lit_s - t->lit0;
+                u->mwh += b->e.boot_mwh;
+            }
+            bd_planned(b);
+        }
+    }
+}
+
+static void test_energy_ledger_round(void)
+{
+    static ebd_t b;
+    ls_fine_t h, t, u;
+    uint32_t k;
+    int64_t ds[3], dl[3], dm[3];
+    uint32_t err[3];
+    printf("energy: LIFE_SYNC's ledger against the truth (R9-R1): a year of 50 wakes and an evening a day\n");
+    for (k = 0; k < 3u; k++) {                           /* 0 the rule; 1 the plain max (before); 2 the rule, a day missed */
+        sync_round(&b, k == 1u, k == 2u ? 100u : 0u, &h, &t, &u);
+        ds[k] = (int64_t)h.s - (int64_t)t.s;
+        dl[k] = (int64_t)h.lit - (int64_t)t.lit;
+        dm[k] = (int64_t)h.mwh - (int64_t)t.mwh;
+        err[k] = ls_fine_err(&t, &b.e);
+        printf("  %s: the ledger off by %lld s, lit %lld s, %lld mWh, power-ups %d; the receiver within %u units of the "
+               "truth (%u writes)\n", k == 0u ? "the rule (a lead beyond one unit)   " : k == 1u ?
+               "the plain max (before: the control)" : "the rule, an evening not seen      ", (long long)ds[k],
+               (long long)dl[k], (long long)dm[k], (int)(h.ups - t.ups), err[k], b.f.writes);
+    }
+    CHECK(ds[0] == 0 && dl[0] == 0 && dm[0] == 0 && err[0] <= 1u, "R9-R1: the rule keeps the ledger at the truth (%lld s, "
+          "%lld lit s, %lld mWh) and the receiver within one unit (%u)", (long long)ds[0], (long long)dl[0],
+          (long long)dm[0], err[0]);
+    CHECK(ds[1] >= 360, "R9-R1 control: the plain max takes the receiver's rounding back as time (%lld s)",
+          (long long)ds[1]);
+    CHECK(ds[2] <= 0 && ds[2] >= -(int64_t)(u.s + 360u) && dl[2] <= 0 && dl[2] >= -(int64_t)(u.lit + 360u) &&
+          dm[2] <= 0 && dm[2] >= -(int64_t)(u.mwh + 1000u), "R9-R1: an evening not seen (%llu s, %llu lit s, %llu mWh): "
+          "never more than the truth, at most that session lost, no drift after (%lld s, %lld lit s, %lld mWh)",
+          (unsigned long long)u.s, (unsigned long long)u.lit, (unsigned long long)u.mwh, (long long)ds[2],
+          (long long)dl[2], (long long)dm[2]);
+}
+
+/* (round 9 phase B, the ESPHome session's measurement) a used board: its stored record has remainders below a unit
+ * (powered 1000 x 0.1 h + 300 s, lit 400 x 0.1 h + 350 s; 9000 Wh, 500 power-ups), then a month of 100 standby wakes a
+ * day, every 10th worth a write of its own (lit 2 min at 30 W: 1 Wh; the others 1 min), an honest hub syncing at
+ * every power-up from first contact on. The truth: the record's values and every session, apart from the ledger.
+ * naive: the rules before (a plain max at every power-up, the power-ups' max before the + 1). */
+static void sync_used(ebd_t *b, uint32_t naive, ls_fine_t *h, ls_fine_t *t)
+{
+    uint32_t d, k;
+    memset(b, 0, sizeof *b);
+    memset(h, 0, sizeof *h);
+    memset(t, 0, sizeof *t);
+    h->naive = naive;
+    lf_init(&b->f, 0xFFFFu);
+    bd_boot(b, 0, 1u, 0);
+    b->e.lt.on_s = 1000u * 360u + 300u;
+    b->e.lt.lit_s = 400u * 360u + 350u;
+    b->e.base_wh = b->e.saved_wh = 9000u;               /* (energy_pack stores the total: the record's 9000 Wh) */
+    b->e.lt.ups = 500u;
+    b->e.lt.writes = 7u;
+    (void)lf_store(&b->f, &b->e, LH);                    /* (the used record, stored) */
+    t->s = 1000u * 360u + 300u;
+    t->lit = 400u * 360u + 350u;
+    t->mwh = 9000u * 1000u;
+    t->ups = 500u;
+    for (d = 0; d <= 30u; d++) {
+        for (k = 0; k < 100u; k++) {
+            bd_boot(b, 0, 1u, 0);
+            b->e.ev_save = 1u;
+            t->ups++;
+            (void)ls_fine_sync(h, &b->e);
+            if (d == 30u) {
+                return;                                  /* (the last power-up: synced, compared) */
+            }
+            t->lit0 = b->e.lt.lit_s;
+            b->lit = 1;
+            bd_fast(b, k % 10u == 9u ? 12u : 6u, 10u, 30000u);   /* lit 2 min (1 Wh: a write) or 1 min at 30 W */
+            b->lit = 0;
+            bd_fast(b, 18u, 10u, 1000u);                 /* dark 3 min */
+            t->s += b->s;
+            t->lit += b->e.lt.lit_s - t->lit0;
+            t->mwh += b->e.boot_mwh;
+            ls_fine_end(h, b);
+            bd_planned(b);
+        }
+    }
+}
+
+static void test_energy_ledger_used(void)
+{
+    static ebd_t b;
+    ls_fine_t h, t;
+    uint32_t k, w[2], err[2];
+    int64_t ds[2], dl[2], dm[2], du[2];
+    printf("energy: LIFE_SYNC's ledger on a used board (stored remainders 300 s / 350 s, every 10th wake stored)\n");
+    for (k = 0; k < 2u; k++) {
+        sync_used(&b, k, &h, &t);
+        ds[k] = (int64_t)h.s - (int64_t)t.s;
+        dl[k] = (int64_t)h.lit - (int64_t)t.lit;
+        dm[k] = (int64_t)h.mwh - (int64_t)t.mwh;
+        du[k] = (int64_t)h.ups - (int64_t)t.ups;
+        err[k] = ls_fine_err(&t, &b.e);
+        w[k] = b.f.writes;
+        printf("  %s: the ledger off by %lld s, lit %lld s, %lld mWh, power-ups %lld; the receiver within %u units of "
+               "the truth (%u writes)\n", k ? "the old rules (plain max, max before + 1)" :
+               "the rules (lead beyond one unit, + 1 first)", (long long)ds[k], (long long)dl[k], (long long)dm[k],
+               (long long)du[k], err[k], w[k]);
+    }
+    CHECK(ds[0] <= 0 && ds[0] > -360 && dl[0] <= 0 && dl[0] > -360 && dm[0] <= 0 && dm[0] > -1000 && du[0] == 0 &&
+          err[0] <= 1u, "the ledger on a used board: never above the truth, below it by the stored remainders only "
+          "(%lld s, %lld lit s, %lld mWh, power-ups %lld; the receiver %u units)", (long long)ds[0], (long long)dl[0],
+          (long long)dm[0], (long long)du[0], err[0]);
+    CHECK(dl[1] >= 360 && du[1] > 0, "the old rules on a used board (the control): over the truth (lit %lld s, "
+          "power-ups %lld; powered %lld s)", (long long)dl[1], (long long)du[1], (long long)ds[1]);
+}
+
+/* (round 9 phase B) a hub's first-contact energy, TOTAL_WH x 1000 + BOOT_MWH mod 1000 (the ESPHome ledger's): the
+ * board's own count, never above the truth. TOTAL_WH = the record's whole Wh + merged Wh + floor(BOOT_MWH / 1000)
+ * (energy_total_wh), and the record keeps whole Wh only (a write drops the session's part below a Wh), so the sum is
+ * (stored + merged) x 1000 + BOOT_MWH. */
+static void test_energy_contact_wh(void)
+{
+    static ebd_t b;
+    uint8_t pg[24];
+    uint64_t truth, f;
+    ls_led_t l;
+    printf("energy: a hub's first-contact energy (TOTAL_WH x 1000 + BOOT_MWH mod 1000): the board's count, bounded\n");
+    memset(&b, 0, sizeof b);
+    lf_init(&b.f, 0xFFFFu);
+    bd_boot(&b, 0, 1u, 0);
+    b.e.base_wh = b.e.saved_wh = 9000u;                  /* the record: 9000 Wh (the truth: 9000.123 Wh, the record */
+    (void)lf_store(&b.f, &b.e, LH);                      /* dropped the 123 mWh) */
+    truth = 9000123u;
+    bd_boot(&b, 0, 1u, 0);
+    l = ls_live(&b.e);
+    l.wh += 50u;                                         /* a hub's merge: +50 Wh of its own (true) count */
+    (void)ls_sync(&b.e, &l);
+    truth += 50000u;
+    b.e.boot_mwh += 12345u;                              /* this session: 12.345 Wh */
+    truth += 12345u;
+    energy_second(&b.e, 1000u, 1u, 0, 0, EN_TEMP_NA);
+    energy_page(&b.e, 1u, 0, pg);
+    f = (uint64_t)ultra_get32(pg + ULTRA_EN_TOTAL_WH) * 1000u + ultra_get32(pg + ULTRA_EN_BOOT_MWH) % 1000u;
+    CHECK(f == 9062345u && f <= truth, "first-contact energy: %llu mWh = (stored + merged) x 1000 + BOOT_MWH, <= the "
+          "truth %llu", (unsigned long long)f, (unsigned long long)truth);
+    (void)lf_store(&b.f, &b.e, LH);                      /* a write (energy_pack): whole Wh only */
+    CHECK(b.e.lt.wh == 9062u, "the record keeps whole Wh only (%u)", b.e.lt.wh);
+    bd_boot(&b, 0, 1u, 0);
+    energy_page(&b.e, 0, 0, pg);
+    f = (uint64_t)ultra_get32(pg + ULTRA_EN_TOTAL_WH) * 1000u + ultra_get32(pg + ULTRA_EN_BOOT_MWH) % 1000u;
+    CHECK(f == 9062000u && f <= truth, "first contact after the write: %llu mWh (the record's whole Wh), <= the truth "
+          "%llu", (unsigned long long)f, (unsigned long long)truth);
+    printf("  %llu mWh at first contact during the session, %llu after a write and a power-up; the truth %llu\n",
+           9062345ull, (unsigned long long)f, (unsigned long long)truth);
+}
+
+static void test_energy_sync(void)
+{
+    static energy_t e;
+    static ebd_t b;
+    ls_led_t l;
+    life_rec_t r;
+    uint8_t a[23];
+    uint32_t m, k, found, w[3], err, ok;
+    printf("energy: the hub's counters (LIFE_SYNC): the merge, its steps, the guards, once a boot, the allowance\n");
+    /* 1. merged; holds through energy_second; the energy total jumps; counts as stored (no write due) */
+    ls_board(&e);
+    l = ls_live(&e);
+    l.on += 20u; l.lit += 10u; l.ups += 30u; l.ovl += 2u; l.dips += 2u; l.wh += 50u;
+    m = ls_sync(&e, &l);
+    CHECK(m == (LS_ALL | ULTRA_LS_R_APPLIED << 8) && e.lt.on_s == 3607200u && e.lt.lit_s == 1443600u &&
+          e.lt.ups == 531u && e.lt.trips[0] == 5u && e.lt.trips[1] == 1u && e.lt.dips == 22u &&
+          energy_total_wh(&e) == 9050u && e.lt.merged == 20u, "the hub ahead: every counter raised (%04X)", m);
+    for (k = 1; k <= 3u; k++) {
+        energy_second(&e, k * 1000u, k, 0, 0, 0);
+    }
+    CHECK(e.lt.on_s == 3607203u && energy_total_wh(&e) == 9050u && e.lt.on_s - e.saved_on_s == 3u &&
+          energy_total_wh(&e) == e.saved_wh && !e.due && !(e.dip_ok & 2u), "held through energy_second (%u s, %u Wh), "
+          "counted as stored: nothing due", e.lt.on_s, energy_total_wh(&e));
+    /* 2. nothing lowered; a no-op doesn't use up the boot's merge */
+    for (k = 0; k < 7u; k++) {
+        ls_board(&e);
+        l = ls_live(&e);
+        if (k == 0u) l.on--;
+        if (k == 1u) l.lit--;
+        if (k == 2u) l.ups--;
+        if (k == 3u) l.ovl--;
+        if (k == 4u) l.sht--;
+        if (k == 5u) l.dips--;
+        if (k == 6u) l.wh--;
+        m = ls_sync(&e, &l);
+        CHECK(m == ULTRA_LS_R_NOOP << 8 && e.lt.on_s == 3600000u && e.lt.ups == 501u && e.lt.trips[1] == 1u &&
+              energy_total_wh(&e) == 9000u && !e.synced, "field %u behind: nothing lowered, a no-op (%04X)", k, m);
+    }
+    /* 3. every step at its limit and one past it */
+    ls_cap("powered", 0, ULTRA_LS_F_POWERED, LIFE_SYNC_MAX_H10);
+    ls_cap("lit (powered +10)", 10u, ULTRA_LS_F_LIT, 11u);
+    ls_cap("power-ups", 0, ULTRA_LS_F_UPS, LIFE_SYNC_EV_MIN);
+    ls_cap("power-ups (powered +30 d)", LIFE_SYNC_MAX_H10, ULTRA_LS_F_UPS, 259264u);
+    ls_cap("trips", 0, ULTRA_LS_F_TRIPS, LIFE_SYNC_EV_MIN);
+    ls_cap("dips (powered +1 h)", 10u, ULTRA_LS_F_DIPS, 424u);
+    ls_cap("energy", 0, ULTRA_LS_F_WH, 1000u);
+    ls_cap("energy (powered +30 d)", LIFE_SYNC_MAX_H10, ULTRA_LS_F_WH, 721000u);
+    ls_board(&e);                                        /* `merged` near its end */
+    e.lt.merged_hi = 0xFFu;
+    e.lt.merged = 0xFFFFu - 5u;
+    l = ls_live(&e);
+    l.on += 6u;
+    m = ls_sync(&e, &l);
+    CHECK(m == ULTRA_LS_R_CAPPED << 8 && LIFE_MERGED(&e.lt) == 0xFFFFFAu, "merged powered time saturating (24 bits): "
+          "ignored (%04X)", m);
+    /* 4. another board's UID16, another RECORDS: nothing */
+    ls_board(&e);
+    l = ls_live(&e);
+    l.ups += 5u;
+    ls_args(a, &e, &l);
+    m = energy_sync(&e, a, LS_UID ^ 1u);
+    k = energy_sync(&e, (a[ULTRA_LS_RECORDS]++, a), LS_UID);
+    CHECK(m == ULTRA_LS_R_UID << 8 && k == ULTRA_LS_R_RECORDS << 8 && e.lt.ups == 501u && !e.synced,
+          "UID16 / RECORDS not the board's: nothing merged (%u, %u)", m, k);
+    /* 5. once a boot */
+    m = ls_sync(&e, &l);
+    l.ups += 5u;
+    k = ls_sync(&e, &l);
+    CHECK(m == (ULTRA_LS_F_UPS | ULTRA_LS_R_APPLIED << 8) && k == ULTRA_LS_R_ONCE << 8 && e.lt.ups == 506u,
+          "one merge a boot (%04X, then %u)", m, k);
+    /* 6. the allowance counts the board's own time only, across a reboot too */
+    memset(&b, 0, sizeof b);
+    lf_init(&b.f, 0xFFFFu);
+    bd_boot(&b, 0, 1u, 0);
+    b.e.lt.writes = LIFE_RESERVE - 1u;
+    bd_ms(&b, 700000u);
+    bd_dip(&b);                                          /* the reserve's last write: exhausted */
+    bd_boot(&b, 0, 1u, 0);
+    l = ls_live(&b.e);
+    l.on += LIFE_SYNC_MAX_H10;
+    m = ls_sync(&b.e, &l);
+    bd_fast(&b, 2u, 1u, 0);
+    w[0] = b.e.held;
+    (void)lf_store(&b.f, &b.e, LH);                      /* (stored all the same: as by a write) */
+    bd_boot(&b, 0, 1u, 0);
+    bd_fast(&b, 2u, 1u, 0);
+    CHECK((m >> 8) == ULTRA_LS_R_APPLIED && w[0] && b.e.held && b.e.lt.merged == LIFE_SYNC_MAX_H10 &&
+          b.e.lt.on_s - b.e.lt.merged * 360u < 710u, "30 days merged: still exhausted, after a reboot too (merged %u, "
+          "own %u s)", b.e.lt.merged, b.e.lt.on_s - b.e.lt.merged * 360u);
+    /* 8. merged, then the board's own write: the record holds the merged values */
+    memset(&b, 0, sizeof b);
+    lf_init(&b.f, 0xFFFFu);
+    bd_boot(&b, 0, 1u, 0);
+    l = ls_live(&b.e);
+    l.ups += 40u; l.wh += 300u;
+    (void)ls_sync(&b.e, &l);
+    bd_ms(&b, 700000u);
+    bd_dip(&b);
+    r = bd_stored(&b, &found);
+    CHECK(found && r.ups == 41u && r.wh == 300u && r.magic == LIFE_MAGIC, "merged, then an own write: stored with "
+          "it (%u ups, %u Wh)", r.ups, r.wh);
+    /* 9. a dip's write, then a merge, then the power goes: the record from before the merge */
+    l = ls_live(&b.e);
+    bd_boot(&b, 0, 1u, 0);
+    bd_ms(&b, 700000u);
+    bd_dip(&b);
+    l = ls_live(&b.e);
+    l.ups += 9u;
+    (void)ls_sync(&b.e, &l);
+    bd_boot(&b, 0, 1u, 0);
+    CHECK(b.e.lt.ups == 43u, "merged after the last write, then cut: the record before it (%u ups)", b.e.lt.ups);
+    /* 10. the limits: saturated trips, the 24-bit counters' wrap, the board ahead */
+    ls_board(&e);
+    e.lt.trips[0] = 0xFFFFu;
+    e.lt.trips[1] = 0xFFF0u;
+    e.lt.ups = 0x01FFFFF0u;
+    e.lt.dips = 0x00FFFFFFu;
+    l = ls_live(&e);
+    l.ovl = 0xFFFFu; l.sht = 0xFFFFu; l.ups = 0x000010u; l.dips = 0x000004u;
+    m = ls_sync(&e, &l);
+    CHECK(m == ((ULTRA_LS_F_UPS | ULTRA_LS_F_TRIPS | ULTRA_LS_F_DIPS) | ULTRA_LS_R_APPLIED << 8) &&
+          e.lt.trips[0] == 0xFFFFu && e.lt.trips[1] == 0xFFFFu && e.lt.ups == 0x02000010u && e.lt.dips == 0x01000004u,
+          "saturated trips stay, a counter across its 24-bit wrap (%04X)", m);
+    ls_board(&e);
+    e.lt.ups = 0x00900001u;                              /* the board ahead by 2^23 + 1, and by 1 */
+    l = ls_live(&e);
+    l.ups = 0x00100000u;
+    m = ls_sync(&e, &l);
+    l.ups = 0x00900000u;
+    k = ls_sync(&e, &l);
+    CHECK(!(m & 0xFFu) && k == ULTRA_LS_R_NOOP << 8 && e.lt.ups == 0x00900001u,
+          "the board ahead (by 2^23 + 1, by 1): not merged (%04X, %04X)", m, k);
+    /* 11. 2 years of 100 standby cycles a day: the same writes with or without a hub, honest (the spec's own ledger:
+     * the board within one unit of the truth) or hostile */
+    w[0] = sync_run(&b, 730u, 100u, 0, &err, &ok);
+    w[1] = sync_run(&b, 730u, 100u, 1u, &err, &ok);
+    k = err;
+    m = ok;
+    w[2] = sync_run(&b, 730u, 100u, 2u, &err, &ok);
+    printf("  2 years, 100 cycles a day: %u writes without a hub, %u with one (odometer off by %u at most), %u with a "
+           "hostile one (its time not the allowance's: %u)\n", w[0], w[1], k, w[2], ok);
+    CHECK(w[1] <= w[0] + 1u && w[0] <= w[1] + 1u && k <= 1u && m, "an honest hub: the same writes (%u / %u), the "
+          "odometer within 1 unit (%u)", w[0], w[1], k);
+    CHECK(w[2] <= w[0] + 1u && ok, "a hostile hub: no more writes (%u / %u), the allowance on the board's own time",
+          w[2], w[0]);
+    /* 10 years, the allowance deciding: the writes follow the board's own powered time, whatever the hub */
+    for (k = 0; k < 4u; k++) {
+        uint32_t own, late, n = sync_run10(&b, k, &own, &late);
+        printf("  10 years, 100 wakes of 1 Wh a day, the reserve used up, %s: %u writes (own time earns %u), %u "
+               "powered merges in year 10, merged %u x 0.1 h\n", k == 0u ? "no hub" : k == 1u ? "an honest hub" :
+               k == 2u ? "a hostile hub" : "a hub landing at the boundaries", n, own / LIFE_EARN_S, late,
+               LIFE_MERGED(&b.e.lt));
+        CHECK(n <= own / LIFE_EARN_S + 1u && (k != 1u || late >= 300u), "10 years, hub %u: the writes within the own "
+              "time's earn (%u / %u)%s", k, n, own / LIFE_EARN_S, k == 1u ? ", powered merges still applied" : "");
+    }
+}
+
+/* (0.6.10) a record whose CRC would read erased: one more lit second, still one count (the allowance's) */
+static void test_energy_erased_crc(void)
+{
+    static energy_t e;
+    uint32_t k, w, c;
+    printf("energy: a record whose CRC would read erased: one count a write\n");
+    memset(&e, 0, sizeof e);
+    e.lt.magic = LIFE_MAGIC;
+    e.lt.writes = 41u;
+    for (k = 0; k < 2000000u; k++) {                     /* (find a lit time that gives an erased-looking CRC) */
+        e.lt.lit_s = k;
+        e.lt.writes = 42u;
+        if (crc16_erased(crc16_ccitt((const uint8_t *)&e.lt, LIFE_REC_BYTES - 2u))) {
+            break;
+        }
+    }
+    CHECK(k < 2000000u, "an erased-looking CRC found (lit %u)", k);
+    e.lt.writes = 41u;
+    w = e.lt.writes;
+    energy_pack(&e);
+    c = crc16_ccitt((const uint8_t *)&e.lt, LIFE_REC_BYTES - 2u);
+    CHECK(e.lt.writes == w + 1u && e.lt.lit_s == k + 1u && c == e.lt.crc && !crc16_erased(c), "packed: writes %u -> %u "
+          "(one), lit %u -> %u, CRC %04X", w, e.lt.writes, k, e.lt.lit_s, c);
+}
+
+/* format 3 (0.6.10): a format 2 record read and carried over; a 0.6.9 reader never takes a format 3 record */
+static int ls_f2_valid(const uint8_t *s)                 /* (0.6.9's life_valid) */
+{
+    uint32_t c = (uint32_t)s[46] | (uint32_t)s[47] << 8;
+    return s[45] == 0x4Du && !crc16_erased(c) && c == crc16_ccitt(s, 46u);
+}
+
+static void test_energy_format3(void)
+{
+    static ebd_t b;
+    life_rec_t r;
+    uint8_t *p;
+    uint32_t found, k, n = 0;
+    printf("energy: the record's format 3: format 2 carried over, never taken by a 0.6.9 reader\n");
+    memset(&b, 0, sizeof b);
+    lf_init(&b.f, 0xFFFFu);
+    p = b.f.pg[0].b;                                     /* a 0.6.9 record: the version word at 20..23 */
+    memset(p, 0, LIFE_REC_BYTES);
+    p[4] = 0x10; p[5] = 0x0E;                            /* on_s 3600 */
+    p[12] = 7;                                           /* 7 power-ups */
+    p[20] = 0xFF; p[21] = 0x09; p[22] = 0x06; p[23] = 0x00;   /* 0x000609FF */
+    p[24] = 12;                                          /* writes */
+    p[45] = 0x4Du;
+    k = crc16_ccitt(p, 46u);
+    p[46] = (uint8_t)k;
+    p[47] = (uint8_t)(k >> 8);
+    bd_boot(&b, 0, 0x000609FFu, 0);
+    CHECK(b.e.lt.ver == energy_ver(0x000609FFu) && LIFE_MERGED(&b.e.lt) == 0u && b.e.lt.ups == 8u && !b.e.lt.updates &&
+          b.e.lt.on_s == 3600u, "a format 2 record carried over, the same version: no update (%04X)", b.e.lt.ver);
+    bd_ms(&b, 700000u);
+    bd_dip(&b);
+    r = bd_stored(&b, &found);
+    CHECK(found && r.magic == LIFE_MAGIC && r.writes == 13u && b.f.pg[0].b[LIFE_REC_BYTES + 45u] == LIFE_MAGIC &&
+          !b.f.bad, "the next write: format 3, after it on the page (%u)", r.writes);
+    bd_boot(&b, 0, 0x00060AFFu, 0);
+    CHECK(b.e.lt.updates == 1u && b.e.lt.ver == energy_ver(0x00060AFFu), "a new version: an update");
+    for (k = 0; k < 12u; k++) {                          /* both pages full of format 3 records */
+        bd_ms(&b, 700000u);
+        bd_dip(&b);
+        bd_boot(&b, 0, 0x00060AFFu, 0);
+    }
+    for (k = 0; k < 2u * LIFE_RECS; k++) {
+        n += ls_f2_valid(b.f.pg[k / LIFE_RECS].b + (k % LIFE_RECS) * LIFE_REC_BYTES);
+    }
+    CHECK(n == 0u && b.f.pg[0].b[45] == LIFE_MAGIC && b.f.pg[1].b[45] == LIFE_MAGIC, "a 0.6.9 reader takes none of "
+          "them (%u)", n);
+}
+
+/* ---- (round 9 phase B, R9-B1) the counters' ceiling: a merge never wraps them; the own counting stops there ---- */
+#define LS_MAX 0xFFFFFFFFu
+
+/* a board as booted from a record with these seconds / Wh and merged (0.1 h) */
+static void ls_board_at(energy_t *e, uint32_t on_s, uint32_t lit_s, uint32_t wh, uint32_t merged)
+{
+    memset(e, 0, sizeof *e);
+    e->lt.on_s = on_s;
+    e->lt.lit_s = lit_s;
+    e->lt.ups = 500u;
+    e->lt.wh = wh;
+    e->lt.writes = 7u;
+    e->lt.merged_hi = (uint8_t)(merged >> 16);
+    e->lt.merged = (uint16_t)merged;
+    e->lt.magic = LIFE_MAGIC;
+    energy_init(e, 1u, 0, 0, 0);
+}
+
+/* the review's reachable sequence: boots of 600 s own time, each with a hostile +30 d powered merge and a planned
+ * write; the wire's powered time never lower, the merges CAPPED at the ceiling, the own time exact until on_s stops
+ * there, never more than the board's own after it. Returns the boot of the first CAPPED merge (0: none) */
+static uint32_t ls_reach(uint32_t boots, uint32_t *bad, uint32_t *sat)
+{
+    static energy_t e;
+    ls_led_t l;
+    uint32_t b, m, before, own, first = 0;
+    *bad = *sat = 0;
+    memset(&e, 0, sizeof e);
+    energy_init(&e, 0u, 0, 0, 0);
+    for (b = 1; b <= boots; b++) {
+        if (b > 1u) {
+            energy_init(&e, 1u, 0, 0, 0);
+        }
+        e.ev_save = 1u;
+        l = ls_live(&e);
+        l.on += LIFE_SYNC_MAX_H10;
+        before = e.lt.on_s;
+        m = ls_sync(&e, &l);
+        if ((m >> 8) == ULTRA_LS_R_CAPPED && !first) {
+            first = b;
+        }
+        *bad += e.lt.on_s < before || ((m >> 8) == ULTRA_LS_R_CAPPED && (m & ULTRA_LS_F_POWERED)) ||
+                (first && (m >> 8) != ULTRA_LS_R_CAPPED);
+        before = e.lt.on_s;
+        energy_second(&e, 600000u, 600u, 0, 0, EN_TEMP_NA);
+        *bad += e.lt.on_s < before;
+        if (energy_due(&e, 600000u, 0, ENERGY_PLANNED | ENERGY_DUE_DIP) == ENERGY_DUE_DIP) {
+            energy_pack(&e);                             /* (the planned cut's write: the 600 s to store) */
+            energy_saved(&e, 600u);
+        } else {
+            *bad += e.lt.on_s != LS_MAX;                 /* (only at the ceiling: less than a write's worth new) */
+        }
+        own = e.lt.on_s - LIFE_MERGED(&e.lt) * 360u;
+        if (e.lt.on_s == LS_MAX) {
+            *sat += 1u;
+            *bad += own > b * 600u;                      /* (stopped: never more than its own) */
+        } else {
+            *bad += own != b * 600u;                     /* (exact) */
+        }
+    }
+    return first;
+}
+
+static void test_energy_ceiling(void)
+{
+    static energy_t e;
+    ls_led_t l;
+    uint32_t m, k, s, bad, sat, on, lit, wh;
+    printf("energy: the counters' ceiling (2^32 - 1): a merge never wraps them, the own counting stops there\n");
+    /* 1. powered: a merge past on_s's room is CAPPED, the field unapplied (0.6.10 c4719e5: APPLIED, on_s 104) */
+    ls_board_at(&e, 0xFFFFFF00u, 1000u, 9000u, 11930464u);
+    l = ls_live(&e);
+    l.on += 1u;
+    m = ls_sync(&e, &l);
+    CHECK((m >> 8) == ULTRA_LS_R_CAPPED && !(m & ULTRA_LS_F_POWERED) && e.lt.on_s == 0xFFFFFF00u &&
+          LIFE_MERGED(&e.lt) == 11930464u, "ceiling: powered +1 at 0xFFFFFF00 s: %04X, on_s %u, merged %u", m,
+          e.lt.on_s, LIFE_MERGED(&e.lt));
+    /* 2. exactly the room: applied; one more: CAPPED */
+    for (k = 0; k < 2u; k++) {
+        ls_board_at(&e, LS_MAX - 5u * 360u - 7u, 1000u, 9000u, 0);
+        l = ls_live(&e);
+        l.on += 5u + k;
+        m = ls_sync(&e, &l);
+        CHECK(k ? (m >> 8) == ULTRA_LS_R_CAPPED && e.lt.on_s == LS_MAX - 5u * 360u - 7u :
+                  (m >> 8) == ULTRA_LS_R_APPLIED && (m & ULTRA_LS_F_POWERED) && e.lt.on_s == LS_MAX - 7u,
+              "ceiling: powered +%u with room for 5: %04X, on_s %u", 5u + k, m, e.lt.on_s);
+    }
+    /* 3. lit: the same at lit_s's ceiling */
+    ls_board_at(&e, 3600000u, 0xFFFFFF00u, 9000u, 0);
+    l = ls_live(&e);
+    l.lit += 1u;
+    m = ls_sync(&e, &l);
+    CHECK((m >> 8) == ULTRA_LS_R_CAPPED && !(m & ULTRA_LS_F_LIT) && e.lt.lit_s == 0xFFFFFF00u,
+          "ceiling: lit +1 at 0xFFFFFF00 s: %04X, lit_s %u", m, e.lt.lit_s);
+    /* 4. the energy: plain, a lower hub value never (c4719e5: 5 came out 21 ahead of 0xFFFFFFF0: APPLIED, 5 Wh) */
+    ls_board_at(&e, 3600000u, 1000u, 0xFFFFFFF0u, 0);
+    l = ls_live(&e);
+    l.wh = 5u;
+    m = ls_sync(&e, &l);
+    CHECK(m == (uint32_t)ULTRA_LS_R_NOOP << 8 && energy_total_wh(&e) == 0xFFFFFFF0u,
+          "ceiling: Wh 5 against 0xFFFFFFF0: %04X, total %u", m, energy_total_wh(&e));
+    l.on += 20u;
+    l.wh = LS_MAX;
+    m = ls_sync(&e, &l);
+    CHECK((m >> 8) == ULTRA_LS_R_APPLIED && (m & ULTRA_LS_F_WH) && energy_total_wh(&e) == LS_MAX,
+          "ceiling: Wh up to 2^32 - 1: %04X, total %u", m, energy_total_wh(&e));
+    /* 5. the board's own counting at the ceiling: on_s, lit_s and the energy stay there, never wrap */
+    ls_board_at(&e, LS_MAX - 3u, LS_MAX - 3u, LS_MAX - 1u, 0);
+    on = e.lt.on_s, lit = e.lt.lit_s, wh = energy_total_wh(&e), bad = 0;
+    for (s = 1; s <= 10u; s++) {
+        e.lit_ms = s * 1000u;
+        e.boot_mwh += 1500u;                             /* (1.5 Wh a second) */
+        energy_second(&e, s * 1000u, s, 0, 0, EN_TEMP_NA);
+        bad += e.lt.on_s < on || e.lt.lit_s < lit || energy_total_wh(&e) < wh;
+        on = e.lt.on_s, lit = e.lt.lit_s, wh = energy_total_wh(&e);
+    }
+    CHECK(!bad && on == LS_MAX && lit == LS_MAX && wh == LS_MAX && e.lt.on_s - LIFE_MERGED(&e.lt) * 360u == LS_MAX,
+          "ceiling: own counting 10 s from 3 s below: %u lower, on_s %u, lit_s %u, Wh %u", bad, on, lit, wh);
+    energy_pack(&e);
+    CHECK(e.lt.on_s == LS_MAX && e.lt.lit_s >= LS_MAX - 1u && e.lt.wh == LS_MAX,
+          "ceiling: the record packed at it: on_s %u, lit_s %u, Wh %u", e.lt.on_s, e.lt.lit_s, e.lt.wh);
+    /* 6. a merge to 100 s below the ceiling, then the next ticks */
+    ls_board_at(&e, LS_MAX - LIFE_SYNC_MAX_H10 * 360u - 100u, 1000u, 9000u, 0);
+    l = ls_live(&e);
+    l.on += LIFE_SYNC_MAX_H10;
+    m = ls_sync(&e, &l);
+    on = e.lt.on_s, bad = 0;
+    for (s = 1; s <= 200u; s++) {
+        energy_second(&e, s * 1000u, s, 0, 0, EN_TEMP_NA);
+        bad += e.lt.on_s < on;
+        on = e.lt.on_s;
+    }
+    CHECK((m & ULTRA_LS_F_POWERED) && !bad && on == LS_MAX && LIFE_MERGED(&e.lt) == LIFE_SYNC_MAX_H10,
+          "ceiling: merged to 100 s below, 200 ticks: %04X, %u lower, on_s %u", m, bad, on);
+    /* 7. the review's reachable sequence: 6000 boots (the merges stop at ~1657, on_s at the ceiling ~4200 later) */
+    k = ls_reach(6000u, &bad, &sat);
+    CHECK(!bad && k > 1600u && k < 1700u && sat > 0u, "ceiling: 6000 boots of +30 d merges: %u wrong, first CAPPED at "
+          "boot %u, %u boots at the ceiling", bad, k, sat);
+    printf("  reachable sequence: merges CAPPED from boot %u, on_s at its ceiling for the last %u boots, never lower;"
+           " the own time exact before\n", k, sat);
+}
+
 static void test_energy(void)
 {
     test_energy_ch();
@@ -1045,4 +2192,13 @@ static void test_energy(void)
     test_energy_powercut_all();
     test_energy_boots();
     test_energy_wear();
+    test_energy_standby();
+    test_energy_sync();
+    test_energy_ledger();
+    test_energy_ledger_round();
+    test_energy_ledger_used();
+    test_energy_contact_wh();
+    test_energy_format3();
+    test_energy_erased_crc();
+    test_energy_ceiling();
 }

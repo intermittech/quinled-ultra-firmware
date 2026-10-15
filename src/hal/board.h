@@ -51,7 +51,7 @@
  * PA0 / TP8 stays the spare analog input. */
 #define BOARD_TESTJIG    1
 
-/* the return channel (core/rc.h; ULTRA_PROTOCOL.md "Return channel"): the Diff-Power ultra receiver only.
+/* the return channel (core/rc.h; the protocol wiki, Return channel): the Diff-Power Ultra-Analog receiver only.
  * Its RS-485 transceivers: input (towards the host) DE on PB14, output (towards the next receiver) DE on PA10, both
  * ~RE on GND; USART3 TX on PB10 into the relay node. The dig2analog-ultra never reports back: none of it is built. */
 #if BOARD == BOARD_DP_RX

@@ -29,6 +29,7 @@ static void sc_r6candle(void)
     img[0] = 0x53; img[1] = 0x46; img[2] = 0x58; img[3] = 0x31;   /* ULTRA_FX_MAGIC, little endian */
     img[4] = 0x01u;
     boot(0, 0, 0);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     CHECK(fx_mask == 0x01u && fx_ch == 0x01u, "r6candle: the candle loaded (mask %X, channels %X)", fx_mask, fx_ch);
     run_ms(3000);
     win_begin(&ref);

@@ -261,6 +261,14 @@ uint32_t uart_rx_pos(void)
 /* (0.6.9, Quindor) the receiver's release console sends no full status (main.c STREAM_STATUS): the checks that read
  * the status (`uptime=`, `supply_dip`, `lifetime=`) check the same values in RAM there */
 #define SOAK_NO_STATUS (!CONSOLE_FULL && BOARD == BOARD_DP_RX)
+/* (0.6.10) the receiver's power-up: dark until a valid frame or GRACE_MS, then the power-on scene and effects faded in
+ * (SCENE_IN_MS; main.c signal_loss_check): a scenario about the power-on scene / effects or their take-over waits that
+ * out after its boot (the dig2analog-ultra shows them at once: nothing to wait) */
+#if BOARD == BOARD_DP_RX
+#define GRACE_WAIT() run_ms(GRACE_MS + SCENE_IN_MS + 10u)
+#else
+#define GRACE_WAIT() ((void)0)
+#endif
 static uint32_t tx_q, tx_acc, tx_blocks;
 uint32_t uart_room(void) { return tx_q >= SOAK_TX_CAP ? 0u : SOAK_TX_CAP - tx_q; }
 static FILE *con_dump;                                   /* SOAK_CON_DUMP=<file>: every byte the console wrote */
@@ -1127,6 +1135,7 @@ static void sc_fx(void)
     img[4] = 0x03u;
     img[10] = img[11] = 0;
     boot(0, 0, 0);                                       /* a real boot: tick 0, the wrap 2.49 days in */
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     CHECK(fx_mask == 0x03u && fx_ch == 0x18u, "fx: both effects loaded (mask %X, channels %X)", fx_mask, fx_ch);
     run_ms(5000);
     win_begin(&ref);
@@ -1180,8 +1189,11 @@ static void sc_cfg(void)
           "2 s debounce never ran out but where a frame was lost), %u frames lost (only in the day's flash operations: "
           "%u, the lifetime record's daily write %u and an erase ahead in a dark moment)", w1, lost, sim_stalls - s0,
           W_LIFE() - l0);
+    k = settings_dirty;                                  /* (0.6.10: a lost frame's flip may have left the last value
+                                                            the stored one: then nothing is due) */
     run_sparse(10u, 0);
-    CHECK(W_SETTINGS() - w0 == w1 + 1u, "cfg: ... the last value written 2 s after the end (%u)", W_SETTINGS() - w0);
+    CHECK(W_SETTINGS() - w0 == w1 + k && !settings_dirty && (uint32_t)(sext.opts & STORE_OPT_SOFT_START) == last,
+          "cfg: ... the last value written 2 s after the end (%u, %u due)", W_SETTINGS() - w0, k);
     w0 = W_SETTINGS();
     for (k = 0; k < 3u * 1440u; k++) {                   /* every minute for 3 days */
         last = (k & 1u) ^ 1u;
@@ -1306,6 +1318,7 @@ static void sc_spec(void)
     scene_log_pack(&sc, 1, &rec);
     memcpy(fl + (SCENE_LOG_ADDR - FL_BASE), &rec, sizeof rec);
     boot(1000u, 20000u, 5000000ull);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     run_ms(600);                                         /* (the soft start's 0.4 s) */
     CHECK(out_now[0] == 30000u && srun.hold == 0x01u, "spec: the stored scene shows from power-up (%u)", out_now[0]);
     host_on = 1;                                         /* an Ultra hub sending NOP frames: no light command */
@@ -1496,7 +1509,8 @@ static void sc_tripreset(void)
 
 /* d2 (0.6.5): the event log (main.c ev_add, core/cli.h evlog_t), fed by what counts the events already: a short (the
  * fast trip: pwrev's short trip with its current; its retry comes back with the limiter's feedback factor still low
- * from the short's sample, so pwrev counts a limit event too, as in 0.6.4), a supply dip (24 V -> 19 V for 40 ms:
+ * from the short's sample: 0.6.9 counted a limit event for it too, 0.6.10 not, part of the trip), a supply dip
+ * (24 V -> 19 V for 40 ms:
  * vdip's count, with the board current then), a calibration (`set ical 50`: its end). `status` ends with them, newest
  * first, with their ages: one line per counted event. */
 static const char *d2_line(const char *s, uint32_t n)    /* the n-th line (1..) of s */
@@ -1539,8 +1553,9 @@ static void sc_d2(void)
     now = up_s;
     ev = strstr(con_out, "event 1=");
     printf("%s", ev ? ev : "(no event lines)\n");
-    CHECK(pw.short_trips == 1u && vdip.count == 1u && pw.limit_events == 1u, "d2: pwrev / vdip counted one trip, one "
-          "dip, one limit event (%u %u %u)", (uint32_t)pw.short_trips, (uint32_t)vdip.count, (uint32_t)pw.limit_events);
+    CHECK(pw.short_trips == 1u && vdip.count == 1u && pw.limit_events == 0u, "d2: pwrev / vdip counted one trip, one "
+          "dip, no limit event (0.6.10: the retry's is the trip's) (%u %u %u)", (uint32_t)pw.short_trips,
+          (uint32_t)vdip.count, (uint32_t)pw.limit_events);
     snprintf(want, sizeof want, "event 1=0:00:%02u ago, calibration, %u.%02u A\r\n", now - t_cal,
              (clim.connected_ma + 5u) / 1000u, (clim.connected_ma + 5u) / 10u % 100u);
     CHECK(ev && strncmp(d2_line(ev, 1), want, strlen(want)) == 0, "d2: 1 the calibration, the connected load (%s)",
@@ -1548,13 +1563,11 @@ static void sc_d2(void)
     snprintf(want, sizeof want, "event 2=0:00:%02u ago, supply dip, ", now - t_dip);
     CHECK((l = d2_line(ev, 2)) && strncmp(l, want, strlen(want)) == 0, "d2: 2 the dip, with the current (%s)",
           want);
-    CHECK((l = d2_line(ev, 3)) && strncmp(l, "event 3=", 8) == 0 && strstr(l, " ago, limit, ") == l + 15,
-          "d2: 3 the retry's limit event");
-    snprintf(want, sizeof want, "event 4=0:00:%02u ago, short, %u.%02u A\r\n", now - t_short,
+    snprintf(want, sizeof want, "event 3=0:00:%02u ago, short, %u.%02u A\r\n", now - t_short,
              ((uint32_t)pw.trip_ma + 5u) / 1000u, ((uint32_t)pw.trip_ma + 5u) / 10u % 100u);   /* (as cf rounds) */
-    CHECK((l = d2_line(ev, 4)) && strncmp(l, want, strlen(want)) == 0, "d2: 4 the short with its current (%s)",
-          want);
-    CHECK((l = d2_line(ev, 5)) && *l == 0, "d2: nothing else, the end of status");
+    CHECK((l = d2_line(ev, 3)) && strncmp(l, want, strlen(want)) == 0, "d2: 3 the short with its current, no limit "
+          "event for its retry (%s)", want);
+    CHECK((l = d2_line(ev, 4)) && *l == 0, "d2: nothing else, the end of status");
 }
 
 /* longws (r4): WS frames longer than the 16-bit edge counter (TIM4) counts. A WS2805 line of 1,700 chips (68,000 bits,
@@ -1731,10 +1744,13 @@ static void sc_minmax(void)
 #include "test_r6_sys.c"                         /* (fable-sys: r6e2e ...) */
 #include "test_r6_console.c"                     /* (0.6.7: the release console: conout ...; the samples) */
 #include "test_r7.c"                             /* (0.6.9, review round 7: r7ack ...) */
+#include "test_r8.c"                             /* (0.6.10: r8evtype) */
+#include "test_r9b.c"                            /* (0.6.10, review round 9 phase B: r9b) */
 static int r6_scenarios(const char *sc, int argc, char **argv)
 {
     return r6f_scenario(sc) || r6g_scenario(sc) || r6c_scenario(sc) || r6s_scenario(sc, argc, argv) ||
-           r6o_scenario(sc) || r7_scenario(sc, argc, argv);
+           r6o_scenario(sc) || r7_scenario(sc, argc, argv) || r8_scenario(sc, argc, argv) ||
+           r9b_scenario(sc, argc, argv);
 }
 
 #if MON_EXTRA

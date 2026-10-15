@@ -105,6 +105,7 @@ static void sc_r6takeover(void)
            ultra_preamble_frames(r6_boards));
     r6_store_scene(0x01u, &sc);                          /* CH1 at 30000 */
     boot(1000u, 20000u, 5000000ull);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     run_ms(1500);                                        /* the hub's ESP32 boots (the scene shows meanwhile) */
     CHECK(out_now[0] == 30000u && srun.hold == 0x01u, "r6takeover: the stored scene shows from power-up (%u)",
           out_now[0]);
@@ -161,6 +162,7 @@ static void r6_takeover5_run(const char *name, uint32_t diff)
            " + %u)\n", name, r6_boards, diff);
     r6_store_scene(0x1Fu, &sc);
     boot(1000u, 20000u, 5000000ull);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     run_ms(1500);
     for (k = 0; k < ultra_preamble_frames(r6_boards); k++) {
         r6_hub_frame(0);
@@ -233,6 +235,7 @@ static void sc_r6rejoin5(void)
            "of the refresh cycle)\n", first);
     r6_store_scene(0x1Fu, &sc);
     boot(1000u, 20000u, 5000000ull);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     run_ms(500);
     for (k = first; k < first + 2u * 33u; k++) {         /* two refresh cycles of 33 items */
         uint32_t pos = k % 33u;
@@ -297,6 +300,7 @@ static void sc_r6fxtake(void)
     img[0] = 0x53; img[1] = 0x46; img[2] = 0x58; img[3] = 0x31;   /* ULTRA_FX_MAGIC, little endian */
     img[4] = 0x03u;
     boot(0, 0, 0);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     CHECK(fx_mask == 0x03u && fx_ch == 0x03u, "r6fxtake: both candles loaded (%X, %X)", fx_mask, fx_ch);
     run_ms(1000);
     r6_boards = 1;
@@ -363,6 +367,7 @@ static void sc_r6takeover0(void)
     scene_log_pack(&sc, 1, &rec);
     memcpy(fl + (SCENE_LOG_ADDR - FL_BASE), &rec, sizeof rec);
     boot(1000u, 20000u, 5000000ull);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     run_ms(1000);
     for (k = 0; k < ultra_preamble_frames(1); k++) {
         r6_hub_frame(0);

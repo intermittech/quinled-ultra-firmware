@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* The return channel of the QuinLED Diff-Power ultra receiver (BOARD_RETURN; ULTRA_PROTOCOL.md "Reserved: return
- * channel", with the protocol 0.2.4 proposal): POLL slots of RW frames, the response window's
+/* The return channel of the QuinLED Diff-Power Ultra-Analog receiver (BOARD_RETURN; ultra_protocol.h and the
+ * protocol wiki, Return channel): POLL slots of RW frames, the response window's
  * schedule from the frame end, the answer framing.
  *
  * A receiver chain on one Diff-Power port: every receiver has an input RS-485 transceiver (towards the host, DE on
@@ -46,7 +46,7 @@
                                           byte and misframe it. A 0xFF has one falling edge, its start bit: a hub
                                           UART still inside such a frame ends it there and starts cleanly at SYNC (the
                                           hub discards the bytes before SYNC) */
-/* a POLL slot's fields (slot byte offsets): ULTRA_PROTOCOL.md "Slot type 7, POLL" */
+/* a POLL slot's fields (slot byte offsets): ultra_protocol.h, ULTRA_POLL_* (the protocol wiki, Slot types: POLL) */
 #define RC_P_INDEX       (ULTRA_PAYLOAD + 0u)   /* answer index 0..R-1, or ULTRA_POLL_RELAY_ONLY */
 #define RC_P_SLOTS       (ULTRA_PAYLOAD + 1u)   /* R: response slots in this window, 1..ULTRA_RW_MAX_SLOTS */
 #define RC_P_PAGE        (ULTRA_PAYLOAD + 2u)

@@ -227,6 +227,8 @@ static void sc_r7retry(void)
            "%08X\n", n, n - 1u, ok, gap[0], is.latched, latch_ev, isense_retry_left_ms(&is));
     CHECK(n == 11u && ok && is.latched && latch_ev == 1u && sim_forced && isense_retry_left_ms(&is) == 0xFFFFFFFFu,
           "r7retry: 10 retries 1 s apart, then off and the event (%u trips)", n);
+    CHECK(pw.short_trips == 11u && pw.limit_events == 0u, "r7retry: 11 short trips, no limit event for their retries "
+          "(0.6.10; %u, %u)", (uint32_t)pw.short_trips, (uint32_t)pw.limit_events);
     n = r7_trips(70000u, gap, 0u);
     CHECK(n == 0u && sim_forced && is.latched, "r7retry: off: no retry in 70 s (%u)", n);
     cmd_set(0, 30000, 0, 0);                             /* a new command */
@@ -261,6 +263,8 @@ static void sc_r7retry(void)
         ok &= gap[k] >= 2995u && gap[k] <= 3010u;
     }
     CHECK(n == 3u && ok && is.latched, "r7retry: CONFIG 24's policy: %u retries 3 s apart, then off", n - 1u);
+    CHECK(pw.limit_events == 0u, "r7retry: retries 3 s apart: no limit event either (0.6.10; %u)",
+          (uint32_t)pw.limit_events);
     short_ticks = 0;
 }
 
@@ -467,7 +471,7 @@ static void sc_r7pages(void)
     en.lt.peak_t = 150u;
     en.lt.peak_a = 88u;
     en.lt.updates = 12u;
-    en.lt.writes = 0x01ABCDEFu;
+    en.lt.writes = 0x01ABCDEFu;                          /* (far over the allowance: DIAG 0 shows EXHAUSTED below) */
     pg = rc_ask(ULTRA_PAGE_LIFETIME, 0, 0, &o);
     printf("  LIFETIME %u / %u x 0.1 h, ups %u, trips %u / %u, dips %06X, peaks %u / %u, wd %u, updates %u, records "
            "%06X\n", ultra_get24(q + ULTRA_LT_POWERED), ultra_get24(q + ULTRA_LT_LIT), ultra_get24(q + ULTRA_LT_POWER_UPS),
@@ -482,6 +486,7 @@ static void sc_r7pages(void)
           ultra_get24(q + ULTRA_LT_RECORDS) == 0xABCDEFu, "r7pages: LIFETIME's fields");
 
     /* DIAG 0: the running board */
+    run_ms(1000);                                        /* (EXHAUSTED: energy_second's, once a second) */
     r7_diag0(&o, "after boot");
     printf("  DIAG 0: reset %02X, breadcrumbs %u / %04X / %u s, cpu %u / %u, overruns %u %u %u, z %u, flash %u / %02X / "
            "%u, C10 %02X %02X\n", q[ULTRA_DG_RESET], q[ULTRA_DG_BC_CAUSE], ultra_get16(q + ULTRA_DG_BC_PC),
@@ -498,25 +503,27 @@ static void sc_r7pages(void)
         ok &= ultra_get16(q + ULTRA_DG_OVR_CAPTURES + 2u * k) == (ovr[k] > 0xFFFFu ? 0xFFFFu : ovr[k]);
     }
     CHECK(ok && ultra_get16(q + ULTRA_DG_SUPPLY_Z) == (vdip_z_mohm(&vdip) > 0xFFFFu ? 0xFFFFu : vdip_z_mohm(&vdip)) &&
-          q[ULTRA_DG_FLASH_ERRS] == 0u && q[ULTRA_DG_FLASH_PENDING] == 0u && q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_NONE &&
-          q[ULTRA_DG_C10_LOAD] == 0xFFu && q[ULTRA_DG_C10_PEAK] == 0xFFu, "r7pages: DIAG 0: the overruns, the "
-          "impedance, the flash, nothing pending, C10 not measured");
+          q[ULTRA_DG_FLASH_ERRS] == 0u && q[ULTRA_DG_FLASH_PENDING] == ULTRA_DG_FP_EXHAUSTED &&
+          q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_NONE && q[ULTRA_DG_C10_LOAD] == 0xFFu && q[ULTRA_DG_C10_PEAK] == 0xFFu,
+          "r7pages: DIAG 0: the overruns, the impedance, the flash, nothing pending (the allowance used up), C10 not "
+          "measured");
     cmd_config(ULTRA_CFG_RETRY, 0x0302u);                /* a persisted setting while lit at 50 % */
     run_ms(300);
     r7_diag0(&o, "after CONFIG 24");
-    CHECK(q[ULTRA_DG_FLASH_PENDING] == ULTRA_DG_FP_SETTINGS && q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_DEBOUNCE,
-          "r7pages: DIAG 0: the settings pending, the debounce (%02X %u)", q[ULTRA_DG_FLASH_PENDING],
-          q[ULTRA_DG_SAVE_WAIT]);
+    CHECK(q[ULTRA_DG_FLASH_PENDING] == (ULTRA_DG_FP_SETTINGS | ULTRA_DG_FP_EXHAUSTED) &&
+          q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_DEBOUNCE, "r7pages: DIAG 0: the settings pending, the debounce (%02X "
+          "%u)", q[ULTRA_DG_FLASH_PENDING], q[ULTRA_DG_SAVE_WAIT]);
     run_ms(3000);
     r7_diag0(&o, "3 s later");
-    CHECK(q[ULTRA_DG_FLASH_PENDING] == ULTRA_DG_FP_SETTINGS && q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_DARK &&
-          out_now[0] == 32768u, "r7pages: DIAG 0: lit, the hour's write while bright not earned yet: waiting for dark "
-          "(%02X %u)", q[ULTRA_DG_FLASH_PENDING], q[ULTRA_DG_SAVE_WAIT]);
+    CHECK(q[ULTRA_DG_FLASH_PENDING] == (ULTRA_DG_FP_SETTINGS | ULTRA_DG_FP_EXHAUSTED) &&
+          q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_DARK && out_now[0] == 32768u, "r7pages: DIAG 0: lit, the hour's write "
+          "while bright not earned yet: waiting for dark (%02X %u)", q[ULTRA_DG_FLASH_PENDING], q[ULTRA_DG_SAVE_WAIT]);
     cmd_set(0, 0, 0, 0);                                 /* dark: stored */
     run_ms(2000);
     r7_diag0(&o, "dark");
-    CHECK(q[ULTRA_DG_FLASH_PENDING] == 0u && q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_NONE && !settings_dirty,
-          "r7pages: DIAG 0: dark: stored, nothing pending (%02X %u)", q[ULTRA_DG_FLASH_PENDING], q[ULTRA_DG_SAVE_WAIT]);
+    CHECK(q[ULTRA_DG_FLASH_PENDING] == ULTRA_DG_FP_EXHAUSTED && q[ULTRA_DG_SAVE_WAIT] == ULTRA_DG_SW_NONE &&
+          !settings_dirty, "r7pages: DIAG 0: dark: stored, nothing pending (%02X %u)", q[ULTRA_DG_FLASH_PENDING],
+          q[ULTRA_DG_SAVE_WAIT]);
     cmd_set(0, 32768, 0, 0);
     run_ms(1000);
 

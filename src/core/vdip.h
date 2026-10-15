@@ -10,6 +10,8 @@
  * ~10 ms (R36 / R37 / C29), so a dip shorter than a few ms shows smaller than it was.
  * Kept in RAM (a power cycle clears it): the count since boot, the deepest dip (lowest reading against its reference),
  * and the last VDIP_LOG dips with their start, lowest reading, duration and the board current at the lowest reading.
+ * (0.6.10) A dip that starts while `planned` is set (the receiver's power-off notice) is the planned cut's for its
+ * whole length, whenever the notice ends: in_dip 2, in none of these; one already running when it comes stays a dip.
  * Readings stay ADC pair sums here (vsense_mv() turns them into mV for the console / the page).
  * Console only on the dig2analog-ultra; a Diff-Power ultra receiver reports it (protocol 0.2.3: the SUPPLY page,
  * vdip_page, and the POWER page latch ULTRA_PW_EV_SUPPLY_DIP).
@@ -61,9 +63,12 @@ typedef struct {
     uint16_t run;                  /* ms in a row below ENTER (outside a dip) / above LEAVE (in a dip); before the
                                       reference: the hold-off's readings */
     uint16_t count;                /* dips since boot (wraps) */
-    uint8_t  in_dip;
+    uint8_t  in_dip;               /* 1: a dip now; 2 (0.6.10): a planned cut's (`planned` at its first low reading):
+                                      the same for the flash and a calibration, but no count, no log, no deepest */
     uint8_t  n_log;                /* dips in the log */
     uint8_t  head;                 /* the newest's index */
+    uint8_t  planned;              /* (0.6.10, the receiver's main.c) a power-off notice holds: a dip starting now is
+                                      the planned cut's */
     vdip_ev_t cur;                 /* the dip (or the candidate) in progress */
     vdip_ev_t log[VDIP_LOG];
     vdip_ev_t deep;                /* the deepest (ref_x 0: none yet) */
@@ -76,6 +81,8 @@ typedef struct {
     uint32_t zma;                  /* the board current over the supply's 16 ms average, mA */
     uint16_t zsteps;               /* steps taken (saturates) */
     uint8_t  zok;                  /* windows the last settled one may still pair with a new one (0: none) */
+    uint8_t  cand_planned;         /* (0.6.10) `planned` at the candidate's first low reading: its class when it is
+                                      confirmed (taken again at each candidate's first low reading) */
 } vdip_t;
 
 void vdip_init(vdip_t *d);

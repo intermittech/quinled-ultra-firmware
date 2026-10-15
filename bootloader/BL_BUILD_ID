@@ -1,0 +1,11 @@
+# The bootloader's build id: 8 characters in its info block (0x08000010), one per bootloader code, so that boards
+# with the same id run the same bootloader. The rule: a new id (a date, never used before) when, and only when, the
+# bootloader's code changes (anything that changes bl.bin besides the id); then the md5 below with it.
+# bootloader/build_bl.sh and tools/build_release.sh read the id here (BL_BUILD_ID=... overrides it for a test build).
+# build_release.sh stops when the bootloader it built doesn't match its md5 here: the code changed without a new id.
+# The md5: bl.bin built with xPack GCC 15.2 (tools/toolchain), the upper-records layout (the default), per revision.
+#   20261013  0.5.0 - 0.6.2
+#   20261014  0.6.3 - 0.6.6
+#   20261015  0.6.7 on (review round 6 F1: a flash operation without EOP is an error), 6,604 B
+id 20261015
+md5 rev3 f6bf3181ce4721a72cd06b847baa91ef

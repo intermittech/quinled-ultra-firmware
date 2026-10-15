@@ -31,9 +31,12 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
         }
     }
 
-    /* the board limit: a reduction after ULTRA_PW_HOLD_MS without one starts an event */
+    /* the board limit: a reduction after ULTRA_PW_HOLD_MS without one starts an event; (0.6.10) not within
+     * ULTRA_PW_HOLD_MS after a trip: its retry starts scaled down (the current at the trip lands at the limit), a
+     * reduction that is the trip's, counted already (0.6.9 counted a limit event per retry, its current measured while
+     * the outputs were off) */
     if (in->limiting) {
-        if (!p->limit_on) {
+        if (!p->limit_on && !p->after_trip) {
             p->limit_events++;
             p->limit_age_s = 0;
             p->event_ma = in->i_ma;
@@ -53,6 +56,7 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
 
     /* trips */
     if (in->trip_cause != ULTRA_PW_CAUSE_NONE) {
+        p->after_trip = ULTRA_PW_HOLD_MS;
         if (p->in.trip_cause == ULTRA_PW_CAUSE_NONE) {
             if (in->trip_cause == ULTRA_PW_CAUSE_SHORT) {
                 p->short_trips++;
@@ -68,6 +72,8 @@ void pwrev_update(pwrev_t *p, uint32_t now, const pwrev_in_t *in)
         } else if (now - p->trip_ms <= 2u && in->trip_ma > p->trip_ma) {
             p->trip_ma = in->trip_ma;      /* a short's peak sample can land in the next ms' take */
         }
+    } else if (p->after_trip) {
+        p->after_trip--;                   /* (a count, not a time: no wrap; a late ms only lengthens it) */
     }
     p->latched |= ev;
     p->ev = ev;                            /* (before the copy: it stays the tail call it was) */

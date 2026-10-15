@@ -1,13 +1,13 @@
-# QuinLED dig2analog-ultra-5ch bootloader
+# QuinLED Dig2Analog-Ultra-5ch bootloader
 
 **Status: phase 1 built and host-tested, not run on hardware.** It updates the board's firmware over the data line
 from ESPHome (the `dig2analog_ultra` hub), with no back-channel and no case opening. How to use it: the wiki page
 *Updating over the data line*. Formats (frames, descriptor, status records, hand-over, flash map):
 [`../src/core/ultra_update.h`](../src/core/ultra_update.h), shared with the app and the ESPHome component.
 
-**Board:** QuinLED dig2analog-ultra-5ch rev 0.4, hardware id 1, board revision 3 (`UPD_REV_D2A_R04`, the default of
+**Board:** QuinLED Dig2Analog-Ultra-5ch rev 0.4, hardware id 1, board revision 3 (`UPD_REV_D2A_R04`, the default of
 `build_bl.sh`). Its bootloader accepts only images for that hardware id whose revision mask includes bit 3; images
-for another board or revision are rejected before anything is erased. The Diff-Power ultra receiver (hardware id 2,
+for another board or revision are rejected before anything is erased. The QuinLED Diff-Power Ultra-Analog receiver (hardware id 2,
 no hardware yet) gets its own bootloader build.
 
 ## What it does
@@ -64,7 +64,8 @@ input, and the board's pull-downs keep the gate drivers off.
 | `bl_hw.c/.h` | CH32V203 registers: 144 MHz, SPI sampler, TIM3 → TIM2 gate, flash at HCLK / 2, CRC unit, IWDG, PVD, feedback PWM, UART |
 | `bl_main.c` | reset flow and main loop; `upd_bl_info_t` at 0x08000010 |
 | `bl_start.S`, `bl.ld` | startup (no vector table) and the 8 KB link; RAM after the 32-byte hand-over block |
-| `build_bl.sh` | `OUT=<dir> BL_HW_REV=<n> bash bootloader/build_bl.sh` |
+| `build_bl.sh` | `OUT=<dir> BL_HW_REV=<n> bash bootloader/build_bl.sh` (the build id from `BL_BUILD_ID`) |
+| `BL_BUILD_ID` | the build id in the info block, one per bootloader code (20261015 since 0.6.7's F1), and the md5 a release must build; a new id when, and only when, the code changes |
 | `measure_bl.py` | runs the compiled functions in `tools/rv32emu.py` |
 | `test/` | `build_bl_test.cmd`: `bl_tests.exe` (C) and `sender_tests.exe` (the ESPHome sender, C++) |
 

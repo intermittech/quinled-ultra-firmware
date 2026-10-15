@@ -211,6 +211,7 @@ static void test_decoder(void)
 #endif
 #include "test_spec.c"
 #include "test_r4_mutation.c"                    /* (gpt-mutation: regressions from surviving mutants) */
+#include "test_r9.c"                            /* (review round 9) the one settings table against the five */
 
 /* ------------------------------------------------------------------------------------------------ proto */
 static void test_proto(void)
@@ -510,6 +511,7 @@ int main(void)
     test_calhist();
 #endif
     test_spec();
+    test_r9_setdesc();
     printf("\n%s (%d failures)\n", g_fail ? "FAILED" : "ALL TESTS PASSED", g_fail);
     return g_fail ? 1 : 0;
 }

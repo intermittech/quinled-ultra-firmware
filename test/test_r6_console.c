@@ -25,10 +25,13 @@
                                               the soak's receiver-sized bus-side load, test_soak.c ld_ma) */
 #define CONOUT_GOLDEN_LEN 9435u
 #else
-#define CONOUT_GOLDEN_CRC 0x738811efu      /* (0.6.9: 0.6.8's (0x9ce67d6d, 11,521 B) with the settings= / save= /
-                                              faults= lines and the live lines' link; the dip 1 ms longer (43 ms: the
-                                              lifetime record's dip write, 24 half-words now, delays its end's ms) */
-#define CONOUT_GOLDEN_LEN 12741u
+#define CONOUT_GOLDEN_CRC 0x23e6fd1fu      /* (0.6.10: 0.6.9's (0x738811ef, 12,741 B) without the short's retry as a
+                                              limit event: `limit 0`, `power_last_limit=none`, no `limit, 0.04 A`
+                                              event line; diffed. 0.6.9: 0.6.8's (0x9ce67d6d, 11,521 B) with the
+                                              settings= / save= / faults= lines and the live lines' link; the dip 1 ms
+                                              longer (43 ms: the lifetime record's dip write, 24 half-words now, delays
+                                              its end's ms)) */
+#define CONOUT_GOLDEN_LEN 12687u
 #endif
 
 static uint32_t con_crc32(const char *s, uint32_t n)

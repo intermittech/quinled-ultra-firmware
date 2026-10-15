@@ -42,11 +42,12 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, ui
                 c->t_s = now_s;
                 c->ref_x = (uint16_t)ref;
                 c->min_x = 0xFFFFu;
+                d->cand_planned = d->planned;            /* (0.6.10) its class: the hint now, not at confirmation */
             }
             if (++d->run >= VDIP_MIN_MS) {
-                d->in_dip = 1;
+                d->in_dip = (uint8_t)(1u + d->cand_planned);   /* 2: the planned cut's, not counted */
                 d->run = 0;
-                d->count++;
+                d->count += (uint16_t)(d->cand_planned == 0u);
             }
         }
         if (x < c->min_x) {
@@ -63,8 +64,12 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, ui
         return;
     }
     /* back up for VDIP_MIN_MS: it ended at the first of those readings */
+    x = d->in_dip;
     d->in_dip = 0;
     d->run = 0;
+    if (x != 1u) {
+        return;                                          /* (0.6.10) the planned cut's: no trace */
+    }
     x = now + 1u - VDIP_MIN_MS - d->start_ms;
     c->dur_ms = (uint16_t)(x > 65535u ? 65535u : x);
     d->head = (uint8_t)((d->head + 1u) % VDIP_LOG);

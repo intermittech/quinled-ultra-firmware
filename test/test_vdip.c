@@ -221,6 +221,50 @@ static void test_vdip_z(void)
           "status: supply_impedance before any step");
 }
 
+/* (0.6.10, review round 8 re-check N1) the class of a dip is the hint at its first low reading, not at its
+ * confirmation (VDIP_MIN_MS readings later): the notice between the two leaves a real dip real, the hint ending between
+ * them leaves a planned one planned; a candidate that comes back up is dropped with its class */
+static void vdip_low(vdip_t *d, uint32_t t, uint32_t x)
+{
+    vdip_ms(d, t, 0, x, 1, 100);
+}
+
+static void test_vdip_planned(void)
+{
+    vdip_t d;
+    uint32_t k, t;
+    printf("supply dips: the planned cut's class from the first low reading\n");
+    for (k = 0; k < 2u; k++) {                           /* 0: the notice after the first low; 1: the hint ends */
+        vdip_init(&d);
+        d.ref_q12 = 1000u << 12;
+        d.planned = (uint8_t)k;
+        vdip_low(&d, 100, 750);                          /* the first low reading (75 %) */
+        CHECK(!d.in_dip && d.run == 1u, "class %u: the first low reading: a candidate, no dip yet", k);
+        d.planned = (uint8_t)!k;
+        vdip_low(&d, 101, 750);
+        vdip_low(&d, 102, 750);                          /* confirmed (VDIP_MIN_MS) */
+        CHECK(d.in_dip == 1u + k && d.count == (k ? 0u : 1u), "class %u: confirmed as at its first low reading "
+              "(in_dip %u, count %u)", k, d.in_dip, d.count);
+        for (t = 103; t < 106u; t++) {
+            vdip_low(&d, t, 1000);
+        }
+        CHECK(!d.in_dip && d.count == (k ? 0u : 1u) && d.n_log == (k ? 0u : 1u) && (d.deep.ref_x != 0u) == !k,
+              "class %u: %s (count %u, log %u)", k, k ? "planned: no trace" : "real: counted and logged", d.count,
+              d.n_log);
+    }
+    vdip_init(&d);                                       /* a planned candidate back up: dropped with its class */
+    d.ref_q12 = 1000u << 12;
+    d.planned = 1;
+    vdip_low(&d, 200, 750);
+    vdip_low(&d, 201, 1000);
+    d.planned = 0;
+    for (t = 202; t < 205u; t++) {
+        vdip_low(&d, t, 750);
+    }
+    CHECK(d.in_dip == 1u && d.count == 1u, "a new candidate after the hint: real (in_dip %u, count %u)", d.in_dip,
+          d.count);
+}
+
 static void test_vdip(void)
 {
     static const uint32_t VS[3] = { 12000u, 24000u, 48000u };
@@ -352,4 +396,5 @@ static void test_vdip(void)
     pwrev_ack(&pw, arg);
     CHECK(pwrev_latched(&pw) == 0, "dip: acknowledged 2 of 2 clears");
     test_vdip_z();
+    test_vdip_planned();
 }

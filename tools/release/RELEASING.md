@@ -26,6 +26,14 @@ dig2analog-ultra-5ch rev 0.4 = board revision 3, mask 0x8):
 | `...-rev04-factory.hex` | production: bootloader + app, marked verified + confirmed |
 | `bootloader-rev3.bin / .hex` | the bootloader alone, built for board revision 3 (rev 0.4) |
 
+Each app image is built twice, the second time under another path, and must come out byte for byte the same, with the
+same code order (`tools/link_order.py` computes it from the build's own links: the same source, the same order). A
+difference stops the release. `REPRO=0` skips the second build; `tools/check_repro.sh` checks any other image.
+
+The bootloader's build id comes from `bootloader/BL_BUILD_ID` (one id per bootloader code), and the release stops
+unless the bootloader it built has the md5 recorded there. When the bootloader's code changes: a new id (a date never
+used before) and the new md5 in that file, in the same commit.
+
 ## Making a release
 
 1. Set `FW_VERSION` in `src/app/main.c` to the version, commit, tag (`git tag -a v0.6.0-beta.1 -m "one line"`) and push

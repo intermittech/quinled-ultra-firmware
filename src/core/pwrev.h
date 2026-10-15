@@ -11,6 +11,7 @@
  * Rules (from the spec):
  *  - LIMITING / CH_LIMITING: a reduction now, held ULTRA_PW_HOLD_MS (2 s) after the last one;
  *  - a limit event starts when the limiter reduces after 2 s without reducing (one long overload = one event);
+ *    0.6.10: not within 2 s after a trip: the retry starts scaled down (isense trip_scale), part of the trip;
  *  - TRIPPED: the outputs are off after a trip, until the retry;
  *  - each event sets a latch independently of counter wrap; an ACK clears it only when its count matches the
  *    current count. Unmatched / delayed ACKs neither invent events nor acknowledge future ones;
@@ -53,6 +54,8 @@ typedef struct {
                                          a trip, a new supply dip from in.dips): main.c's event log */
     uint8_t  latched;                 /* sticky events, including a full unacknowledged u16 counter cycle */
     uint32_t trip_ms;                 /* ms of the last trip (its peak can land in the next ms' samples) */
+    uint16_t after_trip;              /* (0.6.10) updates left of ULTRA_PW_HOLD_MS after a trip held the outputs off:
+                                         a reduction then starts no limit event */
     uint32_t sec_ms;                  /* the ages count whole seconds from here */
 } pwrev_t;
 

@@ -74,17 +74,27 @@ ordered(function(main, "process_frame_end"), (r'plan_buf\s*\[\s*i\s*\]\s*=', bar
         "gate plan: barrier must separate completed plan from published plan_idx")
 
 hw = source("src/hal/hw.c")
+hw_cold = source("src/hal/hw_cold.c")       # (round 9) the boot and the flash operation (flash_op)
 ordered(function(hw, "pwm_set_phase"), (r'slew_tgt2\s*=', r'slew_tgt3\s*=', barrier,
                                        r'TIM2->DMAINTENR\s*\|=\s*TIM_UIE'),
         "phase: barrier must publish targets before enabling slew interrupts")
 ordered(function(hw, "pwm_start"), (r'TIM2->DMAINTENR\s*=\s*0', r'TIM3->DMAINTENR\s*=\s*0', barrier,
                                    r'cur_steps\s*=\s*steps'),
         "PWM restart: stop slew interrupts and barrier before replacing live timer settings")
-ordered(function(hw, "flash_op"), (r'__disable_irq\s*\(', r'gate_force_closed\s*\('),   # (0.6.4: flash_op)
+ordered(function(hw_cold, "flash_op"), (r'__disable_irq\s*\(', r'gate_force_closed\s*\('),   # (0.6.4: flash_op)
         "flash: disable interrupts before closing the gate (poll must not reopen it)")
+
+# (0.6.10) the compressed text's pointer: one in-range index added to cz_text (the bias with the offset first).
+# cz_text + CZ_BIAS on its own lies past the blob's end when the blob is shorter than the bias (the receiver's
+# release: 1,852 of 2,048 B): undefined in C, and no compiler or sanitizer here reports it (the code is the same)
+cli = source("src/core/cli.c")
+require(re.search(r'#define\s+cz_at\s*\(\s*z\s*\)\s*\(\s*cz_text\s*\+\s*\(\s*CZ_BIAS\s*\+\s*\(\s*z\s*\)\s*\)\s*\)', cli),
+        "cli.c cz_at: cz_text + (CZ_BIAS + (z)), never a pointer formed from the bias alone")
+require(len(re.findall(r'\bcz_text\b', cli)) == 1, "cli.c: cz_text used through cz_at only")
 
 if failures:
     for error in failures:
         print("FAIL shared contract:", error)
     sys.exit(1)
-print("ISR shared-source contracts passed (6 qualifiers, 5 barriers, mailbox releases, flash gate ordering)")
+print("ISR shared-source contracts passed (6 qualifiers, 5 barriers, mailbox releases, flash gate ordering); "
+      "cz_at's pointer")

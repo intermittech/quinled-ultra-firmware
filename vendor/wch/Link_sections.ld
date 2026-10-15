@@ -29,6 +29,7 @@ SECTIONS
 	.text :
 	{
 		. = ALIGN(4);
+		INCLUDE text_order.ld		/* QuinLED (round 9): the code's order for the c.jal / c.j reach (tools/link_order.py; empty: the input order) */
 		*(.text)
 		*(.text.*)
 		*(.rodata)
@@ -118,7 +119,7 @@ SECTIONS
     {
         . = ALIGN(4);
         __ramtext_start = .;
-        KEEP(*(.ramtext .ramtext.*))
+        KEEP(*(SORT_NONE(.ramtext) SORT_NONE(.ramtext.*))) /* keep ISR order with --sort-section=alignment */
         . = ALIGN(4);
         __ramtext_end = .;
     } >RAM AT>FLASH :ramcode

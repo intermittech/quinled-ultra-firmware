@@ -3,9 +3,9 @@
 /* Spec-conformance tests (review round 4, "fable-spec"), included by test_main.c after test_ultra.c (it uses its
  * helpers: U, tk, hdr, send, rend, f16, def_light, set_light, fx_send, useq; UA / UB, c_setup, c_pair, u_same, cseq).
  *  1. signal loss "off" / "fade off" (CONFIG 8 = 1 / 2, main.c: ultra_all_off): the host back without a reboot repeats
- *     its state with the SEQ numbers already applied; the light must come back (ULTRA_PROTOCOL.md "SEQ": the refresh
+ *     its state with the SEQ numbers already applied; the light must come back (the protocol wiki, Slot types, "SEQ": the refresh
  *     lets a board that missed something catch up). 0.6.2 ignores the refresh: the lights stay off.
- *  2. "on -> off: only M falls" (ULTRA_PROTOCOL.md "SET: what the board computes", as ESPHome's transition): a SET to
+ *  2. "on -> off: only M falls" (ULTRA_PROTOCOL.md "How it renders a SET", as ESPHome's transition): a SET to
  *     M = 0 whose A / B differ from the light's must not fade the colours. 0.6.2 lerps A and B as well.
  *  3. EFFECT / SCENE_EFFECT spare parameter bytes (the compatibility table: "ignored", the engine's state
  *     byte-identical): 0.6.2 keeps them in pend_p / scene_fxp, so a SCENE_EFFECT with spare bytes changes the stored

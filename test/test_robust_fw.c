@@ -1346,21 +1346,22 @@ int main(int argc, char **argv)
         con_out_n = 0;
         memcpy(con_in, "\rstatus\r", 8);                 /* (the first key ends a `watch` the random input may have started) */
         con_in_w = 8;
-        for (t = 0; t < 2000u; t++) {
-            sim_tick();
+        for (t = 0; t < 2000u && !sim_reset; t++) {     /* (0.6.10: the traffic goes on: an update may be taken in */
+            sim_tick();                                  /* this time, the board then in its bootloader) */
             pass();
         }
-        CHECK(strstr(con_out, "uptime=") != 0, "the console's status after the run");
+        CHECK(sim_reset || strstr(con_out, "uptime=") != 0, "the console's status after the run");
 #else
         sim_pad_low = 0;                                 /* (the random pad may have left the test mode on: the */
         con_out_n = 0;                                   /* stream pauses there) (0.6.7) the release console still */
         con_out[0] = 0;                                  /* sends: within 1.25 s a live line or a status part (or the */
-        for (t = 0; t < 25000u; t++) {                   /* test mode's end) */
-            sim_tick();
-            pass();
+        for (t = 0; t < 25000u && !sim_reset; t++) {    /* test mode's end; 0.6.10: unless an update is taken in */
+            sim_tick();                                  /* this time: the traffic goes on, the board then in its */
+            pass();                                      /* bootloader) */
         }
-        CHECK(strstr(con_out, "  k ") != 0 || strstr(con_out, "uptime=") != 0 || strstr(con_out, "jig cycle=") != 0 ||
-              strstr(con_out, "test mode") != 0, "the release console still sends after the run (%u bytes)", con_out_n);
+        CHECK(sim_reset || strstr(con_out, "  k ") != 0 || strstr(con_out, "uptime=") != 0 ||
+              strstr(con_out, "jig cycle=") != 0 || strstr(con_out, "test mode") != 0,
+              "the release console still sends after the run (%u bytes)", con_out_n);
 #endif
     }
     printf("seed %llx: %u s, %u passes, chain %u pos %u, proto %d, frames %u decoded %u headers %u, flash writes s%u c%u "

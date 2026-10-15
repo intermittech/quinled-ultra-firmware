@@ -211,7 +211,7 @@ static uint32_t scene_in(scene_run_t *r, uint32_t i, uint32_t sv, uint32_t now_m
         return sv;
     }
     s = ultra_smoothstep((el << 16) / SCENE_IN_MS);
-    return (uint32_t)((int32_t)r->from[i] + (int32_t)((((int64_t)sv - (int64_t)r->from[i]) * (int64_t)s) >> 16));
+    return ultra_lerp16(r->from[i], sv, s);
 }
 
 /* each channel's cross-fade from its own take-over (r6: the lights of a board take over one by one, at their own
@@ -252,7 +252,7 @@ uint8_t scene_mix(scene_run_t *r, uint32_t now_ms, uint16_t *v)
                 r->fading = (uint8_t)(r->fading & ~bit);   /* done: the controller's value */
             } else {
                 uint32_t s = ultra_smoothstep((el << 16) / r->dur);   /* dur <= 25.5 s: el << 16 fits */
-                v[i] = (uint16_t)((int32_t)sv + (int32_t)((((int64_t)v[i] - (int64_t)sv) * (int64_t)s) >> 16));
+                v[i] = ultra_lerp16(sv, v[i], s);
             }
         }
     }

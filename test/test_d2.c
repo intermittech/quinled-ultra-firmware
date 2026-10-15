@@ -66,6 +66,9 @@ static void test_d2(void)
     CHECK(d2_upd(&p, 8001, &in) == 0u, "the same dip count: nothing");
     in.dips = 0;                                         /* (the u16 count wrapped) */
     CHECK(d2_upd(&p, 8002, &in) == ULTRA_PW_EV_SUPPLY_DIP, "a count that changed by wrapping: a dip");
+    for (t = 8003; t < 10100u; t++) {                    /* (0.6.10) 2 s of updates after the overload's trip: a */
+        (void)d2_upd(&p, t, &in);                        /* reduction starts a limit event again */
+    }
     in = pw_in(1, 0, ULTRA_PW_CAUSE_SHORT, 9500, 16000);
     in.dips = 1;
     ev = d2_upd(&p, 20000, &in);

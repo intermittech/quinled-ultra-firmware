@@ -108,6 +108,7 @@ static void sc_r6e2e(void)
     fx0 = W_FX();
     CHECK(m == 3u && r6_fx_stored() == 3u, "e2e: the effects stored before the boot (%X)", m);
     boot(0, 0, 0);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     CHECK(fx_mask == 3u && fx_ch == 3u, "e2e: the power-on effects run from boot (mask %X, channels %X)", fx_mask, fx_ch);
     run_ms(1500);
     win_begin(&w);
@@ -320,6 +321,7 @@ static void sc_r6fxreset(const char *how)
 #endif
     (void)r6_fx_image();
     boot(0, 0, 0);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     CHECK(fx_mask == 3u && fx_ch == 3u && scene_stored.mask == 0x1Cu && cal_present && set.raw_steps == st.raw_steps,
           "fxreset: everything stored loads at boot (fx %X, scene %X, cal %u, steps %u)", fx_mask, scene_stored.mask,
           cal_present, set.raw_steps);
@@ -715,6 +717,7 @@ static void sc_r6boot5(void)
 #endif
            );
     CHECK(pend == 0u, "boot5: every store's erase ahead done at power-up, before the outputs start (%u left)", pend);
+    GRACE_WAIT();                                        /* (0.6.10: the receiver's grace window) */
     run_ms(1000);
     CHECK(out_now[0] == 32768u, "boot5: the scene lit (%u)", out_now[0]);
     run_sparse(120u, 0);

@@ -38,12 +38,18 @@ static void r6_latches(void)
     in = pw_in(0, 0, 0, 100, 0);
     /* All three event counts can return to their initial ACK without any ACK being sent.
      * Exercise real updates, not direct writes to the implementation's counters. */
-    for (n = 1, t = 0; n <= 65536u; n++) {
+    for (n = 1, t = 0; n <= 65536u; n++) {   /* (0.6.10: limit events and trips in turns of their own: a reduction
+                                                within 2 s of updates after a trip is the trip's, no limit event) */
         in.dips = (uint16_t)n;
         in.limiting = 1;
-        in.trip_cause = ULTRA_PW_CAUSE_SHORT;
         pwrev_update(&p, ++t, &in);
         in.limiting = 0;
+        t += 2001u;
+        pwrev_update(&p, t, &in);
+    }
+    for (n = 1; n <= 65536u; n++) {
+        in.trip_cause = ULTRA_PW_CAUSE_SHORT;
+        pwrev_update(&p, ++t, &in);
         in.trip_cause = 0;
         t += 2001u;
         pwrev_update(&p, t, &in);

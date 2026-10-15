@@ -2,6 +2,7 @@
  * Copyright (C) 2026 QuinLED */
 #include "ultra.h"
 #include "lto.h"
+#include "../hal/board.h"                   /* (0.6.10) BOARD: IDENTIFY 7 on the receiver only */
 
 #define RATE_NOMINAL (ULTRA_TICK_US << 16)
 #define LIGHT_IDX(l) ((l) < ULTRA_LIGHTS ? (l) : ULTRA_LIGHTS)
@@ -17,6 +18,20 @@ static uint32_t clz32(uint32_t x)
     if ((x & 0xC0000000u) == 0u) { n += 2u; x <<= 2; }
     if ((x & 0x80000000u) == 0u) { n += 1u; }
     return n;
+}
+
+NOINLINE uint16_t ultra_lerp16(uint32_t a, uint32_t b, uint32_t s)   /* (ultra.h) */
+{
+    int32_t d = (int32_t)b - (int32_t)a;
+    return (uint16_t)((int32_t)a + (int32_t)(((int64_t)d * s) >> 16));
+}
+
+/* ramp_eval's own inline copy: its 11 lerps per render stay inline (through ultra_lerp16 the "5 lights fading" render
+ * row was +400 cycles, +9 %); the effects and scene.c call ultra_lerp16 */
+static ALWAYS_INLINE uint16_t lerp16(uint32_t a, uint32_t b, uint32_t s)
+{
+    int32_t d = (int32_t)b - (int32_t)a;
+    return (uint16_t)((int32_t)a + (int32_t)(((int64_t)d * s) >> 16));
 }
 
 /* one Horner step of the polynomials in ultra_tables.c: acc = c + acc x t (t = [0, 1) as Q32, the product floored).
@@ -85,12 +100,6 @@ uint32_t ultra_smoothstep(uint32_t p)
     int64_t in = (x * (6 * x - 15 * 65536) + 10 * 4294967296LL) >> 8; /* Q24, 6x^2 - 15x + 10 */
     int64_t s = (x3 * in + (1LL << 39)) >> 40;                         /* Q16 */
     return s < 0 ? 0u : (s > 65536 ? 65536u : (uint32_t)s);
-}
-
-static uint16_t lerp16(uint32_t a, uint32_t b, uint32_t s)   /* s Q16, 0..65536 */
-{
-    int32_t d = (int32_t)b - (int32_t)a;
-    return (uint16_t)((int32_t)a + (int32_t)(((int64_t)d * s) >> 16));
 }
 
 /* el / dur as Q16 (0..65536) without 64-bit division */
@@ -321,7 +330,7 @@ static void ramp_eval(const ultra_ramp_t *r, uint32_t now, ultra_vals_t *o)
         return;
     }
     p = r->dur ? frac16((uint32_t)el, r->dur) : 65536u;
-    if (p == 65536u) {                                   /* done (a settled light): exactly `to`, as lerp16 at 1 */
+    if (p == 65536u) {                                   /* done (a settled light): exactly `to`, as ultra_lerp16 at 1 */
         vals_cpy(o, &r->to);
         return;
     }
@@ -489,7 +498,8 @@ MEASURED uint32_t ultra_apply_slot(ultra_t *u, const uint8_t *s, uint32_t tick)
     if (light >= ULTRA_LIGHTS && light != ULTRA_LIGHT_BOARD) {
         return 0;                                        /* LIGHT 5-14: reserved */
     }
-    if ((type == ULTRA_IDENTIFY && ((p[0] > ULTRA_IDENT_RELEASE && p[0] != ULTRA_IDENT_VERSION) ||
+    if ((type == ULTRA_IDENTIFY && ((p[0] > ULTRA_IDENT_RELEASE && p[0] != ULTRA_IDENT_VERSION &&
+                                     (BOARD != BOARD_DP_RX || p[0] != ULTRA_IDENT_POWER_OFF)) ||
                                     (p[0] == ULTRA_IDENT_CAL && p[1] != 0u &&
                                      (p[1] < ULTRA_IDENT_CAL_MIN || p[1] > ULTRA_IDENT_CAL_MAX)))) ||
         (type == ULTRA_SCENE && p[0] > 1u)) {
@@ -637,12 +647,22 @@ static uint16_t rnd16(ultra_light_t *L)
     return (uint16_t)(xorshift(&L->rng) >> 16);
 }
 
-/* ESPHome random_cubic_float() x intensity: (2r - 1)^3 x i, Q16 signed */
+/* ESPHome random_cubic_float() x intensity: (2r - 1)^3 x i, Q16 signed. In 32 bits (review round 9): r = 2 r16 -
+ * 65535 is odd with |r| <= 65535, so r^2, (r^2 >> 16) |r| and |c| x intensity (<= 65535) each fit; the former
+ * 64-bit >> 16 of a negative product floored it (towards -inf), so a negative value's magnitude rounds up:
+ * (x + 0xFFFF) >> 16, without overflow (x <= 65535 x 65534). test/test_r9_math.c against the 64-bit form. */
+static int32_t cubic_q16(uint32_t r16, uint32_t intensity)
+{
+    uint32_t s = 0u - (r16 < 32768u);                    /* all ones for r < 0 */
+    uint32_t r = ((2u * r16 - 65535u) ^ s) - s;          /* |r| */
+    uint32_t k = s & 0xFFFFu;                            /* rounds a negative value's magnitude up */
+    uint32_t c = ((((r * r) >> 16) * r + k) >> 16) * intensity;
+    return (int32_t)((((c + k) >> 16) ^ s) - s);
+}
+
 static int32_t rnd_cubic(ultra_light_t *L, uint32_t intensity)
 {
-    int64_t r = (int64_t)rnd16(L) * 2 - 65535;
-    int64_t c = (((r * r) >> 16) * r) >> 16;
-    return (int32_t)((c * (int64_t)intensity) >> 16);
+    return cubic_q16(rnd16(L), intensity);
 }
 
 static uint16_t clamp16(int32_t v)
@@ -721,11 +741,11 @@ static void fx_pulse(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b
         from = pulse_target(L, k + 1u);                  /* the previous target (other parity) */
         if (prev_len > iv) {
             uint32_t from2 = (k >= 2u || L->fx_k) ? pulse_target(L, k) : b->m;
-            from = lerp16(from2, from, ultra_smoothstep(frac16(iv, prev_len)));
+            from = ultra_lerp16(from2, from, ultra_smoothstep(frac16(iv, prev_len)));
         }
     }
     vals_cpy(o, b);
-    o->m = lerp16(from, pulse_target(L, k), len ? ultra_smoothstep(frac16(t, len)) : 65536u);
+    o->m = ultra_lerp16(from, pulse_target(L, k), len ? ultra_smoothstep(frac16(t, len)) : 65536u);
 }
 
 static void fx_strobe(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *o)
@@ -747,10 +767,10 @@ static void fx_strobe(const ultra_light_t *L, uint32_t now, const ultra_vals_t *
     st = &L->step[i];
     pv = &L->step[(i + c - 1u) % c];
     s = st->trans ? ultra_smoothstep(frac16(el - start, st->trans)) : 65536u;
-    o->m = lerp16(pv->v.m, st->v.m, s);
+    o->m = ultra_lerp16(pv->v.m, st->v.m, s);
     for (j = 0; j < 5u; j++) {
-        o->a[j] = lerp16(pv->v.a[j], st->v.a[j], s);
-        o->b[j] = lerp16(pv->v.b[j], st->v.b[j], s);
+        o->a[j] = ultra_lerp16(pv->v.a[j], st->v.a[j], s);
+        o->b[j] = ultra_lerp16(pv->v.b[j], st->v.b[j], s);
     }
 }
 
@@ -857,7 +877,7 @@ static void fx_breathe(const ultra_light_t *L, uint32_t now, const ultra_vals_t 
 {
     uint32_t per = fx_period(L), mn = ultra_get16(L->fxp + 3), mx = ultra_get16(L->fxp + 5);
     vals_cpy(o, b);
-    o->m = lerp16(mn, mx, ultra_breathe(frac16((now - L->fx_t0) % per, per)));
+    o->m = ultra_lerp16(mn, mx, ultra_breathe(frac16((now - L->fx_t0) % per, per)));
 }
 
 /* color loop: hue rotation at the given saturation on the RGB channels (W / CW / WW off) */
@@ -867,8 +887,8 @@ static void fx_color_loop(const ultra_light_t *L, uint32_t now, const ultra_vals
     h6 = frac16((now - L->fx_t0) % per, per) * 6u;
     f = h6 & 0xFFFFu;
     pv = 65535u - sat;
-    q = 65535u - (uint32_t)(((uint64_t)sat * f) >> 16);
-    t = 65535u - (uint32_t)(((uint64_t)sat * (65536u - f)) >> 16);
+    q = 65535u - ((sat * f) >> 16);                      /* (sat, f < 2^16: 32 bits) */
+    t = 65535u - ((sat * (65536u - f)) >> 16);           /* (<= 65535 x 65536 < 2^32) */
     switch ((h6 >> 16) % 6u) {
     case 0: rgb[0] = 65535u; rgb[1] = t; rgb[2] = pv; break;
     case 1: rgb[0] = q; rgb[1] = 65535u; rgb[2] = pv; break;
@@ -896,22 +916,23 @@ static void fx_color_loop(const ultra_light_t *L, uint32_t now, const ultra_vals
 static int fx_sun(const ultra_light_t *L, uint32_t now, const ultra_vals_t *b, ultra_vals_t *o, int rise)
 {
     static const uint16_t dawn[3] = { 65535u, 11796u, 0u };   /* (1, 0.18, 0) */
-    uint32_t d = ultra_get24(L->fxp), el = now - L->fx_t0, p, w, i;
+    uint32_t d = ultra_get24(L->fxp), el = now - L->fx_t0, p, w, w2, i;
     if (d == 0u) {
         d = 1u;
     }
     p = frac16(el, d);
     w = rise ? p : 65536u - p;                           /* weight of the light's own state */
+    w2 = w < 65536u ? (w * w) >> 16 : 65536u;            /* w^2 (Q16); only 1.0 squared needs a 33rd bit */
     vals_cpy(o, b);
-    o->m = (uint16_t)((b->m * (uint32_t)(((uint64_t)w * w) >> 16)) >> 16);   /* eases in / out (quadratic) */
+    o->m = (uint16_t)((b->m * w2) >> 16);                /* eases in / out (quadratic) */
     for (i = 0; i < 5u; i++) {
         uint8_t r = L->role[i];
         if (is_rgb(r)) {
-            o->a[i] = lerp16(dawn[r - ULTRA_ROLE_RED], b->a[i], w);
+            o->a[i] = ultra_lerp16(dawn[r - ULTRA_ROLE_RED], b->a[i], w);
         } else if (r == ULTRA_ROLE_WARM_WHITE) {
-            o->a[i] = lerp16(65535u, b->a[i], w);
+            o->a[i] = ultra_lerp16(65535u, b->a[i], w);
         } else if (r == ULTRA_ROLE_COLD_WHITE || r == ULTRA_ROLE_WHITE) {
-            o->a[i] = lerp16(0, b->a[i], w);
+            o->a[i] = ultra_lerp16(0, b->a[i], w);
         }
     }
     return el >= d;
@@ -1023,21 +1044,30 @@ static uint32_t q32_of3(uint32_t m, uint32_t a, uint32_t b)
 }
 
 /* Set points (sorted by M, descending): linear in mireds between them, the light's own temperature (own_q) at M = 1
- * unless a point is at 100 %, the lowest point's temperature below it. Mireds x 10, Q16. */
-static uint64_t dtw_points(const ultra_light_t *L, uint32_t m, uint64_t own_q)
+ * unless a point is at 100 %, the lowest point's temperature below it. Mireds x 10, Q16, all below 2^32 (own_q <=
+ * ww_q, a point's pt << 16). The interpolation pq + (hq - pq) (m - pm) / (hm - pm) in 32 bits (review round 9: it
+ * was the image's only signed 64-bit division): m <= hm, so n = m - pm <= q = hm - pm <= 65534 and the quotient is at most
+ * |hq - pq|; with a = |hq - pq| / q, b = |hq - pq| mod q it is a n + (b n) / q exactly, a n <= |hq - pq| and
+ * b n < q^2; the sign goes on the magnitude, as the 64-bit division truncated towards zero (test/test_r9_math.c). */
+static uint32_t dtw_points(const ultra_light_t *L, uint32_t m, uint32_t own_q)
 {
-    uint32_t i, hm = 65535u;
-    int64_t hq = (int64_t)own_q;
+    uint32_t i, hm = 65535u, hq = own_q;
     for (i = 0; i < L->opt_n; i++) {
-        uint32_t pm = L->opt_pm[i];
-        int64_t pq = (int64_t)((uint64_t)L->opt_pt[i] << 16);
+        uint32_t pm = L->opt_pm[i], pq = (uint32_t)L->opt_pt[i] << 16;
         if (m >= pm) {
-            return hm == pm ? (uint64_t)pq : (uint64_t)(pq + (hq - pq) * (int64_t)(m - pm) / (int64_t)(hm - pm));
+            uint32_t q = hm - pm, n = m - pm, d, a, x;
+            if (q == 0u) {
+                return pq;
+            }
+            d = hq > pq ? hq - pq : pq - hq;
+            a = d / q;
+            x = a * n + ((d - a * q) * n) / q;
+            return hq > pq ? pq + x : pq - x;
         }
         hm = pm;
         hq = pq;
     }
-    return (uint64_t)hq;
+    return hq;
 }
 
 /* Dim to warm (LIGHT_OPT, see ultra_protocol.h): the CW / WW mix of y[] follows M, red assist below the WW LED.
@@ -1047,34 +1077,35 @@ static void dim_to_warm(const ultra_light_t *L, uint32_t m, uint32_t cw_ch, uint
 {
     uint32_t sum = gcw + gww, mx = gcw > gww ? gcw : gww, cwm = L->opt_cw, wwm = L->opt_ww, warm = L->opt_warm;
     uint32_t t = 0, scale, fw, fc, ch, r_ch = 5, g_ch = 5, rgb_on = 0;
-    uint64_t cw_q, ww_q, warm_q, top_q, tgt_q;            /* mireds x 10, Q16 */
+    uint32_t cw_q, ww_q, warm_q, top_q, tgt_q;            /* mireds x 10, Q16: all below 2^32 (16-bit mireds) */
     if (sum == 0u || wwm <= cwm) {
         return;                                          /* white off, or no colour temperatures */
     }
-    cw_q = (uint64_t)cwm << 16;
-    ww_q = (uint64_t)wwm << 16;
-    warm_q = (uint64_t)warm << 16;
-    top_q = cw_q + (uint64_t)(wwm - cwm) * (((uint32_t)gww << 16) / sum);   /* the light's own temperature */
+    cw_q = cwm << 16;
+    ww_q = wwm << 16;
+    warm_q = warm << 16;
+    top_q = cw_q + (wwm - cwm) * ((gww << 16) / sum);    /* the light's own temperature: cw_q <= top_q <= ww_q
+                                                            (gww <= sum: the share <= 65536) */
     tgt_q = top_q;
     if (L->opt_flags & ULTRA_OPT_POINTS) {
-        uint64_t pq = dtw_points(L, m, top_q);
+        uint32_t pq = dtw_points(L, m, top_q);
         if (pq > top_q) {
             tgt_q = pq;                                  /* never colder than the light's own temperature */
         }
     } else if (warm_q > top_q) {
-        /* + (warm_q - top_q) x (65535 - m) / 65535, linear in mireds, M 1 -> 0. The difference d is below 2^32
-         * (warm_q < 2^32); with d = a x 65535 + b the product over 65535 is a x w + b x w / 65535 exactly, each in
-         * 32 bits (a <= 65536, b < 65535, w <= 65535): no 64-bit division */
-        uint32_t d = (uint32_t)(warm_q - top_q), w = 65535u - m, a = d / 65535u, b = d - a * 65535u;
+        /* + (warm_q - top_q) x (65535 - m) / 65535, linear in mireds, M 1 -> 0. With d = a x 65535 + b the product
+         * over 65535 is a x w + b x w / 65535 exactly, each in 32 bits (a <= 65536, b < 65535, w <= 65535): no
+         * 64-bit division */
+        uint32_t d = warm_q - top_q, w = 65535u - m, a = d / 65535u, b = d - a * 65535u;
         tgt_q += a * w + (b * w) / 65535u;
     }
-    /* the dividends below fit 32 bits: tgt_q - cw_q <= (wwm - cwm) << 16 and tgt_q - ww_q <= (warm - wwm) << 16
+    /* the dividends below: tgt_q - cw_q <= (wwm - cwm) << 16 and tgt_q - ww_q <= (warm - wwm) << 16
      * (cw_q <= top_q <= tgt_q <= warm_q), scale <= 65535 and fc, fw <= 65536 */
     if (tgt_q <= ww_q) {
-        fw = (uint32_t)(tgt_q - cw_q) / (wwm - cwm);    /* WW share, Q16 */
+        fw = (tgt_q - cw_q) / (wwm - cwm);               /* WW share, Q16 */
     } else {
         fw = 65536u;                                     /* warmer than the WW LED: all WW, red assist */
-        t = (uint32_t)(tgt_q - ww_q) / (warm - wwm);
+        t = (tgt_q - ww_q) / (warm - wwm);
     }
     fc = 65536u - fw;
     scale = (g16(L, m) * mx + 32767u) / 65535u;          /* g(M) x max(gcw, gww) */

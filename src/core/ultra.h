@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* Ultra mode light engine (board side of ULTRA_PROTOCOL.md).
+/* Ultra mode light engine (the board side of the QuinLED Ultra protocol; ULTRA_PROTOCOL.md: this firmware's part).
  *
  * The host (ESPHome) sends targets; the board runs everything that changes over time:
  *  - transitions: M (state x brightness), A and B per channel interpolate linearly or with ESPHome's smoothstep,
@@ -183,6 +183,9 @@ int      ultra_scene_fx_ok(const ultra_light_t *L);
 uint32_t ultra_gamma(uint32_t x_q32, uint32_t g_q16);
 /* ESPHome's transition curve 6x^5 - 15x^4 + 10x^3, Q16 */
 uint32_t ultra_smoothstep(uint32_t p_q16);
+/* a + (b - a) s for s Q16 (0..65536), the product floored: the ramps, the effects and scene.c's fades (review round 9:
+ * one definition, out of line in ultra.c; 0.6.10 had the expression inlined at 14 sites and in scene.c twice) */
+uint16_t ultra_lerp16(uint32_t a, uint32_t b, uint32_t s);
 /* the breathe effect's curve: sin^2(pi ph) for ph 0..65536 (Q16), Q16; 0 -> 0, 0.5 -> full, 1 -> 0 (also the test
  * jig's fade, core/testjig.c) */
 uint32_t ultra_breathe(uint32_t ph_q16);

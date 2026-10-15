@@ -11,6 +11,7 @@
 #include "ultra_protocol.h"
 #include "presets.h"
 #include "testjig.h"
+#include "lto.h"
 #include "../hal/board.h"               /* BOARD_TESTJIG: the jig's report */
 #include "cz.h"
 
@@ -39,7 +40,8 @@ typedef struct {
     uint8_t r[CZ_DEPTH];
 } cz_dec_t;
 
-#define cz_at(z) (cz_text + CZ_BIAS + (z))
+#define cz_at(z) (cz_text + (CZ_BIAS + (z)))   /* (0.6.10: the index first; cz_text + CZ_BIAS alone may lie past the
+                                                   blob's end, the receiver's 1,852 B: undefined in C) */
 
 static uint32_t cz_next(cz_dec_t *d)
 {
@@ -67,6 +69,13 @@ static int nth(int z, uint32_t i)
         z = skip(z);
     }
     return z;
+}
+
+/* ... of a list of n: the first when i is not below n (a value no name is for; 0.6.10: the status's, the test here,
+ * not at each caller) */
+static NOINLINE int nthb(int z, uint32_t i, uint32_t n)
+{
+    return nth(z, i < n ? i : 0u);
 }
 
 #if CONSOLE_FULL
@@ -143,14 +152,16 @@ static void cf_dec(cf_out_t *o, uint32_t v, uint32_t width)
 /* n / d rounded, with dec (1 or 2) decimals */
 static void cf_fix(cf_out_t *o, uint32_t n, uint32_t d, uint32_t dec)
 {
-    uint32_t p = dec == 2u ? 100u : 10u, v = (n + d / 2u) / d;
+    uint32_t p = dec == 2u ? 100u : 10u, v = n / d;
+    v += n - v * d >= d - d / 2u;                        /* (rounded half up as (n + d / 2) / d, without its overflow
+                                                            near 2^32: the lifetime energy's ceiling, round 9 phase B) */
     cf_dec(o, v / p, 1u);
     cf_ch(o, '.');
     cf_dec(o, v % p, dec);
 }
 
-/* the sign of v ("-" when negative), returns |v| */
-static uint32_t cf_neg(cf_out_t *o, int32_t v)
+/* the sign of v ("-" when negative), returns |v| (out of line: cf_num and %e) */
+static NOINLINE uint32_t cf_neg(cf_out_t *o, int32_t v)
 {
     if (v < 0) {
         cf_ch(o, '-');
@@ -326,21 +337,16 @@ void cli_banner(cli_t *c)
 }
 
 #if CONSOLE_FULL
-/* a key's value: the settings field of its command (a table by command, 0.6.6: the switch was ~130 B more), else the
- * scene's / the status's (the commands main.c keeps outside settings_t) */
+/* a key's value: the settings field of its command (the settings table, config.h settings_desc; 0.6.6: the switch was
+ * ~130 B more), else the scene's / the status's (the commands main.c keeps outside settings_t); IDENTIFY /
+ * FACTORY_RESET / PERIOD_* are not keys: gamma, as the default */
 static uint8_t get_key(const cli_t *c, uint8_t cmd)
 {
-#define SF(f) ((uint8_t)offsetof(settings_t, f))
-#define SX 0xFFu                           /* not a settings_t field (below) */
-    static const uint8_t ofs[CMD_SOFT_START] = {   /* [cmd - 1] */
-        SF(protocol), SF(pwm_preset), SF(dither_mode), SF(dither_thresh), SF(feedback_ch), SF(stagger),
-        SF(dim_floor), SF(signal_loss), SF(gamma), SF(gamma), SF(smoothing), SF(gamma), SF(min_pulse), SX, SX,
-        SF(gamma), SF(gamma), SX, SX, SX,  /* (IDENTIFY / FACTORY_RESET / PERIOD_*: not keys; gamma, as the default) */
-    };
-#undef SF
-    uint32_t o = (uint32_t)(cmd - 1u) < CMD_SOFT_START ? ofs[cmd - 1u] : SX;
-    if (o != SX) {
-        return ((const uint8_t *)c->set)[o];
+    uint32_t i;
+    for (i = 0; i < SETD_SHOWN; i++) {
+        if ((settings_desc[i].cmd & ~SETD_NO_CODE) == cmd) {
+            return ((const uint8_t *)c->set)[settings_desc[i].ofs];
+        }
     }
     switch (cmd) {
     case CMD_SCENE:         return (uint8_t)(c->scene && c->scene->mask != 0u);
@@ -350,7 +356,6 @@ static uint8_t get_key(const cli_t *c, uint8_t cmd)
     case CMD_SOFT_START:    return c->st ? c->st->softstart : 1u;
     default:                return c->set->gamma;
     }
-#undef SX
 }
 
 /* parse an unsigned decimal; returns -1 if none */
@@ -397,9 +402,11 @@ static void events(cli_t *c)
             break;
         }
         cf(c, Z(ev_line, "event %u=%t ago, %z, %a A\r\n"), k + 1u, s->uptime_s - e->t_s,
-           nth(Z(ev_names, "limit\0overload\0short\0supply dip\0calibration\0calibration incomplete\0off: retries used up\0"
-                           "option bytes unreadable\0bootloader protected\0protection not as written\0too hot"),
-               e->type - 1u),
+           e->type > EVL_HOT ? Z(qmark, "?")      /* (0.6.10) a kept log's type this build doesn't name: nth would walk
+                                                     on into the other texts, past the blob's end */
+           : nth(Z(ev_names, "limit\0overload\0short\0supply dip\0calibration\0calibration incomplete\0off: retries used up\0"
+                             "option bytes unreadable\0bootloader protected\0protection not as written\0too hot"),
+                 e->type - 1u),
            (int32_t)e->ma);
     }
 }
@@ -452,10 +459,10 @@ static uint32_t status_part(cli_t *c, uint32_t part)
        (s->reset_flags & 0x08000000u) ? Z(rst_por, "power-on ") : empty,
        (s->reset_flags & 0x04000000u) ? Z(rst_pin, "pin ") : empty,
        (s->reset_flags & 0x10000000u) ? Z(rst_sw, "software ") : empty, s->stack_max,
-       nth(Z(mode, "auto\0WS2915\0WS2805\0Ultra"), s->proto_mode < 4u ? s->proto_mode : 0u),
-       nth(proto, s->proto_locked < 5u ? s->proto_locked : 0u),
+       nthb(Z(mode, "auto\0WS2915\0WS2805\0Ultra"), s->proto_mode, 4u),
+       nthb(proto, s->proto_locked, 5u),
        s->proto_provisional ? Z(provisional, " (stored, not confirmed yet)") : empty,
-       nth(proto, c->set->last_proto < 5u ? c->set->last_proto : 0u),
+       nthb(proto, c->set->last_proto, 5u),
        s->frames, s->fps, s->decoded);
     break;
     case 1:                                /* (0.6.5 D8: part 0 reached 693 bytes with the longest values) */
@@ -477,23 +484,18 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     case 2:                                /* (0.6.9) its own part: 218 bytes with the longest values */
     {                                      /* (0.6.9) the settings in effect by their console keys ('*': an Ultra
                                               CONFIG over the stored value), the retry policy, and the save state:
-                                              pending, why (main.c save_why) */
-        static const uint8_t so[11] = {
-            offsetof(settings_t, protocol), offsetof(settings_t, pwm_preset), offsetof(settings_t, dither_mode),
-            offsetof(settings_t, dither_thresh), offsetof(settings_t, dim_floor), offsetof(settings_t, min_pulse),
-            offsetof(settings_t, stagger), offsetof(settings_t, signal_loss), offsetof(settings_t, feedback_ch),
-            offsetof(settings_t, smoothing), offsetof(settings_t, gamma) };
+                                              pending, why (main.c save_why). The fields and their order: the settings
+                                              table (config.h settings_desc, round 9); the names are in its order */
         const int names = Z(set_names, "protocol\0preset\0dither\0thresh\0floor\0minpulse\0stagger\0loss\0"
                                        "feedback\0smooth\0gamma");
         cf(c, Z(set_head, "settings="));
-        for (i = 0; i < 11u; i++) {
-            uint32_t e = ((const uint8_t *)c->eff)[so[i]];
-            cf(c, Z(set_kv, "%z %u%z, "), nth(names, i), e, e != ((const uint8_t *)c->set)[so[i]] ? Z(star, "*") : empty);
+        for (i = 0; i < SETD_SHOWN; i++) {
+            uint32_t o = settings_desc[i].ofs, e = ((const uint8_t *)c->eff)[o];
+            cf(c, Z(set_kv, "%z %u%z, "), nth(names, i), e, e != ((const uint8_t *)c->set)[o] ? Z(star, "*") : empty);
         }
         cf(c, Z(set_tail, "softstart %u, retry %u x %u s\r\nsave=%z%z\r\n"), (uint32_t)s->softstart != 0u,
            (uint32_t)s->retry_n, (uint32_t)s->retry_s, s->save_why ? Z(sv_pend, "pending: ") : Z(sv_ok, "ok"),
-           nth(Z(sv_why, "\0debounce\0waiting for dark\0budget\0error hold-off\0supply"), s->save_why < 6u ?
-               s->save_why : 0u));
+           nthb(Z(sv_why, "\0debounce\0waiting for dark\0budget\0error hold-off\0supply"), s->save_why, 6u));
     }
     break;
     case 3:                                /* (0.6.5 merge: every part under 470 bytes with the longest values) */
@@ -515,7 +517,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
             }
         }
         cf(c, ZU(fl_errs, " errors %u (%z)\r\n"), (uint32_t)s->fl_errs,   /* (flashrec.h FLASH_ERR_*, 0.6.5: VDD) */
-           nth(ZU(fl_codes, "-\0-\0WRP\0EOP\0KEY\0VERIFY\0VDD"), s->fl_err < 7u ? s->fl_err : 0u));
+           nthb(ZU(fl_codes, "-\0-\0WRP\0EOP\0KEY\0VERIFY\0VDD"), s->fl_err, 7u));
     }
 #endif
     if (s->stagger_moves || s->ripple_ma) {    /* the offsets in % of the period */
@@ -539,13 +541,13 @@ static uint32_t status_part(cli_t *c, uint32_t part)
            s->out, s->i_ma, s->i_peak_ma, s->i_zero_ma, (int32_t)s->i_limit_ma, s->i_k_permille, s->i_trips,
            s->i_cal ? Z(calibrating, "calibrating") : (s->i_tripped ? Z(tripped_off, "tripped, outputs off")
                                                                     : Z(ok, "ok")),
-           nth(cause, s->i_trip_cause < 3u ? s->i_trip_cause : 0u), s->i_ch_ma,
-           nth(Z(model, "none\0learned\0calibrated"), s->i_model < 3u ? s->i_model : 0u));
+           nthb(cause, s->i_trip_cause, 3u), s->i_ch_ma,
+           nthb(Z(model, "none\0learned\0calibrated"), s->i_model, 3u));
     }
     if (s->cal_fail != 0u) {               /* (0.6.9, A2) the last test stopped: the stored one (next part) still
                                               counts (here: the calibration's part reached 511 bytes) */
         cf(c, Z(cal_fail, "calibration_last=incomplete: %z\r\n"),
-           nth(Z(cal_why, "trip\0limit\0supply"), s->cal_fail - 1u < 3u ? s->cal_fail - 1u : 0u));
+           nthb(Z(cal_why, "trip\0limit\0supply"), s->cal_fail - 1u, 3u));
     }
     break;
     case 5:
@@ -595,7 +597,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
         uint32_t k;
         cf(c, Z(st_imp, "supply_impedance=%u mohm (%u steps)\r\n"), vdip_z_mohm(d), (uint32_t)d->zsteps);
         cf(c, Z(dips, "supply_dips=%u%z%v V"), (uint32_t)d->count,
-           d->in_dip ? Z(dip_now, " (one now), reference ") : Z(dip_ref, ", reference "), s->dip_ref_mv);
+           d->in_dip == 1u ? Z(dip_now, " (one now), reference ") : Z(dip_ref, ", reference "), s->dip_ref_mv);
         for (k = 0; e != 0; e = vdip_event(d, k++)) {
             cf(c, k ? Z(dip_n, "\r\nsupply_dip %u=") : Z(dip_deep, "\r\nsupply_dip_deepest="), k);
             cf(c, Z(dip_ev, "%t ago, %v V (%u %%), %u ms, %a A"), s->uptime_s - e->t_s, vsense_mv(s->dip_vs, e->min_x, 1u),
@@ -634,7 +636,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
     } else {
         cf(c, s->oc_show == 2u ? Z(oc_trip, "overcurrent_led=trip (%z), since %t (%u s ago), ")
                                : Z(oc_limit, "overcurrent_led=limit%z, since %t (%u s ago), "),
-           s->oc_show == 2u ? nth(cause, s->oc_cause < 3u ? s->oc_cause : 0u) : empty, s->oc_since_s,
+           s->oc_show == 2u ? nthb(cause, s->oc_cause, 3u) : empty, s->oc_since_s,
            s->uptime_s - s->oc_since_s);
         if (s->oc_show == 2u ? s->oc_tripped : s->oc_limiting) {
             cf(c, s->oc_show == 2u ? Z(oc_outputs_off, "outputs off") : Z(oc_limit_active, "board limit active"));
@@ -679,7 +681,7 @@ static uint32_t status_part(cli_t *c, uint32_t part)
             cf(c, Z(pw_trip_none, "\r\npower_last_trip=none\r\n"));
         } else {
             cf(c, Z(pw_trip, "\r\npower_last_trip=%u s ago, %z, %a A\r\n"), g->trip_age_s,
-               nth(cause, g->last_cause < 3u ? g->last_cause : 0u), (int32_t)g->trip_ma);
+               nthb(cause, g->last_cause, 3u), (int32_t)g->trip_ma);
         }
     }
     {                                      /* the lifetime record (core/energy.h); trips: short / overload */

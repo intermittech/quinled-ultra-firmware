@@ -11,6 +11,12 @@
 #define LIT_FAR 0x40000000u         /* lit_ms is kept at most this far back (2^30 ms) */
 typedef char life_rec_size[(sizeof(life_rec_t) == LIFE_REC_BYTES && LIFE_RECS * LIFE_REC_BYTES <= 256u) ? 1 : -1];
 
+/* the lifetime allowance: a write left (the board's own powered time only: 0.6.10) */
+static NOINLINE uint32_t life_allow(const life_rec_t *r)
+{
+    return r->writes < LIFE_RESERVE + (r->on_s - LIFE_MERGED(r) * 360u) / LIFE_EARN_S;
+}
+
 MEASURED void energy_init(energy_t *e, uint32_t found, uint32_t now, uint32_t ver, uint32_t wd)
 {
     uint8_t *b = (uint8_t *)e;
@@ -20,19 +26,32 @@ MEASURED void energy_init(energy_t *e, uint32_t found, uint32_t now, uint32_t ve
         b[i] = 0;
     }
     r->ups++;
+    e->ev = (uint8_t)(2u | (wd != 0u));                  /* the power-up (bit 1), a watchdog reset (bit 0) */
+    e->ev_save = 3u;                                     /* (main.c: the receiver 1) */
     if (wd && r->wd != 0xFFu) {
         r->wd++;
     }
-    if (ver != 0u && r->ver != ver) {
+    if (r->magic == LIFE_MAGIC_F2) {                     /* (0.6.10) format 2: bytes 20..23 the version word */
+        r->ver = crc8_smbus(&r->ver, 4u);                /* (energy_ver of the word in place) */
+        r->merged_hi = 0;
+        r->merged = 0;                                   /* (all its powered time its own) */
+    }
+    i = ver != 0u ? energy_ver(ver) : r->ver;
+    if (r->ver != i) {
         r->updates += (uint16_t)found;                   /* a new board: its first version is no update. Stored with
                                                             the next write; until then each boot of it counts it again,
                                                             in RAM: once */
-        r->ver = ver;
+        r->ver = (uint8_t)i;
+        e->ev |= (uint8_t)found;                         /* (an update: worth a planned power-off's write) */
     }
     r->magic = LIFE_MAGIC;
-    e->ev = 1;
     e->base_wh = e->saved_wh = r->wh;
     e->base_on_s = e->saved_on_s = r->on_s;
+    e->dip_ok = (uint8_t)life_allow(r);
+                                                         /* (round 9 phase B) energy_second's first: a dip in the
+                                                            first second stores the power-up too (the allowance as
+                                                            ever: a flicker of short cycles writes no more than cycles
+                                                            of a few seconds already could) */
     e->lit_ms = now - LIT_FAR;
     budget_init(&e->budget, now, LIFE_BUDGET_CAP, LIFE_REFILL_MS);
 }
@@ -54,7 +73,8 @@ MEASURED void energy_ms(energy_t *e, uint32_t now, uint32_t mv, int32_t ma, uint
 
 uint32_t energy_total_wh(const energy_t *e)
 {
-    return e->base_wh + (e->boot_mwh - e->mwh_seen) / 1000u;   /* (a difference: across boot_mwh's wrap) */
+    uint32_t w = e->base_wh + (e->boot_mwh - e->mwh_seen) / 1000u;   /* (a difference: across boot_mwh's wrap) */
+    return w < e->base_wh ? 0xFFFFFFFFu : w;             /* (round 9 phase B: at the ceiling it stays, never wraps) */
 }
 
 /* a lifetime peak in its unit (rounded): v when higher */
@@ -71,11 +91,16 @@ MEASURED void energy_second(energy_t *e, uint32_t now, uint32_t now_s, uint32_t 
 {
     life_rec_t *r = &e->lt;
     uint32_t d = now - e->lit_ms, k, n = (e->boot_mwh - e->mwh_seen) / 1000u, allow, wh;
-    e->base_wh += n;                                     /* whole Wh carried, the remainder kept */
+    wh = e->base_wh + n;
+    e->base_wh = wh < n ? 0xFFFFFFFFu : wh;              /* whole Wh carried, the remainder kept */
     e->mwh_seen += n * 1000u;
-    r->on_s = e->base_on_s + now_s;
+    k = e->base_on_s + now_s;
+    r->on_s = k < now_s ? 0xFFFFFFFFu : k;               /* (round 9 phase B) the counters' ceiling, 2^32 - 1 (s: ~136
+                                                            years; a hub's merges can bring it near): they stay there,
+                                                            never wrap. The own time then stops counting (the allowance
+                                                            with it); `merged` never grows past it (energy_sync) */
     if (d < 1000u) {
-        r->lit_s++;                                      /* an output was on in the last second */
+        r->lit_s += r->lit_s != 0xFFFFFFFFu;             /* an output was on in the last second */
     } else if (d > LIT_FAR) {
         e->lit_ms = now - LIT_FAR;
     }
@@ -90,20 +115,25 @@ MEASURED void energy_second(energy_t *e, uint32_t now, uint32_t now_s, uint32_t 
     peak(&r->peak_t, temp_c10, 5);                       /* 0.1 C -> 0.5 C (MCUTEMP_NA is never higher) */
     n = r->on_s - e->saved_on_s;                         /* powered since the last write, s */
     wh = energy_total_wh(e) != e->saved_wh;              /* >= 1 Wh new */
-    allow = r->writes < LIFE_RESERVE + r->on_s / LIFE_EARN_S;
-    e->dip_ok = (uint8_t)(allow && (e->ev || wh || n >= LIFE_DIP_S));
-    e->due = (uint8_t)(allow && (e->ev || (wh && e->lit_new) || n >= LIFE_IDLE_S) &&   /* (dark: the logic's own
-                                                                                           Wh wait for a day) */
-                       ((e->lit_new && d >= ENERGY_DARK_MS) || now_s - e->saved_s >= LIFE_SAVE_S));
+    allow = life_allow(r);
+    e->held = (uint8_t)!allow;
+    k = wh || n >= LIFE_DIP_S;                           /* (a dip's own: something to store) */
+    e->dip_ok = (uint8_t)(allow && (e->ev || k)) | (uint8_t)(allow && ((e->ev & 1u) || k)) << 1;
+    e->due = (uint8_t)(allow && ((e->ev & 4u) ||      /* (round 8) a dip's write still pending: no dark wait */
+                                 (((e->ev & e->ev_save) || (wh && e->lit_new) || n >= LIFE_IDLE_S) &&   /* (dark: the
+                                                                         logic's own Wh wait for a day) */
+                                  ((e->lit_new && d >= ENERGY_DARK_MS) || now_s - e->saved_s >= LIFE_SAVE_S))));
 }
 
 MEASURED uint32_t energy_due(energy_t *e, uint32_t now, uint16_t dips, uint32_t admit)
 {
     uint32_t why = e->due;                               /* (ENERGY_DUE_SAVE or none) */
-    if (dips != e->dips) {
-        e->lt.dips += (uint16_t)(dips - e->dips);        /* a new supply dip: the power may be going */
+    if (dips != e->dips || (admit & ENERGY_PLANNED)) {
+        e->lt.dips += (uint16_t)(dips - e->dips);        /* a new supply dip: the power may be going (the planned
+                                                            cut: none counted) */
         e->dips = dips;
-        why = e->dip_ok ? ENERGY_DUE_DIP : ENERGY_DUE_NONE;
+        why = (e->dip_ok & (admit & ENERGY_PLANNED ? 2u : 1u)) ? ENERGY_DUE_DIP : ENERGY_DUE_NONE;
+        e->ev |= (uint8_t)(why << 1);                    /* (round 8) bit 2: pending until stored (energy_saved) */
     }
     if (!(why & admit)) {
         return ENERGY_DUE_NONE;                          /* (none, or not admitted now: it waits, no token used) */
@@ -119,9 +149,109 @@ void energy_pack(energy_t *e)
 {
     life_rec_t *r = &e->lt;
     r->wh = energy_total_wh(e);
-    do {
-        r->writes++;                                     /* (0.6.5: a count skipped when the CRC would read erased) */
-    } while (crc16_erased(r->crc = crc16_ccitt((const uint8_t *)r, LIFE_REC_BYTES - 2u)));
+    r->writes++;
+    while (crc16_erased(r->crc = crc16_ccitt((const uint8_t *)r, LIFE_REC_BYTES - 2u))) {
+        r->lit_s += r->lit_s != 0xFFFFFFFFu ? 1u : 0xFFFFFFFFu;   /* (a CRC that would read erased: one more lit
+                                                            second (at the ceiling one less), not a second count as
+                                                            0.6.5-0.6.9: that took an allowance credit the board's own
+                                                            time could never give back) */
+    }
+}
+
+/* the hub's value's step ahead of own (masked: the wire's width), 0 = none or more than cap */
+uint32_t energy_ver(uint32_t ver)
+{
+    return crc8_smbus((const uint8_t *)&ver, 4u);
+}
+
+/* the hub's value (n bytes at p, big-endian) ahead of own: the step if 0 < d <= cap, else 0; ls_capped set when it is
+ * ahead by more (3 bytes: the wire's 24 bits, modular, ahead below 2^23; 2 / 4: plain, a value below own never (round
+ * 9 phase B: 4 bytes were modular too, so a hub's 5 Wh came out "ahead" of 0xFFFFFFF0), ahead below 2^31) */
+static uint8_t ls_capped;
+
+static NOINLINE uint32_t ls_step(uint32_t own, const uint8_t *p, uint32_t n, uint32_t cap)
+{
+    uint32_t v = 0, k = n, half = n == 3u ? 0x7FFFFFu : 0x7FFFFFFFu;
+    while (k-- != 0u) {
+        v = v << 8 | *p++;
+    }
+    if (n == 3u) {
+        v = (v - own) & 0xFFFFFFu;
+    } else if (v < own) {
+        return 0;
+    } else {
+        v -= own;
+    }
+    if (v > cap) {
+        ls_capped |= v <= half;
+        v = 0;
+    }
+    return v;
+}
+
+/* the room left below the counters' ceiling (2^32 - 1 s), 0.1 h */
+static uint32_t ls_room(uint32_t s, uint32_t cap)
+{
+    s = (0xFFFFFFFFu - s) / 360u;
+    return s < cap ? s : cap;
+}
+
+NOINLINE uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16)
+{
+    /* the counts: their offsets in the record and on the wire (LIFETIME's), wire bytes, applied bit */
+    static const uint8_t cnt[4][4] = {
+        { offsetof(life_rec_t, ups), ULTRA_LT_POWER_UPS, 3u, ULTRA_LS_F_UPS },
+        { offsetof(life_rec_t, dips), ULTRA_LT_DIPS, 3u, ULTRA_LS_F_DIPS },
+        { offsetof(life_rec_t, trips), ULTRA_LT_OVERLOAD_TRIPS, 2u, ULTRA_LS_F_TRIPS },
+        { offsetof(life_rec_t, trips) + 2u, ULTRA_LT_SHORT_TRIPS, 2u, ULTRA_LS_F_TRIPS } };
+    life_rec_t *r = &e->lt;
+    const uint8_t *l = a + ULTRA_LS_LIFETIME;
+    uint32_t m, d, k, ds, cap;
+    if (ultra_get16(a + ULTRA_LS_UID16) != uid16) {
+        return ULTRA_LS_R_UID << 8;
+    }
+    if (a[ULTRA_LS_RECORDS] != (uint8_t)r->writes) {
+        return ULTRA_LS_R_RECORDS << 8;                  /* (the record the hub's counters aren't reconciled with) */
+    }
+    if (e->synced) {
+        return ULTRA_LS_R_ONCE << 8;
+    }
+    ls_capped = 0;
+    k = LIFE_MERGED(r);
+    cap = 0xFFFFFFu - k;
+    d = ls_step(r->on_s / 360u, l + ULTRA_LT_POWERED, 3u, ls_room(r->on_s, cap < LIFE_SYNC_MAX_H10 ? cap :
+                                                                           LIFE_SYNC_MAX_H10));
+                                                         /* (round 9 phase B: and the room below on_s's ceiling, so a
+                                                            merge never wraps it: a hub further ahead, CAPPED) */
+    ds = d * 360u;                                       /* the powered time raised, s */
+    e->base_on_s += ds;
+    e->saved_on_s += ds;                                 /* (merged = stored: no write due for it) */
+    r->on_s += ds;
+    k += d;                                              /* (the allowance: own time only) */
+    r->merged = (uint16_t)k;
+    r->merged_hi = (uint8_t)(k >> 16);
+    m = d != 0u;                                         /* (ULTRA_LS_F_POWERED) */
+    d = ls_step(r->lit_s / 360u, l + ULTRA_LT_LIT, 3u, ls_room(r->lit_s, d + 1u));
+    r->lit_s += d * 360u;
+    m |= (uint32_t)(d != 0u) << 1;                       /* (ULTRA_LS_F_LIT) */
+    cap = ds / LIFE_SYNC_EV_S + LIFE_SYNC_EV_MIN;
+    for (k = 0; k < 4u; k++) {
+        uint8_t *f = (uint8_t *)r + cnt[k][0];
+        if (cnt[k][2] == 3u) {
+            d = ls_step(*(uint32_t *)f, l + cnt[k][1], 3u, cap);
+            *(uint32_t *)f += d;
+        } else {
+            d = ls_step(*(uint16_t *)f, l + cnt[k][1], 2u, cap);
+            *(uint16_t *)f = (uint16_t)(*(uint16_t *)f + d);
+        }
+        m |= d != 0u ? cnt[k][3] : 0u;
+    }
+    d = ls_step(energy_total_wh(e), l + 16u, 4u, (ds + 3600u) / 36u * (LIFE_SYNC_MAX_W / 100u));
+    e->base_wh += d;
+    e->saved_wh += d;
+    m |= (uint32_t)(d != 0u) << 5;                       /* (ULTRA_LS_F_WH) */
+    e->synced = (uint8_t)(m != 0u);
+    return m | (ls_capped ? ULTRA_LS_R_CAPPED : m ? ULTRA_LS_R_APPLIED : ULTRA_LS_R_NOOP) << 8;
 }
 
 void energy_saved(energy_t *e, uint32_t now_s)
@@ -138,7 +268,8 @@ void energy_saved(energy_t *e, uint32_t now_s)
 static int life_valid(const uint8_t *s)
 {
     uint32_t c = ((const life_rec_t *)s)->crc;
-    return s[offsetof(life_rec_t, magic)] == LIFE_MAGIC && !crc16_erased(c) && c == crc16_ccitt(s, LIFE_REC_BYTES - 2u);
+    uint32_t m = s[offsetof(life_rec_t, magic)];
+    return (m == LIFE_MAGIC || m == LIFE_MAGIC_F2) && !crc16_erased(c) && c == crc16_ccitt(s, LIFE_REC_BYTES - 2u);
 }
 
 const pp_desc_t life_pp = { LIFE_REC_BYTES, LIFE_RECS, (uint8_t)offsetof(life_rec_t, writes), 0u, life_valid };

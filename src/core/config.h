@@ -74,6 +74,22 @@ typedef struct {
     uint32_t raw_steps;         /* used when pwm_preset == 0xFF: 1440..65535 */
 } settings_t;
 
+/* (review round 9) the byte settings, one descriptor each (config.c settings_desc), in the console's `settings=`
+ * order: the field, its range, the config-frame command that sets it and the Ultra CONFIG id that overlays it. One
+ * table for settings_sanitize, config_apply, main.c's ultra_overlay and the console's status / keys (five before). */
+typedef struct {
+    uint8_t ofs;                /* offsetof(settings_t, field) */
+    uint8_t lo, hi;             /* its range (settings_sanitize: pwm_preset also takes 0xFF, a raw period) */
+    uint8_t cmd;                /* the CMD_* that sets it, | SETD_NO_CODE: its ACK blinks no value code; 0 = none */
+    uint8_t cfg;                /* the ULTRA_CFG_* that overlays it (entries SETD_OVL .. + SETD_OVL_N - 1); 0 = none */
+} setdesc_t;
+#define SETD_NO_CODE 0x80u
+#define SETD_N       12u        /* the SETD_SHOWN the console shows, in its order, then last_proto */
+#define SETD_SHOWN   11u
+#define SETD_OVL     2u         /* entries 2..8 (dither .. feedback): the fields an Ultra CONFIG overlays */
+#define SETD_OVL_N   7u
+extern const setdesc_t settings_desc[SETD_N];
+
 typedef enum { CFG_NONE = 0, CFG_PENDING, CFG_ACK, CFG_SAME, CFG_NACK, CFG_IDENTIFY } cfg_event_t;
 
 typedef struct {
@@ -117,11 +133,15 @@ uint16_t     crc16_ccitt(const uint8_t *d, uint32_t n);    /* = ultra_crc16 (CRC
 #ifndef MON_EXTRA
 #define MON_EXTRA UPPER_RECORDS
 #endif
+#if UPPER_RECORDS
+int          crc16_erased(uint32_t c);   /* (0.6.10: out of line, six callers) */
+#else
 static inline int crc16_erased(uint32_t c)   /* (0.6.4's layout: 0.6.4's rules, its records read as before) */
 {
     (void)c;
-    return UPPER_RECORDS && (c == 0xFFFFu || c == 0xE339u);
+    return 0;
 }
+#endif
 void         settings_default(settings_t *s);
 /* a record read from flash: every field within the range the firmware relies on (the enums; a raw period of
  * PWM_STEPS_MIN..PWM_STEPS_MAX: pattern_len_for divides by it and sizes the PWM tables with it). A field outside it

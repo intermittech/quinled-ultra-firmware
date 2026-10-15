@@ -25,8 +25,8 @@ uint32_t health_i100(const isense_cal_t *c, uint32_t ch)
     return c->levels == 1u && c->pct[0] ? (uint32_t)c->ma[ch][0] * 100u / c->pct[0] : 0u;
 }
 
-/* the zero (logic + offset) against a reference zero: the dark flag */
-static uint8_t dark(health_t *h, int32_t zero, int32_t ref, uint8_t have_ref)
+/* the zero (logic + offset) against a reference zero: the dark flag (out of line: two callers, ~30 B) */
+static NOINLINE uint8_t dark(health_t *h, int32_t zero, int32_t ref, uint8_t have_ref)
 {
     int32_t d = have_ref ? zero - ref : zero;
     h->dark_ma = (int16_t)(d > 32767 ? 32767 : d < -32768 ? -32768 : d);

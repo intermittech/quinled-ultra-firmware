@@ -16,11 +16,15 @@
  * exactly those edits applied (checked once, the 0.6.7 notes). A console change: CONSOLE_DUMP=<file> writes the
  * transcript; diff it against the previous one, then take the new CRC and length. */
 
-#define CONSOLE_GOLDEN_CRC 0xf1be1b92u      /* 0.6.9, the upper layout's console (M2, D9): 10,549 steps */
-#define CONSOLE_GOLDEN_LEN 13393923u        /* (0.6.7: 0xa37991a9, 11,996,212 B; 0.6.9's transcript equals it with the
+#define CONSOLE_GOLDEN_CRC 0xb3502db3u      /* 0.6.10, the upper layout's console (M2, D9): 10,549 steps */
+#define CONSOLE_GOLDEN_LEN 13393931u        /* (0.6.7: 0xa37991a9, 11,996,212 B; 0.6.9's transcript equals it with the
                                                settings= / save= / calibration_last= / faults= lines and the live
                                                lines' link removed, but for `set loss 3` (now valid: B10) and the
-                                               264 `get`s after it showing loss=3; checked once, the 0.6.9 notes) */
+                                               264 `get`s after it showing loss=3; checked once, the 0.6.9 notes.
+                                               0.6.10 (round 9 phase B, R9-B1): 0.6.9's (0xf1be1b92, 13,393,923 B)
+                                               but for two random records' lifetime= lines, whose energy (the
+                                               record's Wh + the boot's) passes 2^32 - 1 Wh: 4294967.30 kWh (the
+                                               ceiling) instead of the wrapped 99.71 / 2486.41; checked once) */
 
 static uint32_t ccz_crc = 0xFFFFFFFFu, ccz_len, ccz_steps;
 static settings_t ccz_eff;                 /* (0.6.9) the settings in effect: cli_set, some overridden */

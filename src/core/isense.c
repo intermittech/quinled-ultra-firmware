@@ -291,7 +291,7 @@ static uint32_t retry_ms(const isense_t *s)
     return (s->retry_s != 0u ? s->retry_s : 1u) * 1000u;   /* (0.6.9, B7: the policy's interval) */
 }
 
-void isense_rearm(isense_t *s)
+NOINLINE void isense_rearm(isense_t *s)   /* (out of line: two callers, each per frame value / command) */
 {
     if (s->latched) {
         s->latched = 0;

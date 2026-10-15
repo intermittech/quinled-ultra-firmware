@@ -178,4 +178,30 @@ static void test_pwrev(void)
         run_cli(&c, "status\r");
         CHECK(strstr(cli_out, "power_state=limiting, tripped (retry in 2 s)\r\n") != NULL, "status: tripped");
     }
+
+    /* (0.6.10) a trip's retry starts scaled down (isense trip_scale): that reduction is the trip's. LIMITING shows,
+     * no limit event (0.6.9: one per retry, its current measured while the outputs were off); 2 s after the last
+     * tripped ms a reduction starts one again; an overload that comes back held at the limit: its trip only */
+    pwrev_init(&p, 0);
+    pw_run(&p, 0, 1000, pw_in(0, 0, ULTRA_PW_CAUSE_SHORT, 0, 12000));      /* 1 s off */
+    pw_run(&p, 1000, 1001, pw_in(1, 0, 0, 40, 0));                         /* the retry, scaled */
+    pw_run(&p, 1001, 1300, pw_in(1, 0, 0, 5000, 0));
+    CHECK(p.short_trips == 1u && p.limit_events == 0u && (pwrev_state(&p) & ULTRA_ST_LIMITING) &&
+          pwrev_latched(&p) == ULTRA_PW_EV_SHORT, "a short's retry, scaled down: LIMITING, no limit event (%u)",
+          p.limit_events);
+    for (i = 0; i < 9u; i++) {                                             /* a short that stays: 9 retries more */
+        pw_run(&p, 1300 + i * 1000u, 2000 + i * 1000u, pw_in(0, 0, ULTRA_PW_CAUSE_SHORT, 0, 12000));
+        pw_run(&p, 2000 + i * 1000u, 2300 + i * 1000u, pw_in(1, 0, 0, 40, 0));
+    }
+    CHECK(p.short_trips == 10u && p.limit_events == 0u, "10 trips and their retries: no limit event (%u)",
+          p.limit_events);
+    pw_run(&p, 10300, 12400, pw_in(0, 0, 0, 3000, 0));                     /* 2.1 s quiet */
+    pw_run(&p, 12400, 12500, pw_in(1, 0, 0, 9100, 0));
+    CHECK(p.limit_events == 1u && p.event_ma == 9100u, "2 s after the trip: a reduction is a limit event (%u)",
+          p.limit_events);
+    pw_run(&p, 12500, 15000, pw_in(0, 0, 0, 3000, 0));
+    pw_run(&p, 15000, 15200, pw_in(0, 0, ULTRA_PW_CAUSE_OVERLOAD, 0, 10600));
+    pw_run(&p, 15200, 25000, pw_in(1, 0, 0, 6000, 0));                     /* back, held at the limit */
+    CHECK(p.ovl_trips == 1u && p.limit_events == 1u && (pwrev_state(&p) & ULTRA_ST_LIMITING),
+          "an overload back at the limit: its trip, LIMITING, no limit event (%u)", p.limit_events);
 }

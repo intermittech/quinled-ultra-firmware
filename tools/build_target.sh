@@ -30,7 +30,7 @@ if [ "$XW" = 1 ]; then
   bash "$FW/tools/toolchain/check_wch_gcc.sh" "$WCH_GCC_DIR" || exit 2
   GCC="$WCH_GCC_DIR/bin/riscv32-wch-elf-gcc"
 fi
-PFX="${GCC%gcc}"
+G="${GCC%.exe}"; PFX="${G%gcc}"      # (a RISCV_GCC ending in .exe, as the release workflow sets it)
 # -mtune=size (0.6.4, fable-flash): the size cost model for every file and the LTO link (-292 B on the 0.6.4 tree; a
 # tune on some files only stops LTO's inlining across them). Measured alone: +1..+4 cycles on 8 render rows (the render
 # cache then took 230-2,000 off each), the SET slot -48, the flicker render -151; the rest the same.
@@ -112,9 +112,14 @@ if [ "${PERF:-0}" != 0 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DPERF_BUILD=$PERF"; 
 # (the SET +14 %), -fno-move-loop-invariants -168 B (the ring copies +216 cycles), uninlined-function-insns=0 / 1 -172 B
 # / with gcse + sra -100 B (the frame end +31 / the first edges +21 cycles), max-grow-copy-bb-insns=0 -56 B (the capture
 # decode +5.5 %), -fno-if-conversion2 (with gcse + sra +44 B), gcse-unrestricted-cost=1 (= 0), 2 (= 3).
+# Round 9 (code size, the XW=0 build; both compilers, 4 images): -Oz = -Os to the byte (GCC 15, globally and on the
+# cold files alone); crossjumping is at its most (-Os sets min-crossjump-insns 1): 2 / 3 / 4 / 5 / 6 / 8 +84 / +144 /
+# +156 / +156 / +184 / +216 B, -fno-crossjumping +384 B; max-tail-merge-comparisons 20 / 50, max-tail-merge-iterations
+# 1 / 4, max-crossjump-edges 1000: 0 B; -fno-reorder-blocks +112 B; -freorder-blocks-algorithm=simple -12 B (only
+# ws_decode.c's -O2 changes: the WS2915 decode +0.9 %, the Ultra capture +1.8 %, the WS2805 / header rows faster: out).
 OPT="-Os -g -fno-partial-inlining -malign-data=natural --param=max-inline-insns-auto=5 --param=max-hoist-depth=0 --param=max-grow-copy-bb-insns=3 --param=gcse-unrestricted-cost=0 -fno-tree-sra -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
 CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -DUPD_CRC_ULTRA -I$FW/vendor/wch -I$FW/src/hal -I$FW/src -I$OUT/gen $EXTRA_CFLAGS"
-SRC="$FW/src/app/main.c $FW/src/hal/hw.c"
+SRC="$FW/src/app/main.c $FW/src/hal/hw.c $FW/src/hal/hw_cold.c $FW/src/hal/mem.c"
 for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
 # GCC 15 turns bitwise CRC loops into 256-entry tables (-foptimize-crc). The firmware update's CRCs (upd_app.c) run
 # once per update frame: built without them (1.8 KB). The CRC-8 / CRC-16 of ultra_protocol.h use nibble tables, which it
@@ -129,8 +134,9 @@ rm -f "$OUT/nocrc_probe.o"
 "$GCC" $CFLAGS -x assembler-with-cpp -c "$FW/src/hal/isr.S" -o "$OUT/isr.o"
 OBJS="$OUT/startup.o $OUT/isr.o"
 # LTO: each file's own flags below (-O2, -msave-restore, -fno-optimize-crc) stay with its functions; the link
-# compiles the whole program once more with $OPT (warnings included). div64.c stays outside: it defines libgcc's
-# __udivdi3 / __divdi3, which the compiler calls only after LTO has run. The asm (startup, isr.S) is never LTO.
+# compiles the whole program once more with $OPT (warnings included). div64.c and mem.c stay outside: they define
+# helpers the compiler calls after LTO. mem.c uses -O2 for the word-copy/fill loops and disables builtin / loop
+# recognition to prevent recursion into itself. The asm (startup, isr.S) is never LTO.
 LTOFLAGS=""; LDLTO=""
 if [ "${LTO:-1}" = 1 ]; then LTOFLAGS="-flto"; LDLTO="$ARCH $OPT -flto -flto-partition=none"; fi
 for s in $SRC; do
@@ -141,10 +147,15 @@ for s in $SRC; do
   case "$s" in */cli.c|*/config.c|*/store.c|*/scene.c|*/calstore.c|*/upd_app.c|*/ack.c|*/climit.c|*/mcutemp.c) f="$f $COLD" ;; esac
   case "$s" in */pwrev.c|*/fwver.c|*/health.c|*/vdip.c) f="$f $COLD" ;; esac   # also cold: every ms at most / boot
   case "$s" in */pagepair.c|*/vsense.c) f="$f $COLD" ;; esac   # 0.6.5: -56 B, no row slower (boot / flash ops; per ms)
+  case "$s" in */hw_cold.c) f="$f $COLD" ;; esac   # (round 9) hw.c's boot / flash half; the ISRs and hot helpers stay in hw.c
   # (flashrec.c not cold: +244 B, LTO inlines the stores into their callers; 0.6.5 re-measured: dark / ocled / energy /
   # sstart / smooth / gamma +8..+216 B, presets / ultra_update / rxpower 0)
   # (energy.c not since 0.6.3: LTO doesn't inline across -msave-restore, and its small calls into main / hw.c cost more)
-  case "$s" in */div64.c) ;; *) f="$f $LTOFLAGS" ;; esac
+  case "$s" in
+    */mem.c) f="$f -O2 -fno-tree-loop-distribute-patterns -fno-builtin" ;;
+    */div64.c) ;;
+    *) f="$f $LTOFLAGS" ;;
+  esac
   "$GCC" $CFLAGS $f -c "$s" -o "$o"
   OBJS="$OBJS $o"
 done
@@ -152,8 +163,29 @@ LDSCRIPT="${LDSCRIPT:-$FW/vendor/wch/Link.ld}"
 if [ "$UPPER_RECORDS" = 0 ]; then
   case "$LDSCRIPT" in */Link.ld|*/Link_app.ld) LDSCRIPT="${LDSCRIPT%.ld}_lower.ld" ;; esac
 fi
-if ! "$GCC" $LDARCH $LDLTO $STACK_LD -nostartfiles -Wl,--gc-sections -Wl,-Map="$OUT/fw.map" -L"$FW/vendor/wch" \
-  -T "$LDSCRIPT" $OBJS -o "$OUT/fw.elf" -lgcc; then
+# (round 9) the code's order: two links in the input order, without relaxation (every call 8 bytes) and with it,
+# then the final one in the call-graph order computed from them (tools/link_order.py: more calls / tail jumps within
+# the 2-byte c.jal / c.j's +-2 KB; the code itself the same). ORDER=0: the input order. The first links may overflow
+# the slot (--noinhibit-exec: their maps and listings are all they give).
+# Pack aligned inputs first (--sort-section=alignment sorts within each input statement: the order's one-section
+# lines stay as they are); Link_sections.ld keeps startup and SRAM handler order with SORT_NONE.
+link() { m="$1"; e="$2"; shift 2; "$GCC" $LDARCH $LDLTO $STACK_LD -nostartfiles -Wl,--gc-sections \
+  -Wl,--sort-section=alignment -Wl,-Map="$OUT/$m" -L"$OUT" -L"$FW/vendor/wch" -T "$LDSCRIPT" $OBJS -o "$OUT/$e" -lgcc $LINK_EXTRA "$@"; }
+cp "$FW/vendor/wch/text_order.ld" "$OUT/text_order.ld"
+if [ "${ORDER:-1}" = 1 ]; then
+  link fw.norelax.map fw.norelax.elf -Wl,--no-relax -Wl,--noinhibit-exec 2>/dev/null
+  link fw.input.map fw.input.elf -Wl,--noinhibit-exec 2>/dev/null
+  "${PFX}objdump" -d "$OUT/fw.norelax.elf" > "$OUT/fw.norelax.lst"
+  "${PFX}objdump" -d "$OUT/fw.input.elf" > "$OUT/fw.input.lst"
+  if ! "${PYTHON:-python}" "$FW/tools/link_order.py" "$OUT/fw.norelax.map" "$OUT/fw.norelax.lst" \
+      "$OUT/fw.input.map" "$OUT/fw.input.lst" > "$OUT/text_order.new"; then
+    link fw.map fw.elf                   # (the link's own error, when that is what stopped it)
+    echo "error: tools/link_order.py failed (the code's order; ORDER=0 builds in the input order)" >&2
+    exit 1
+  fi
+  mv "$OUT/text_order.new" "$OUT/text_order.ld"
+fi
+if ! link fw.map fw.elf; then
   if [ "$XW" != 1 ]; then                # (0.6.9) the XW=0 image may no longer fit the slot
     echo "error: the link failed with XW=0. If the region FLASH overflowed: this image needs WCH GCC's XW (XW=1," \
          "the default; tools/toolchain/README.md). The README's sizes say which images fit without it (0.6.9)." >&2
