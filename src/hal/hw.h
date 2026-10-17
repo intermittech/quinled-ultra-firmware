@@ -164,6 +164,16 @@ void     rc_hw_dir(uint32_t mode);
  * interrupt, the line released after them
  * (n 0: the turnaround check, the line released at once) */
 uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr);
+#if BOARD == BOARD_DP_UD
+/* (BOARD 3: one transceiver, DE + /RE tied on PB14, RO high-Z while DE is high: nothing to read back). rc_hw_dir:
+ * RC_DIR_ANSWER = BLANK_N LOW (PA1), then DE high (the line HIGH: USART3 idles high on PB10); FORWARD / QUIET = a
+ * burst still running cut, DE low (BLANK_N stays: the window logic raises it, hw_dline.h dl_hw_blank). rc_hw_send:
+ * after RC_PREAMBLE_CYC of HIGH a 0xFF and the n bytes by interrupt, DE low at the last stop bit (TC); returns 0 (no
+ * check). rc_hw_busy: the burst still runs (DE high) */
+uint32_t rc_hw_busy(void);
+void rc_hw_answer_local(void);                 /* the answer while a local effect runs: DE high, BLANK_N left alone (udfx.h) */
+void dl_tx_done(void);                         /* main_ud.c: the burst's TC (DE low), from rc_uart_isr */
+#endif
 #endif
 /* UART: TX by DMA from a buffer (non-blocking unless the buffer is full); the full console's RX by DMA into a ring */
 #if CONSOLE_FULL

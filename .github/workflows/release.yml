@@ -66,6 +66,11 @@ jobs:
           cmd //c "test\\build_host.cmd"
           cmd //c "bootloader\\test\\build_bl_test.cmd"
 
+      - name: Size and cycle gate, the record corpus (tools/size_gate.py)
+        run: |
+          pip install numpy
+          python tools/size_gate.py --measure tools/measure_baseline.txt --corpus
+
       - name: Build (bootloader, app twice: reproducible, images, factory hex)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"

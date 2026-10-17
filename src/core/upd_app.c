@@ -48,8 +48,8 @@ void upd_app_init(upd_app_t *u, const upd_app_info_t *info)
 
 static uint32_t ping_check(upd_app_t *u)
 {
-    if (u->ping_seen && u->normal_seen && !u->confirm_done && u->info.desc_ok && u->info.bl_version != 0u &&
-        u->info.st_next < UPD_ST_COUNT) {
+    if ((u->auto_ok || (u->ping_seen && u->normal_seen)) && !u->confirm_done && u->info.desc_ok &&
+        u->info.bl_version != 0u && u->info.st_next < UPD_ST_COUNT) {
         u->confirm_done = 1;               /* asked once; upd_app_confirmed(0) re-arms it */
         return UPD_APP_CONFIRM;
     }
@@ -137,6 +137,11 @@ uint32_t upd_app_frame(upd_app_t *u, const uint8_t *f, uint32_t now_ms)
     }
     case UPD_END:
     case UPD_ABORT:
+        if (type == UPD_ABORT && session == u->pending_session) {
+            u->have_half = 0;              /* the cancelled session's half descriptor (and its FORCE) never completes:
+                                              a later ANNOUNCE starts a new pair */
+            u->force = 0;
+        }
         if (u->decided && session == u->session && u->result != 0u) {
             uint32_t r = type == UPD_END ? u->result : UPD_APP_NONE;
             u->result = 0;

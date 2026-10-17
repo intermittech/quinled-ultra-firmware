@@ -5,6 +5,14 @@
 #include "bl_rx.h"
 
 #define RUN_SAT 0x40000000u
+/* (the Ultra-Digital receiver, hardware id 3) on a pixel port the hub sends every Ultra frame behind a marker, a HIGH of
+ * 15-40 us (docs/ultradigital-firmware.md section 4): a high run over high_max before a frame's first bit is that
+ * marker, not a bit and not a bad frame */
+#if defined(BL_HW_ID) && BL_HW_ID == 3
+#define BL_RX_MARKER 1u
+#else
+#define BL_RX_MARKER 0u
+#endif
 
 /* leading zeros of a byte (8 for 0), as in core/ws_decode.c */
 static const uint8_t clz8[256] = {
@@ -130,7 +138,7 @@ int bl_rx_feed(bl_rx_t *r, const uint16_t *w, uint32_t n, bl_frame_t *out)
             run += j - last;                      /* the old level lasted up to sample j */
             last = j;
             if (level) {                          /* falling edge: one bit */
-                if (r->synced) {
+                if (r->synced && !(BL_RX_MARKER && nbits == 0u && run > hmax)) {
                     if (run > hmax) {
                         r->bad = 1;
                     }

@@ -82,8 +82,14 @@ e.mmio[DMA1_INTFR] = 0x00000000
 e.call("hw_dma_check")
 check(counts()[2:] == c[2:], "no flags: nothing counted")
 
-src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "app", "main.c"),
-           encoding="utf-8").read()
+def unity(path):
+    """the file's text with each local #include "x.c" in place (round 12: src/app/main.c's units)"""
+    with open(path, encoding="utf-8") as f:
+        return re.sub(r'^#include "(\w+\.c)"$', lambda m: unity(os.path.join(os.path.dirname(path), m.group(1))),
+                      f.read(), flags=re.M)
+
+
+src = unity(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "app", "main.c"))
 m = re.search(r"static void temp_service\(void\)\s*\{(.*?)\n\}", src, re.S)
 check(m is not None and "hw_dma_check();" in m.group(1), "main.c: temp_service calls hw_dma_check (once a second)")
 check("stat.hwd = hw_diag;" in src, "main.c: the status points at hw_diag")

@@ -1096,20 +1096,14 @@ static int regress_fx(void)
     return g_fail ? 1 : 0;
 }
 
-/* (0.6.8) `robust_fw wrp <open | protected | vdd | nodesc | rdp | fail | badob | verified | verifybad>`: the
- * bootloader's write protection at the boot (main.c boot_protect). open: the option bytes rewritten once (WRPR0 &
- * 0xFC, RDPR 0xA5 and the rest kept), then the reset; protected / vdd (deferred) / nodesc (no valid bootloader info
- * and descriptor) / rdp (read-protected): not touched, the boot goes on; fail (the write refused): no reset, the boot
- * goes on. 0.6.9 (R7-06): every case: the option bytes read once, before hw_init; badob (the snapshot not to be
- * trusted): nothing written, the event, D9's fault code; verified / verifybad: the boot after the rewrite's reset
- * (prot_chk in .noinit, the RAM kept): the options as written (the event "bootloader protected"), or WRPR2 not as
- * written (the event, D9's fault code); nothing written either way */
+/* Round 11: the app never writes option bytes, regardless of WPR/VDD/descriptor/RDPR. Bootloader
+ * provisioning and read-back live in bootloader/test/test_bl_r11.c. These cases retain the app's event and
+ * D9 reports from the hand-over, and guard against accidentally restoring app-side provisioning. */
 static int wrp_case(const char *c)
 {
-    static const uint16_t ob0[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFF, 0xFF, 0xFF, 0xFF };
     static const uint16_t obw[8] = { 0xA5, 0x3F, 0x12, 0x34, 0xFC, 0xFF, 0xFF, 0xFF };
     const int verify = !strncmp(c, "verif", 5);
-    const int open = strcmp(c, "protected") != 0 && !verify, want_write = !strcmp(c, "open") || !strcmp(c, "fail");
+    const int open = strcmp(c, "protected") != 0 && !verify;
     uint32_t t, k, ev_ok = 0, ev_fail = 0, ev_bad = 0;
     g_seed = 0x5EEDull;
     rs = 0x7654321ull;
@@ -1131,14 +1125,21 @@ static int wrp_case(const char *c)
         sim_ob[0] = 0xFF;
     }
     sim_ob_bad = !strcmp(c, "badob");
-    if (verify) {                                        /* the boot after boot_protect's reset */
+    if (verify) {                                        /* the app receiving the bootloader's read-back report */
         memcpy(sim_ob, obw, sizeof obw);
         if (!strcmp(c, "verifybad")) {
             sim_ob[6] = 0x7F;                            /* WRPR2: not as written */
         }
         bcrumb.magic = BC_MAGIC;                         /* (a reset: the RAM kept) */
-        prot_chk = PROT_MAGIC | crc16_ccitt((const uint8_t *)obw, sizeof obw);
+
     }
+    HO->reserved = !strcmp(c, "verified") ? BL_PROT_OK :
+                   !strcmp(c, "verifybad") ? BL_PROT_FAIL : !strcmp(c, "badob") ? BL_PROT_BAD : 0u;
+    if (!strcmp(c, "verifybad")) {
+        HO->result = UPD_RES_UPDATED;                    /* protection fault must outrank the update ACK */
+        HO->result_version = 0x000610FFu;
+    }
+    upd_ho_seal(HO);
     fib_main = ConvertThreadToFiber(0);
     fib_fw = CreateFiber(1u << 20, fw_entry, 0);
     SwitchToFiber(fib_fw);                               /* the boot */
@@ -1156,22 +1157,15 @@ static int wrp_case(const char *c)
            "fail %u unreadable %u; D9 %u\n", c, sim_ob_writes, sim_reset, sim_ob[4], sim_ob[0], sim_ob_reads,
            sim_ob_late, ev_ok, ev_fail, ev_bad, ack.active && ack.led_only);
     CHECK(!sim_crash, "wrp %s: no exception", c);
-    CHECK(sim_ob_reads == 1u && sim_ob_late == 0u, "wrp %s: the option bytes read once, before hw_init (R7-06)", c);
+    CHECK(sim_ob_reads == 0u && sim_ob_late == 0u, "wrp %s: options owned by bootloader", c);
     CHECK(ev_bad == (uint32_t)!strcmp(c, "badob") && ev_ok == (uint32_t)!strcmp(c, "verified") &&
           ev_fail == (uint32_t)!strcmp(c, "verifybad"), "wrp %s: the events (ok %u, fail %u, unreadable %u)", c, ev_ok,
           ev_fail, ev_bad);
     if (!strcmp(c, "badob") || !strcmp(c, "verifybad")) {
         CHECK(ack.active && ack.led_only, "wrp %s: D9's fault code", c);
     }
-    CHECK(sim_ob_writes == (uint32_t)want_write, "wrp %s: the option bytes written %u time(s)", c, sim_ob_writes);
-    if (!strcmp(c, "open")) {
-        CHECK(sim_reset && sim_ob[4] == 0xFCu && sim_ob[0] == 0xA5u && sim_ob[1] == ob0[1] && sim_ob[2] == ob0[2] &&
-              sim_ob[3] == ob0[3] && sim_ob[5] == 0xFFu && sim_ob[6] == 0xFFu && sim_ob[7] == 0xFFu,
-              "wrp open: WRPR0 0xFC, RDPR 0xA5, USER / DATA / WRPR1-3 kept, then the reset");
-    } else {
-        CHECK(!sim_reset && sim_ob[4] == (verify ? 0xFCu : 0xFFu), "wrp %s: no reset, WRPR0 untouched (the boot "
-              "goes on)", c);
-    }
+    CHECK(sim_ob_writes == 0u && !sim_reset, "wrp %s: app never provisions or resets for WRPR", c);
+    CHECK(HO->reserved == 0u, "wrp %s: protection report consumed once", c);
     printf("wrp %s: %s (%d failures)\n", c, g_fail ? "FAILED" : "passed", g_fail);
     return g_fail ? 1 : 0;
 }

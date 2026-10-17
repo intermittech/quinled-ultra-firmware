@@ -12,6 +12,10 @@
  *    Not for this board / not newer -> stay transparent and show "already active" / NACK at the session's END.
  *  - PING: a freshly installed app (status not CONFIRMED) that has also seen normal Ultra frames since boot
  *    confirms itself -> UPD_APP_CONFIRM: main.c appends UPD_ST_CONFIRMED to the descriptor page's status records.
+ *  - (round 11, B4) A line without PINGs (WLED, the sender library): main.c sets auto_ok once the app has run
+ *    UPD_APP_AUTO_S with frames of any protocol decoded and this boot wasn't a watchdog reset; it confirms then as at
+ *    a PING (and tries again every ms while the write isn't admitted), so the bootloader stops appending a TRIAL
+ *    record at every boot.
  *  - Back to normal: at the first normal Ultra header, or UPD_APP_IDLE_MS without UPD frames.
  * Without a bootloader (a standalone build: info.bl_version 0) it only forwards; nothing is taken or confirmed. */
 #ifndef UPD_APP_H
@@ -22,6 +26,8 @@
 
 #define UPD_APP_ENTER_RUN  2u          /* UPD headers in a row before going transparent */
 #define UPD_APP_IDLE_MS    2000u       /* transparent ends this long after the last UPD frame */
+#define UPD_APP_AUTO_S     60u         /* (round 11, B4) uptime before a trial image confirms itself without a PING */
+#define UPD_APP_AUTO_FRAMES 100u       /* ... with at least this many frames decoded (any protocol) */
 
 typedef struct {
     uint8_t  hw_id, hw_rev, bl_version;   /* the bootloader's info (UPD_BL_INFO); bl_version 0 = no bootloader */
@@ -54,6 +60,7 @@ typedef struct {
     uint8_t  result;                      /* UPD_APP_SHOW_* for the END of `session`, 0 = shown / none */
     uint32_t last_upd_ms;
     uint32_t sessions_seen, takes, frames;   /* statistics */
+    uint8_t  auto_ok;                     /* (round 11, B4) main.c: running fine without a PING, confirm anyway */
 } upd_app_t;
 
 void upd_app_init(upd_app_t *u, const upd_app_info_t *info);
@@ -63,9 +70,16 @@ void upd_app_frame_end(upd_app_t *u, uint8_t ultra_header, uint8_t flags, uint32
 uint32_t upd_app_frame(upd_app_t *u, const uint8_t *frame, uint32_t now_ms);
 /* every ms: the transparent timeout; returns an UPD_APP_* action (a skipped session's result if END was missed) */
 uint32_t upd_app_poll(upd_app_t *u, uint32_t now_ms);
-/* main.c wrote the CONFIRMED record (ok = 1) or could not (0: tried again at the next PING) */
+/* main.c wrote the CONFIRMED record (ok = 1) or could not (0: tried again at the next PING, or with auto_ok the next
+ * upd_app_poll) */
 void upd_app_confirmed(upd_app_t *u, int ok);
 static inline int upd_app_transparent(const upd_app_t *u) { return u->transparent; }
+/* (round 11, B2) behind a bootloader of another hardware id (an image for another board, flashed over SWD): 1 = the
+ * app keeps its outputs dark (main.c) or its delay line off with the line released (main_ud.c, BOARD 3) */
+static inline int upd_app_wrong_hw(const upd_app_info_t *info, uint32_t hw_id)
+{
+    return info->bl_version != 0u && info->hw_id != hw_id;
+}
 
 /* read the descriptor page (64 + 192 bytes) and the bootloader info (16 bytes) into *info */
 void upd_app_read_info(upd_app_info_t *info, const uint8_t *desc_page, const uint8_t *bl_info);

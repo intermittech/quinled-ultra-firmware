@@ -11,10 +11,13 @@
 
 extern uint16_t hw_ring[HW_RING_WORDS];
 
+#if BL_HW_ID == 3
+void hw_blank_early(void);              /* the Ultra-Digital receiver: BLANK_N LOW first (bl_hw.c) */
+#endif
 uint32_t hw_reset_flags_take(void);    /* RCC->RSTSCKR, then cleared (works at any clock) */
 void hw_crc_on(void);                  /* CRC unit clock (also used by the fast boot path at 8 MHz) */
 void hw_crc_off(void);                 /* back to the reset state before a jump */
-void hw_full_init(void);               /* 144 MHz, GPIO, SysTick, IWDG, PVD, SPI sampler, TIM2 gate, feedback PWM, UART */
+void hw_full_init(void);               /* 144 MHz, GPIO, SysTick, IWDG kick, PVD, SPI, TIM2 gate, feedback PWM, UART */
 /* set by every flash operation (HCLK / 2 meanwhile: the samples of that time are useless); the caller clears it */
 extern volatile uint8_t hw_flash_stall;
 uint32_t hw_ticks(void);               /* SysTick low word (144 per us) */

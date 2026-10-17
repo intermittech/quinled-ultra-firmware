@@ -10,8 +10,9 @@ CH32V203) in the QuinLED dig2analog+ form factor. On the data line it works in o
 
 | Board | Firmware | |
 |---|---|---|
-| QuinLED dig2analog-ultra-5ch rev 0.4 (hardware 1, board revision 3) | release images `-rev04`, firmware 0.5.0 and later | First prototypes |
-| QuinLED Diff-Power ultra receiver (hardware 2) | — | Planned |
+| QuinLED Dig2Analog-Ultra-5ch rev 0.4 (hardware 1, board revision 3) | release images `-rev04` | First prototypes |
+| QuinLED Diff-Power Ultra-Analog receiver (hardware 2) | `BOARD=2` builds | In development; no hardware yet |
+| QuinLED Diff-Power Ultra-Digital receiver (hardware 3) | `BOARD=3` builds | In development; no hardware yet |
 
 An image for one board type or revision never installs on another. Pins: [Pin map](https://github.com/intermittech/quinled-ultra-firmware/wiki/Pin-Map).
 
@@ -55,13 +56,14 @@ See the **[wiki](https://github.com/intermittech/quinled-ultra-firmware/wiki)**:
 | [Home](https://github.com/intermittech/quinled-ultra-firmware/wiki) | What the firmware does, supported boards |
 | [Updating over the data line](https://github.com/intermittech/quinled-ultra-firmware/wiki/Updating-Over-The-Data-Line) | The ESPHome update entity, channels, blink codes, recovery |
 | [WS modes and config frames](https://github.com/intermittech/quinled-ultra-firmware/wiki/WS-Modes-And-Config-Frames) | WS2805 / WS2915 emulation, board settings from the data line, WLED |
-| [Console](https://github.com/intermittech/quinled-ultra-firmware/wiki/Console) | The UART console: status, settings |
+| [PWM and dithering](https://github.com/intermittech/quinled-ultra-firmware/wiki/PWM-And-Dithering) | The PWM presets, dithering, the dim floor, stagger and spread spectrum |
+| [Console](https://github.com/intermittech/quinled-ultra-firmware/wiki/Console) | The UART console: the live line, [every status field](https://github.com/intermittech/quinled-ultra-firmware/wiki/Console-Status), the bench build's [commands and setting keys](https://github.com/intermittech/quinled-ultra-firmware/wiki/Console-Full) |
 | [Ultra protocol](https://github.com/intermittech/quinled-ultra-firmware/wiki/Ultra-Protocol) | Summary; the full specification is in [quinled-ultra-protocol](https://github.com/intermittech/quinled-ultra-protocol) |
 | [Current sense](https://github.com/intermittech/quinled-ultra-firmware/wiki/Current-Sense) | Board current limit, short protection, calibration, the D9 overcurrent signal; local on the board, not reported back |
 | [Pin map](https://github.com/intermittech/quinled-ultra-firmware/wiki/Pin-Map) | The rev 0.4 pins, the voltage channels, hardware ids and revisions |
 | [Test jig](https://github.com/intermittech/quinled-ultra-firmware/wiki/Test-Jig) | Ground TP9: every channel fades in turn, the currents on the console (production check) |
 | [Building](https://github.com/intermittech/quinled-ultra-firmware/wiki/Building) · [Flashing over SWD](https://github.com/intermittech/quinled-ultra-firmware/wiki/Flashing-Over-SWD) | For developers |
-| [Development and tests](https://github.com/intermittech/quinled-ultra-firmware/wiki/Development-And-Tests) · [Bench plan](https://github.com/intermittech/quinled-ultra-firmware/wiki/Bench-Plan) | Layout, host tests, measurements, what still needs hardware |
+| [Development and tests](https://github.com/intermittech/quinled-ultra-firmware/wiki/Development-And-Tests) · [Bench plan](https://github.com/intermittech/quinled-ultra-firmware/wiki/Bench-Plan) | Layout, [how it works](https://github.com/intermittech/quinled-ultra-firmware/wiki/How-It-Works), [tests](https://github.com/intermittech/quinled-ultra-firmware/wiki/Tests) and their results, [measurements](https://github.com/intermittech/quinled-ultra-firmware/wiki/Measurements), what still needs hardware |
 | [Releases and signing](https://github.com/intermittech/quinled-ultra-firmware/wiki/Releases-And-Signing) | For maintainers |
 
 ## Status

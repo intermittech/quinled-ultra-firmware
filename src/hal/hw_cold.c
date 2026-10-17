@@ -19,6 +19,29 @@
 #define PIN_LO   0x40u                                   /* ODR 0 first (BSHR reset) */
 #define PIN_CLR  0x80u                                   /* ODR 0 first (BCR) */
 #define PIN(port, pin, odr, cfg) ((uint16_t)((pin) | (port) | (odr) | ((cfg) << 8)))
+#if BOARD == BOARD_DP_UD
+/* the Ultra-Digital receiver (board.h): the four that steer the strip and the line first (direct, the strip line held
+ * LOW, receive, MOSI LOW: the bootloader of hardware id 3 set BLANK_N LOW at reset already; core/dline.c releases it at
+ * the first quiet gap, with the mux delayed: polls never show on the strip); PB10 (USART3_TX): rc_hw_init; PA9 stays as
+ * reset left it */
+static const uint16_t pin_tab[] = {
+    PIN(0, 10, PIN_CLR, CFG_OUT_PP),                     /* PA10 MUX_SEL: direct */
+    PIN(0, 1, PIN_CLR, CFG_OUT_PP),                      /* PA1 BLANK_N: LOW (blank) until dline's BOOT ends */
+    PIN(PIN_B, 14, PIN_CLR, CFG_OUT_PP),                 /* PB14 DE + /RE: receive */
+    PIN(0, 7, PIN_CLR, CFG_OUT_PP),                      /* PA7 SPI1_MOSI as a GPIO LOW until the SPI runs (hw_dline.c) */
+    PIN(0, 6, 0, CFG_IN_FLOAT),                          /* PA6 RS485_RO: SPI1_MISO + TIM3_CH1 */
+    PIN(0, 5, 0, CFG_AF_PP),                             /* PA5 SPI1_SCK, internal only (pad not connected) */
+    PIN(0, 0, 0, CFG_ANALOG),                            /* PA0 V_B, PA4 the bus, PB0 the bus current */
+    PIN(0, 4, 0, CFG_ANALOG),
+    PIN(PIN_B, 0, 0, CFG_ANALOG),
+    PIN(0, 2, 0, CFG_AF_PP),                             /* PA2 the console's TX */
+    PIN(0, 3, PIN_HI, CFG_IN_PULL),                      /* PA3 TP6, the test jig's pad: pull-up */
+    PIN(PIN_B, 15, PIN_LO, CFG_OUT_PP),                  /* PB15 the status LED, off */
+    PIN(PIN_B, 11, 0, CFG_IN_FLOAT),                     /* PB11 USART3_RX on RO: a spare input (RO drives it) */
+    PIN(0, 8, PIN_CLR, CFG_IN_PULL),                     /* PA8 / PB1 spare: pull-down */
+    PIN(PIN_B, 1, PIN_CLR, CFG_IN_PULL),
+};
+#else
 static const uint16_t pin_tab[] = {
     PIN(0, 0, 0, CFG_ANALOG),                            /* PA0: the spare input on TP8 (receiver: V_B) */
     PIN(0, 6, 0, CFG_IN_FLOAT),                          /* PA6: DIN */
@@ -47,6 +70,7 @@ static const uint16_t pin_tab[] = {
     PIN(PIN_B, 0, 0, CFG_AF_PP),                         /* PB0 / PB1: PWM W2 / W1 */
     PIN(PIN_B, 1, 0, CFG_AF_PP),
 };
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- clock */
 /* HSI 8 MHz, undivided into the PLL (EXTEN HSIPRE = 1), x18 = 144 MHz. HCLK and PCLK1 undivided (allowed up to
@@ -89,7 +113,11 @@ static void rc_hw_init(void)
     RCC->APB1PCENR |= 1u << 18;                          /* USART3EN */
     USART3->BRR = 144u;                                  /* 1 Mbaud at PCLK1 144 MHz (rc_brr per burst) */
     USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* (as hw.c rc_release: no TXE / TC interrupt) */
+#if BOARD == BOARD_DP_UD
+    pin_cfg(GPIOB, 10, CFG_AF_PP);                       /* (BOARD 3) DI: USART3 idles HIGH, DE (PB14) gates it */
+#else
     pin_cfg(GPIOB, 10, CFG_IN_PULL);
+#endif
     NVIC_SetPriority(USART3_IRQn, 0x00);
     PFIC->VTFIDR[1] = USART3_IRQn;
     PFIC->VTFADDR[1] = (uint32_t)rc_uart_entry | 1u;
@@ -115,16 +143,23 @@ void hw_init(void)
     RCC->RSTSCKR |= RCC_RMVF;
 
     RCC->AHBPCENR |= RCC_DMA1EN;
+#if BOARD_PWM
     RCC->APB2PCENR |= RCC_AFIOEN | RCC_IOPAEN | RCC_IOPBEN | RCC_TIM1EN | RCC_SPI1EN;
     RCC->APB1PCENR |= RCC_TIM2EN | RCC_TIM3EN | (1u << 2) /* TIM4 */ | RCC_USART2EN | RCC_PWREN;
+#else
+    RCC->APB2PCENR |= RCC_AFIOEN | RCC_IOPAEN | RCC_IOPBEN | RCC_SPI1EN;   /* (BOARD 3: no TIM1 / TIM2) */
+    RCC->APB1PCENR |= RCC_TIM3EN | (1u << 2) /* TIM4 */ | RCC_USART2EN | RCC_PWREN;
+#endif
     /* (0.6.5) the PVD at 2.9 V (as the bootloader): flash_op starts nothing while VDD is below it (DS table 4-17:
      * programming needs >= 2.4 V; a dip write may run while the supply goes away) */
     PWR->CTLR = (PWR->CTLR & ~PWR_CTLR_PLS) | PWR_CTLR_PLS_2V9 | PWR_CTLR_PVDE;
 
     /* TIM2 partial remap 2: CH3 / CH4 on PB10 / PB11 (CH1 / ETR / CH2 stay on PA0 / PA1, unused by TIM2).
      * Others default: TIM1 CH1 / CH2 = PA8 / PA9, TIM3 CH1 / CH3 / CH4 = PA6 / PB0 / PB1, SPI1 SCK / MISO =
-     * PA5 / PA6, USART2 = PA2 / PA3 */
+     * PA5 / PA6, USART2 = PA2 / PA3 (BOARD 3: no remap at all: SPI1 PA5-7, TIM3 CH1 PA6, USART3 PB10 / PB11) */
+#if BOARD_PWM
     AFIO->PCFR1 = (AFIO->PCFR1 & ~AFIO_PCFR1_TIM2_REMAP) | AFIO_PCFR1_TIM2_REMAP_PARTIALREMAP2;
+#endif
     /* the pins (board.h), in this order, each with its ODR write first where one is needed (PIN_HI / PIN_LO before a
      * pull input or an output: the level before the mode). One table (0.6.6, review round 5: the 20 pin_cfg calls
      * inlined were ~210 B more). PIN_LO writes BSHR's reset half, PIN_CLR the BCR, as the 0.6.5 code did. */
@@ -144,6 +179,11 @@ void hw_init(void)
         }
     }
 
+#if BOARD_DLINE
+    /* (BOARD 3) the delay line's SPI1 / DMA / TIM3 / TIM4 and SPI1's error interrupt (above the tick): hw_dline.c
+     * dl_hw_start, after hw_init */
+    NVIC_SetPriority(SysTicK_IRQn, 0x80);
+#else
     /* interrupt priorities (nesting on, bit 7 = preemption): the gate ISR has a 100 us deadline (the first
      * toggle itself is written by DMA), so it may preempt the 20 kHz poll tick (longest path: ring copy) */
     NVIC_SetPriority(TIM4_IRQn, 0x00);
@@ -178,6 +218,7 @@ void hw_init(void)
     DMA1_Channel2->CFGR = DMA_CFGR1_CIRC | DMA_CFGR1_MINC | DMA_CFGR1_PSIZE_0 | DMA_CFGR1_MSIZE_0 |
                           DMA_CFGR1_PL_0 | DMA_CFGR1_PL_1 | DMA_CFGR1_EN;
     SPI1->CTLR1 |= SPI_CTLR1_SPE;
+#endif
 
     /* 20 kHz poll tick */
     SysTick->CMP = 144000000u / POLL_HZ - 1u;            /* HCLK, auto-reload at CMP */
@@ -271,7 +312,11 @@ static void flash_clock(uint32_t cfgr, uint32_t slow)
 
 /* the slew and gate interrupts (hw_init enables them with SysTick; nothing else is enabled, and no VTF slot is used;
  * the receiver: also its return channel's USART3, on VTF slot 1) */
-#if BOARD_RETURN
+#if BOARD_DLINE
+/* (BOARD 3) the delay line's SPI fault (hw_dline.c) and the reply's USART3: off meanwhile; the SRAM tick (main_ud.c
+ * flash_poll_isr -> dl_ram_tick) keeps the scan, the zeroing and the RX - TX check going, the DMA the ring */
+#define FLASH_IRQ1 ((1u << (SPI1_IRQn - 32)) | (1u << (USART3_IRQn - 32)))
+#elif BOARD_RETURN
 #define FLASH_IRQ1 ((1u << (TIM2_IRQn - 32)) | (1u << (TIM3_IRQn - 32)) | (1u << (TIM4_IRQn - 32)) | \
                     (1u << (USART3_IRQn - 32)))
 #else
@@ -285,8 +330,10 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
 #if CONSOLE_FULL
     uint32_t rxw;
 #endif
+#if BOARD_PWM
     uint16_t slewing;
-    BARRIER();                                           /* the record (written as its own type) is complete */
+#endif
+    BARRIER();                                          /* the record (written as its own type) is complete */
     if (PWR->CSR & PWR_CSR_PVDO) {
         return FLASH_ERR_VDD;                            /* (0.6.5) VDD below 2.9 V: the write stays pending */
     }
@@ -305,6 +352,7 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
         return FLASH_ERR_UART;
     }
     __disable_irq();
+#if BOARD_PWM                                            /* (BOARD 3: no gate, no PWM; its DMA ring runs on) */
     gate_force_closed();
     slewing = (uint16_t)((TIM2->DMAINTENR | TIM3->DMAINTENR) & TIM_UIE);
     TIM2->DMAINTENR &= (uint16_t)~TIM_UIE;
@@ -314,6 +362,7 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
         TIM3->ATRLR = (uint16_t)(cur_steps - 1u);
     }
     slew_pend2 = slew_pend3 = 0;
+#endif
 #if CONSOLE_FULL
     rxw = uart_rx_w();
 #endif
@@ -381,11 +430,13 @@ uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32
     adc_ready = (uint8_t)adc;
     USART2->CTLR3 = txctl;                               /* (r6) the line goes on at the restored baud */
     __enable_irq();
+#if BOARD_PWM
     if (slewing) {
         TIM2->INTFR = (uint16_t)~TIM_UIF;
         TIM3->INTFR = (uint16_t)~TIM_UIF;
         TIM2->DMAINTENR |= TIM_UIE;
         TIM3->DMAINTENR |= TIM_UIE;
     }
+#endif
     return r;
 }

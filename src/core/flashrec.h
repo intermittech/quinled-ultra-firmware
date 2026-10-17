@@ -18,6 +18,7 @@
 #define FLASHREC_H
 
 #include <stdint.h>
+#include "../hal/board.h"
 #include "config.h"
 #include "store.h"
 #include "calhist.h"
@@ -50,12 +51,23 @@ enum { REC_LIFE = 0, REC_SET, REC_CAL, REC_SCENE,
 /* a pair's erase: 2 = due before its next write, 1 = possible ahead (pagepair.h), 0 = none; ... and that erase */
 uint32_t flash_rec_pending(uint32_t rec);
 uint32_t flash_rec_prepare(uint32_t rec);
+#if BOARD == BOARD_DP_UD
+/* the Ultra-Digital receiver has no settings: REC_SET's page pair holds its local-effects record (core/ud/udfx.h, 128 bytes,
+ * two a page). ufx_load: the newest valid record into rec (1; 0 = none); ufx_store: the record packed from u with the
+ * next sequence number (udfx_rec_pack), programmed into the next erased entry (an erase first when it is due). */
+struct udfx_s;
+uint32_t ufx_load(uint8_t rec[128]);
+uint32_t ufx_store(struct udfx_s *u);
+static inline uint32_t ufx_pending(void) { return flash_rec_pending(REC_SET); }
+static inline uint32_t ufx_prepare(void) { return flash_rec_prepare(REC_SET); }
+#else
 /* settings + their extension (store_ext_t: the board current limit): the newest record (0; -1 = none) */
 int      settings_load(settings_t *s, store_ext_t *ext);
 uint32_t settings_store(const settings_t *s, const store_ext_t *ext);
 static inline uint32_t settings_pending(void) { return flash_rec_pending(REC_SET); }   /* an erase: 2 = due before
                                        the next write, 1 = possible ahead (pagepair.h) */
 static inline uint32_t settings_prepare(void) { return flash_rec_prepare(REC_SET); }   /* ... that erase */
+#endif
 /* current calibration (core/calstore.h): the newest record (-1: none, or cleared); store one (levels 0 = clear).
  * *count: calibrations stored on this board (changes only when written) */
 int      cal_load(isense_cal_t *c, uint16_t *count);

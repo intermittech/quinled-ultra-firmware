@@ -21,7 +21,20 @@ trap_entry:
     bnez    t0, 1f
     call    poll_isr
     mret
-1:  addi    t0, t0, -34                     /* TIM4 (46) CC2: the gate, next toggle */
+#if BOARD_DLINE
+    /* (BOARD 3, the Ultra-Digital receiver) the delay line's SPI1 error (hal/hw_dline.c) and USART3 (as below: its VTF
+     * slot 1 is the way in; this one only if the core takes it through mtvec after all). No gate, no slews; the timers
+     * (the bit counter) have no interrupt. */
+1:  addi    t0, t0, -39                     /* SPI1 (51): an error (OVR), the ring stale */
+    bnez    t0, 2f
+    call    dl_spi1_isr
+    mret
+2:  addi    t0, t0, -4                      /* USART3 (55): the reply's bytes */
+    bnez    t0, HardFault_Handler
+    call    rc_uart_isr
+    mret
+#else
+1:  addi    t0, t0, -34                    /* TIM4 (46) CC2: the gate, next toggle */
     bnez    t0, 2f
     call    gate_isr
     mret
@@ -45,6 +58,7 @@ trap_entry:
     bnez    t0, HardFault_Handler
     call    rc_uart_isr
     mret
+#endif
 #endif
 
     /* An exception, an NMI or anything unexpected (0.6.5, D1): its cause and PC into the reset breadcrumbs (main.c

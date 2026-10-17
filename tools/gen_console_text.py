@@ -36,7 +36,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FW = os.path.normpath(os.path.join(HERE, ".."))
-SOURCES = ["src/core/cli.c", "src/app/main.c"]                   # (a new file with Z(...) texts: add it here)
+SOURCES = ["src/core/cli.c", "src/app/main.c"]                   # (a new file with Z(...) texts: add it here;
+                                                                 # main.c's units come with it, its #include "x.c")
 MAX_TOKENS = 128
 MAX_DEPTH = 8
 BIAS = 2048
@@ -81,12 +82,18 @@ def unescape(body, where):
 
 
 def tokens(path):
+    """(kind, text, line, path) of path's tokens; a local #include "x.c" in place (round 12: src/app/main.c's units,
+    one translation unit: the texts keep their order)"""
     src = open(path, encoding="utf-8").read()
-    line = 1
+    line, last = 1, []
     for m in TOKEN.finditer(src):
         kind = m.lastgroup
         if kind != "ws":
-            yield kind, m.group(), line
+            if kind == "str" and last == ["#", "include"] and m.group().endswith('.c"'):
+                yield from tokens(os.path.join(os.path.dirname(path), m.group()[1:-1]))
+            else:
+                yield kind, m.group(), line, path
+            last = (last + [m.group()])[-2:]
         line += m.group().count("\n")
 
 
@@ -109,7 +116,6 @@ def scan(path, perf=False, upper=False, no_jig=False, full=False):
     """[(name, text bytes, 'file:line')] for every Z(name, "..." ...) in path whose mark's conditions hold (ZP(...)
     with perf, ZU(...) with upper, ZL(...) without, ZJ(...) unless no_jig, ZC(...) with full; combined: all of them)"""
     found, toks = [], list(tokens(path))
-    rel = shown(path)
     for i in range(len(toks) - 4):
         if toks[i][0] != "id" or not wanted(toks[i][1], perf, upper, no_jig, full) or toks[i + 1][1] != "(" or \
                 toks[i + 2][0] != "id" or toks[i + 3][1] != ",":
@@ -117,7 +123,7 @@ def scan(path, perf=False, upper=False, no_jig=False, full=False):
         j, text = i + 4, b""
         if toks[j][0] != "str":
             continue                       # e.g. the macro's own definition
-        where = "%s:%d" % (rel, toks[i][2])
+        where = "%s:%d" % (shown(toks[i][3]), toks[i][2])
         while toks[j][0] == "str":
             text += unescape(toks[j][1][1:-1], where)
             j += 1

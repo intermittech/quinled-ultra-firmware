@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 #include "ultra_update.h"
+#include "bl_protection.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,8 @@ extern "C" {
 #define BL_WAIT_MS           3000u             /* requested session: wait this long for an ANNOUNCE */
 #define BL_IDLE_MS           3000u             /* a session ends this long after its last UPD frame */
 #define BL_WD_LIMIT          3u                /* watchdog resets in a row -> recovery */
+#define BL_RECOVERY_MS       60000u            /* confirmed app: retry after an idle recovery window */
+#define BL_ESCAPE_TICKS      160000u           /* DIN continuously high for 20 ms at reset HSI 8 MHz */
 #ifndef BL_POOL_PAGES
 #define BL_POOL_PAGES        48u               /* partly received / waiting pages kept in RAM (12.5 KB) */
 #endif
@@ -48,6 +51,12 @@ int  bl_plat_program_half(uint32_t addr, uint16_t v);     /* standard half-word 
 uint32_t bl_plat_crc32(uint32_t addr, uint32_t nwords);    /* upd_crc32_words from 0xFFFFFFFF (CRC unit) */
 int  bl_plat_power_ok(void);                               /* VDD high enough to write flash (PVD) */
 void bl_plat_kick(void);                                   /* watchdog */
+void bl_plat_watchdog_start(void);                         /* before any app startup code */
+int bl_plat_din_high(void);                                /* reset-clock DIN input */
+uint32_t bl_plat_boot_ticks(void);                         /* 8 MHz ticks, starts on first use */
+int bl_plat_options_read(uint16_t ob[8]);                  /* twice, byte/inverse checked, at reset clock */
+int bl_plat_boot_open(void);                              /* loaded WPR bits 0-1 */
+int bl_plat_options_write(const uint16_t ob[8]);           /* erase + all eight low bytes, preserve RDPR */
 
 /* ------------------------------------------------------------------------------------------------ app state */
 typedef struct {
@@ -82,17 +91,20 @@ enum { BL_RST_POWER = 1, BL_RST_WATCHDOG = 2, BL_RST_SOFT = 3 };
  * own UPD_REQ_BOOT_ONCE would be lost at every reset. PINRSTF alone still counts as power-like. */
 uint32_t bl_reset_kind(uint32_t rcc_flags);
 typedef enum {
-    BL_ACT_JUMP = 0,           /* start the app now (no clock or peripheral touched) */
+    BL_ACT_JUMP = 0,           /* start the app now, with the independent watchdog running */
     BL_ACT_VERIFY,             /* check the body CRC after a commit, then decide again */
     BL_ACT_TRIAL,              /* unconfirmed app: listen BL_TRIAL_MS, then start it */
     BL_ACT_SESSION,            /* the app asked: listen for a session */
-    BL_ACT_RECOVERY,           /* no usable app (or a watchdog loop): listen until a session installs one */
+    BL_ACT_RECOVERY,           /* no usable app: indefinite; confirmed watchdog loop: BL_RECOVERY_MS */
+    BL_ACT_RESET,              /* options written: reset to load and check them before any app */
 } bl_action_t;
 
 /* ho: the hand-over block as found in RAM (validated and updated in place). reset: BL_RST_* of this reset
  * (the caller reads RCC->RSTSCKR and clears it, so the flags describe exactly this reset); rcc_flags: those raw
  * flags, kept in ho->reset_flags for the app */
 bl_action_t bl_decide(const bl_app_t *a, upd_handover_t *ho, uint32_t reset, uint32_t rcc_flags);
+/* Shared by main and the board model: early watchdog, decision, DIN escape and protection before any app. */
+bl_action_t bl_boot(bl_app_t *a, upd_handover_t *ho, uint32_t reset, uint32_t rcc_flags);
 int  bl_ho_valid(const upd_handover_t *ho);
 void bl_ho_seal(upd_handover_t *ho);
 

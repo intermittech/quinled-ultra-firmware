@@ -63,6 +63,48 @@ MEASURED int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nb
     return seen_rise ? WS_ERR_TRUNCATED : WS_ERR_NO_EDGE;
 }
 
+/* ws_decode_frame's walk to the end of the buffer: the first nbits into out, then every further bit only counted */
+MEASURED int ws_decode_count(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, const ws_timing_t *t, uint8_t *out)
+{
+    uint32_t nwords = nsamples >> 4, k, b = 0, prev = 0, rise = 0, fall = 0, seen_rise = 0;
+    const uint32_t thr = t->thr_one, hmax = t->high_max, gmin = t->gap_min;
+
+    for (k = 0; k < (uint32_t)(nbits + 7u) / 8u; k++) {
+        out[k] = 0;
+    }
+    if (nwords == 0u || (buf[0] & 0x8000u) != 0u) {
+        return WS_ERR_NO_GAP;                         /* must start inside the reset gap */
+    }
+    for (k = 0; k < nwords; k++) {
+        uint32_t w = buf[k];
+        uint32_t tr = (w ^ ((w >> 1) | (prev << 15))) & 0xFFFFu;
+        prev = w & 1u;
+        while (tr != 0u) {
+            uint32_t j = (tr & 0xFF00u) ? clz8[tr >> 8] : 8u + clz8[tr & 0xFFu];
+            uint32_t pos = (k << 4) + j;
+            tr ^= 0x8000u >> j;
+            if ((w << j) & 0x8000u) {                 /* rising edge */
+                if (seen_rise && pos - fall >= gmin) {
+                    return WS_ERR_SHORT;               /* a reset gap inside: two frames */
+                }
+                rise = pos;
+                seen_rise = 1;
+            } else if (seen_rise) {                   /* falling edge: one bit done */
+                uint32_t high = pos - rise;
+                if (high > hmax) {
+                    return WS_ERR_PULSE;
+                }
+                if (b < nbits && high >= thr) {
+                    out[b >> 3] |= (uint8_t)(0x80u >> (b & 7u));
+                }
+                b++;
+                fall = pos;
+            }
+        }
+    }
+    return seen_rise ? (int)b : WS_ERR_NO_EDGE;
+}
+
 MEASURED int ws_decode_last(const uint16_t *buf, uint32_t nsamples, const ws_timing_t *t, uint8_t *out)
 {
     uint32_t nwords = nsamples >> 4, k, n = 0, prev, rise = 0, fall = 0, seen_rise = 0, hi = 0, lo = 0;

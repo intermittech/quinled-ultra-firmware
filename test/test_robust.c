@@ -339,6 +339,51 @@ static void case_tail(void)
     }
 }
 
+/* a frame whose length is checked (ws_decode_count, the Ultra-Digital receiver's marker frames): every complete bit
+ * counted (as ws_decode_last from a LOW start), the first nbits as ws_decode_frame decodes them */
+static void case_count(void)
+{
+    static const ws_timing_t tm = WS_TIMING_DEFAULT;
+    ws_timing_t t = tm;
+    uint32_t nw, nbits, bits_in, ns, k;
+    uint8_t *o1, *o2, tail[8];
+    int r, l, f;
+    if (chance(20)) {
+        t.thr_one = (uint8_t)rrange(1, 40);
+        t.high_max = (uint8_t)rrange(t.thr_one, 255);
+        t.gap_min = (uint16_t)rrange(16, 4000);
+    }
+    memset(dec_bits, 0, sizeof dec_bits);
+    nw = gen_samples(dec_buf, DEC_MAX_WORDS, &bits_in);
+    ns = nw * 16u + rint_(16);
+    nbits = chance(50) ? rrange(1, 400) : (uint32_t)redge(600) + 1u;
+    if (nbits > 65535u) {
+        nbits = 65535;
+    }
+    o1 = (uint8_t *)malloc((nbits + 7u) / 8u);           /* exact-size: ASan sees a write past (nbits + 7) / 8 */
+    o2 = (uint8_t *)malloc((nbits + 7u) / 8u);
+    r = ws_decode_count(dec_buf, ns, (uint16_t)nbits, &t, o1);
+    if (ns >= 16u && (dec_buf[0] & 0x8000u) != 0u) {
+        CHECK(r == WS_ERR_NO_GAP, "decode_count: a capture starting HIGH: %d", r);
+    } else if (ns >= 16u) {
+        l = ws_decode_last(dec_buf, ns, &t, tail);
+        CHECK(r == l || (l == WS_ERR_NO_EDGE && r == 0), "decode_count: %d, decode_last %d (nw %u)", r, l, nw);
+        if (r > 0) {
+            k = (uint32_t)r < nbits ? (uint32_t)r : nbits;   /* the bits in o1 */
+            f = ws_decode_frame(dec_buf, ns, (uint16_t)k, &t, o2);
+            CHECK(f == (int)k && memcmp(o1, o2, (k + 7u) / 8u) == 0, "decode_count: its first %u bits (frame %d)", k, f);
+            for (; k < nbits; k++) {
+                CHECK(!(o1[k >> 3] & (0x80u >> (k & 7u))), "decode_count: bit %u past the frame set", k);
+                if (o1[k >> 3] & (0x80u >> (k & 7u))) {
+                    break;
+                }
+            }
+        }
+    }
+    free(o1);
+    free(o2);
+}
+
 /* ================================================================================================ frame path */
 /* proto / frame_rx: random frames (lengths, headers, slots, modes) through the per-frame decisions.
  * Properties: the state stays in its enums; a slot is applied only on a frame that ends in a valid header of this
@@ -1609,6 +1654,7 @@ typedef struct { const char *name; void (*fn)(void); uint32_t def_count; const c
 static const path_t paths[] = {
     { "decode", case_decode, 200000, "ws_decode_frame vs a sample-by-sample reference on random streams" },
     { "tail",   case_tail,   200000, "ws_decode_last (the Ultra trailer) vs the reference" },
+    { "count",  case_count,  200000, "ws_decode_count (the Ultra-Digital frame length) vs ws_decode_last / _frame" },
     { "frame",  case_frame,  100000, "frame_rx / proto: lock rules, slot / show gating, flags, determinism" },
     { "ftrack", case_ftrack, 100000, "frame tracker + main.c's capture bookkeeping on random edge counts" },
     { "ultra",  case_ultra,  50000,  "the Ultra engine: random slots, headers, times; compat rules; twin engine" },

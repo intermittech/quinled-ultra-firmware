@@ -67,7 +67,7 @@ void    health_test_start(health_t *h, const isense_cal_t *stored);
 #define HEALTH_CODE_CAL_FAIL 8u    /* (0.6.9, A2; main.c) D9: a test stopped incomplete (trip, limit, supply) */
 #define HEALTH_CODE_CAL_SUGGEST 7u /* (0.6.9, B3; main.c) D9: a calibration test suggested (HEALTH_F_CAL rose) */
 #define HEALTH_CODE_HOT      10u   /* (0.6.9, B6; main.c temp_service) D9: the MCU die over TEMP_HOT_C10 */
-#define HEALTH_CODE_PROTECT  9u    /* (0.6.9, R7-06; main.c boot_protect) D9: the option bytes unreadable (nothing
+#define HEALTH_CODE_PROTECT  9u    /* (0.6.9, R7-06; round 11: bootloader report) D9: the option bytes unreadable (nothing
                                       written), or not as written after the protection's reset */
 uint8_t health_test_done(health_t *h, const isense_cal_t *now);
 /* every second: the running model and the zero tracking against the stored test (levels 0: none) */

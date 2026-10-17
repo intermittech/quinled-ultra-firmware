@@ -1,0 +1,1224 @@
+{
+ "catalogue_version": 1,
+ "note": "ids are never reused; 1-127 official, 128-255 custom. palette 254 = colour 1 -> 2 -> 3, 255 = the effect's own default. colors = how many of c1..c3 the effect uses, color_slots = their labels by position (null: that slot is unused); speed / intensity / palette: true when used; the labels say what they do; custom1 / custom2: null or a label. A retired id would stay with retired: true.",
+ "palette_special": {
+  "colors": 254,
+  "default": 255
+ },
+ "effects": [
+  {
+   "id": 1,
+   "name": "Solid",
+   "summary": "One colour; fades smoothly to another (the transition).",
+   "colors": 1,
+   "color_slots": [
+    "Colour",
+    null,
+    null
+   ],
+   "speed": false,
+   "speed_label": null,
+   "intensity": false,
+   "intensity_label": null,
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 2,
+   "name": "Breathe",
+   "summary": "The colour swells and fades like breathing.",
+   "colors": 2,
+   "color_slots": [
+    "Colour",
+    "Low colour",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Rate",
+   "intensity": true,
+   "intensity_label": "Depth",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 255,
+    "palette": 255,
+    "c1": [
+     255,
+     140,
+     30
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 3,
+   "name": "Colorloop",
+   "summary": "The whole strip cycles through the hues.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Rate",
+   "intensity": true,
+   "intensity_label": "Saturation",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 255,
+    "palette": 255,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 4,
+   "name": "Rainbow",
+   "summary": "A rainbow moves along the strip.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Size (128: one rainbow per strip, doubling every 32)",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 5,
+   "name": "Palette",
+   "summary": "The chosen palette moves along the strip.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Size (128: one palette per strip, doubling every 32)",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 10,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 6,
+   "name": "Colorwaves",
+   "summary": "Slow, ever-changing waves of palette colour.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Wave density",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 10,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "FastLED ColorWavesWithPalettes (Mark Kriegsman), MIT"
+  },
+  {
+   "id": 7,
+   "name": "Pride 2015",
+   "summary": "Animated, ever-changing rainbows (not palette-based).",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Wave density",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "FastLED Pride2015 (Mark Kriegsman), MIT"
+  },
+  {
+   "id": 8,
+   "name": "Sinelon",
+   "summary": "A dot sweeps back and forth, trailing a fading tail.",
+   "colors": 1,
+   "color_slots": [
+    null,
+    "Background",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Trail (higher: shorter tail)",
+   "palette": true,
+   "custom1": "Dots (0-127: one, 128-255: two)",
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 0,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "FastLED DemoReel100 sinelon (Mark Kriegsman, MIT), tail computed instead of faded"
+  },
+  {
+   "id": 9,
+   "name": "Twinklefox",
+   "summary": "Twinkling holiday lights that fade in and out.",
+   "colors": 1,
+   "color_slots": [
+    null,
+    "Background",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Density",
+   "palette": true,
+   "custom1": "Incandescent cooling (0-127: on, 128-255: off)",
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 150,
+    "palette": 3,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "FastLED TwinkleFOX (Mark Kriegsman), MIT"
+  },
+  {
+   "id": 10,
+   "name": "Colortwinkles",
+   "summary": "Pixels light up in random palette colours and fade away.",
+   "colors": 1,
+   "color_slots": [
+    null,
+    "Background",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Density",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 100,
+    "palette": 10,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 11,
+   "name": "Candle",
+   "summary": "The whole strip flickers like a candle.",
+   "colors": 2,
+   "color_slots": [
+    "Flame",
+    "Dim colour",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Flicker rate",
+   "intensity": true,
+   "intensity_label": "Flicker amount",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     140,
+     30
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 12,
+   "name": "Candle Multi",
+   "summary": "Every pixel flickers on its own like a candle.",
+   "colors": 2,
+   "color_slots": [
+    "Flame",
+    "Dim colour",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Flicker rate",
+   "intensity": true,
+   "intensity_label": "Flicker amount",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     140,
+     30
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 13,
+   "name": "Aurora",
+   "summary": "Drifting curtains of northern-light colour.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Curtain size",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 17,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 14,
+   "name": "Blends",
+   "summary": "A smooth rippling wash of the palette's colours that drifts along.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Ripple tightness (higher: shorter ripples)",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 190,
+    "palette": 10,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 15,
+   "name": "Flow",
+   "summary": "Zones that each show the palette, flowing in turn in opposite directions.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Zones (higher: more, shorter zones)",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 0,
+    "c1": [
+     0,
+     0,
+     0
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own, from the described behaviour"
+  },
+  {
+   "id": 16,
+   "name": "Fire 2012",
+   "summary": "Flames rising from the start of the strip.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Sparking",
+   "palette": true,
+   "custom1": "Cooling",
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 120,
+    "palette": 14,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 85,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 1,
+   "origin": "FastLED Fire2012 (Mark Kriegsman), MIT"
+  },
+  {
+   "id": 17,
+   "name": "Gradient",
+   "summary": "Colour 1 to colour 2 to colour 3 across the strip.",
+   "colors": 3,
+   "color_slots": [
+    "Colour 1",
+    "Colour 2",
+    "Colour 3"
+   ],
+   "speed": true,
+   "speed_label": "Scroll speed (0: still)",
+   "intensity": true,
+   "intensity_label": "Repeats (0: one gradient, no loop)",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 0,
+    "intensity": 0,
+    "palette": 255,
+    "c1": [
+     255,
+     0,
+     0
+    ],
+    "c2": [
+     255,
+     160,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     255
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 18,
+   "name": "Pacifica",
+   "summary": "Gentle blue-green ocean waves.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Whitecaps",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "FastLED Pacifica (Mark Kriegsman, Mary Corey March), MIT"
+  },
+  {
+   "id": 19,
+   "name": "Sunrise",
+   "summary": "A slow wake-up: dark, red, orange, warm white.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Duration (10 s .. 1 h)",
+   "intensity": true,
+   "intensity_label": "Spread along the strip",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 0,
+    "palette": 19,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 20,
+   "name": "Sunset",
+   "summary": "The wake-up backwards: warm white to dark, and it stays dark.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Duration (10 s .. 1 h)",
+   "intensity": true,
+   "intensity_label": "Spread along the strip",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 0,
+    "palette": 19,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 21,
+   "name": "Glitter",
+   "summary": "A palette backdrop with short sparkles.",
+   "colors": 1,
+   "color_slots": [
+    "Sparkle",
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Sparkle density",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 40,
+    "palette": 0,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 22,
+   "name": "Meteor",
+   "summary": "A meteor with a shimmering tail runs along the strip.",
+   "colors": 2,
+   "color_slots": [
+    "Meteor",
+    "Background",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Tail length",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 23,
+   "name": "Fairy",
+   "summary": "Sparse, soft, slow twinkles like fairy lights.",
+   "colors": 1,
+   "color_slots": [
+    null,
+    "Background",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Density",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 100,
+    "intensity": 60,
+    "palette": 18,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 24,
+   "name": "Plasma",
+   "summary": "Smooth overlapping waves through the palette.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Scale",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 10,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 25,
+   "name": "Noise",
+   "summary": "Drifting smooth noise through the palette.",
+   "colors": 0,
+   "color_slots": [
+    null,
+    null,
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Scale",
+   "palette": true,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 13,
+    "c1": [
+     255,
+     255,
+     255
+    ],
+    "c2": [
+     0,
+     0,
+     0
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  },
+  {
+   "id": 26,
+   "name": "Running",
+   "summary": "Waves of colour 1 on colour 2 run along the strip.",
+   "colors": 2,
+   "color_slots": [
+    "Colour 1",
+    "Colour 2",
+    null
+   ],
+   "speed": true,
+   "speed_label": "Speed",
+   "intensity": true,
+   "intensity_label": "Wavelength",
+   "palette": false,
+   "custom1": null,
+   "custom2": null,
+   "defaults": {
+    "speed": 128,
+    "intensity": 128,
+    "palette": 255,
+    "c1": [
+     255,
+     120,
+     0
+    ],
+    "c2": [
+     0,
+     0,
+     30
+    ],
+    "c3": [
+     0,
+     0,
+     0
+    ],
+    "custom1": 0,
+    "custom2": 0
+   },
+   "state_bytes_per_pixel": 0,
+   "origin": "own"
+  }
+ ],
+ "palettes": [
+  {
+   "id": 0,
+   "name": "Rainbow",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): RainbowColors_p",
+   "cyclic": true
+  },
+  {
+   "id": 1,
+   "name": "Analogous",
+   "origin": "our own look-alike of the palette of this name (WLED / cpt-city have one): same mood and colour progression, stops chosen by eye from its description, no values copied",
+   "cyclic": false
+  },
+  {
+   "id": 2,
+   "name": "April Night",
+   "origin": "palette by Aircoookie (Christian Schwinne) from WLED, added while WLED was MIT-licensed (Copyright (c) 2016 Christian Schwinne; same stops in v0.14.4); colour stops only",
+   "cyclic": true
+  },
+  {
+   "id": 3,
+   "name": "C9 New",
+   "origin": "palette by Aircoookie (Christian Schwinne) from WLED, added while WLED was MIT-licensed (Copyright (c) 2016 Christian Schwinne; same stops in v0.14.4); colour stops only; derived from Mark Kriegsman's C9 colours (https://gist.github.com/kriegsman/756ea6dcae8e30845b5a)",
+   "cyclic": false
+  },
+  {
+   "id": 4,
+   "name": "Hult",
+   "origin": "our own look-alike of the palette of this name (WLED / cpt-city have one): same mood and colour progression, stops chosen by eye from its description, no values copied",
+   "cyclic": false
+  },
+  {
+   "id": 5,
+   "name": "Magred",
+   "origin": "our own look-alike of the palette of this name (WLED / cpt-city have one): same mood and colour progression, stops chosen by eye from its description, no values copied",
+   "cyclic": false
+  },
+  {
+   "id": 6,
+   "name": "Orange & Teal",
+   "origin": "palette by Aircoookie (Christian Schwinne) from WLED, added while WLED was MIT-licensed (Copyright (c) 2016 Christian Schwinne; same stops in v0.14.4); colour stops only",
+   "cyclic": false
+  },
+  {
+   "id": 7,
+   "name": "Rainbow Bands",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): RainbowStripeColors_p",
+   "cyclic": true
+  },
+  {
+   "id": 8,
+   "name": "Retro Clown",
+   "origin": "cpt-city, http://seaviewsensing.com/pub/cpt-city/bhw/bhw1/bhw1_01.c3g: gradient \"bhw1_01\" by Blackheartedwolf (2011), Creative Commons Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/); resampled to 16 entries",
+   "cyclic": false
+  },
+  {
+   "id": 9,
+   "name": "Yelmag",
+   "origin": "our own look-alike of the palette of this name (WLED / cpt-city have one): same mood and colour progression, stops chosen by eye from its description, no values copied",
+   "cyclic": false
+  },
+  {
+   "id": 10,
+   "name": "Party",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): PartyColors_p",
+   "cyclic": true
+  },
+  {
+   "id": 11,
+   "name": "Ocean",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): OceanColors_p",
+   "cyclic": false
+  },
+  {
+   "id": 12,
+   "name": "Forest",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): ForestColors_p",
+   "cyclic": false
+  },
+  {
+   "id": 13,
+   "name": "Lava",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): LavaColors_p",
+   "cyclic": false
+  },
+  {
+   "id": 14,
+   "name": "Heat",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): HeatColors_p (the black-body ramp of HeatColor)",
+   "cyclic": false
+  },
+  {
+   "id": 15,
+   "name": "Cloud",
+   "origin": "FastLED colorpalettes.cpp, MIT (Daniel Garcia and contributors): CloudColors_p",
+   "cyclic": false
+  },
+  {
+   "id": 16,
+   "name": "Sunset",
+   "origin": "own, made for this firmware (GPL-3.0-or-later)",
+   "cyclic": true
+  },
+  {
+   "id": 17,
+   "name": "Aurora",
+   "origin": "own, made for this firmware (GPL-3.0-or-later)",
+   "cyclic": true
+  },
+  {
+   "id": 18,
+   "name": "Fairy",
+   "origin": "own, made for this firmware (GPL-3.0-or-later)",
+   "cyclic": true
+  },
+  {
+   "id": 19,
+   "name": "Sunrise",
+   "origin": "own, made for this firmware (GPL-3.0-or-later) (Sunrise / Sunset: a warm sky from dark to day)",
+   "cyclic": false
+  }
+ ]
+}

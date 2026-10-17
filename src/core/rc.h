@@ -37,7 +37,7 @@
                                           the slowest tick it lands W + 1.2 .. 62 us, ~67 us with the poll ISR's
                                           latency: inside ULTRA_RW_END_US (80; test_r6_host_rc.c r6_schedule) */
 #define RC_ANSWER_BYTES  32u
-#define RC_RATES         3u            /* POLL return rate: 0 = 1 Mbaud, 1 = 500 kbaud, 2 = 250 kbaud (0.2.4) */
+#define RC_RATES         ULTRA_RW_RATES   /* POLL return rate: 0 = 1 Mbaud, 1 = 500 kbaud, 2 = 250 kbaud (0.2.4) */
 #define RC_SAMPLES_TICK  1800u         /* DIN samples (36 MHz) per poll tick (50 us) */
 #define RC_PREAMBLE_CYC  432u          /* the line HIGH this long (HCLK cycles: 3 us) before the first start bit */
 #define RC_LEAD_BYTES    1u            /* (review r6) a 0xFF before the answer's SYNC (hal/hw.c rc_hw_send): the
@@ -47,11 +47,11 @@
                                           UART still inside such a frame ends it there and starts cleanly at SYNC (the
                                           hub discards the bytes before SYNC) */
 /* a POLL slot's fields (slot byte offsets): ultra_protocol.h, ULTRA_POLL_* (the protocol wiki, Slot types: POLL) */
-#define RC_P_INDEX       (ULTRA_PAYLOAD + 0u)   /* answer index 0..R-1, or ULTRA_POLL_RELAY_ONLY */
-#define RC_P_SLOTS       (ULTRA_PAYLOAD + 1u)   /* R: response slots in this window, 1..ULTRA_RW_MAX_SLOTS */
-#define RC_P_PAGE        (ULTRA_PAYLOAD + 2u)
-#define RC_P_RATE        (ULTRA_PAYLOAD + 3u)   /* 0..RC_RATES-1 */
-#define RC_P_ARG         (ULTRA_PAYLOAD + 4u)   /* page arguments: slot bytes 7..29 */
+#define RC_P_INDEX       ULTRA_POLL_INDEX   /* answer index 0..R-1, or ULTRA_POLL_RELAY_ONLY */
+#define RC_P_SLOTS       ULTRA_POLL_SLOTS   /* R: response slots in this window, 1..ULTRA_RW_MAX_SLOTS */
+#define RC_P_PAGE        ULTRA_POLL_PAGE
+#define RC_P_RATE        ULTRA_POLL_RATE    /* 0..RC_RATES-1 */
+#define RC_P_ARG         ULTRA_POLL_ARG     /* page arguments: slot bytes 7..29 */
 
 typedef struct {                       /* local poll ticks (wrap: compare differences) */
     uint32_t dir_tick;                 /* turn around */
@@ -64,8 +64,9 @@ typedef struct {                       /* local poll ticks (wrap: compare differ
 
 /* a slot (CRC-checked) is a valid POLL: 0 (LIGHT 0xF, 1 <= R <= 16, index < R or RELAY_ONLY, a known rate) */
 int      rc_poll_parse(const uint8_t *slot);
-/* the slot pitch for a return rate, us: 32 bytes x 10 bits at the rate + 130 us (450 / 770 / 1410) */
-uint32_t rc_slot_us(uint8_t rate);
+/* the slot pitch for a return rate, us: the lead byte and the answer, 33 bytes x 10 bits at the rate + 130 us (460 /
+ * 790 / 1450): the header's ultra_rw_slot_us (round 11, F1) */
+#define rc_slot_us(rate) ultra_rw_slot_us(rate)
 /* the last falling edge in a DIN copy (words of 16 samples, MSB = earliest): samples from it to the copy's end, or -1
  * (no high sample) */
 int32_t  rc_last_edge(const uint16_t *w, uint32_t words);

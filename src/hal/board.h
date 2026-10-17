@@ -31,14 +31,50 @@
  *  - SPI1 is a receive-only master: MOSI (PA7, the current sense) is never driven; NSS is software (SSM), so its
  *    default pin PA4 is free for the supply divider.
  *  - TIM1 enables CC1E / CC2E only and TIM3 CC1E (capture) / CC3E / CC4E, so PA10 / PB14 / PB15 / PA7 stay GPIO /
- *    analog. */
+ *    analog.
+ *
+ * BOARD=3 (BOARD_DP_UD): the QuinLED Diff-Power Ultra-Digital receiver, a pixel delay line (docs/ultradigital-firmware.md;
+ * PowerDiff-Receiver-UltraDigital/, schematic r1). Same MCU and package, its own pins; the light engine, the PWM
+ * timers, the gate and the DIN sampler aren't built (src/app/main_ud.c, hal/hw_dline.c):
+ *
+ *  pin      port       function                                                    net
+ *  20       PA6        SPI1_MISO (36 MHz samples, the ring) + TIM3_CH1 (falling edges: bits)  RS485_RO (22 k down)
+ *   7       PA7        SPI1_MOSI: the delayed copy -> mux I1 (GPIO LOW until the SPI runs)   (100 k down)
+ *   6       PA5        SPI1_SCK, internal only (pad not connected)                             -
+ *  18       PA10       MUX_SEL: LOW = direct (RO -> strip), HIGH = delayed (PA7)              (10 k down)
+ *   2       PA1        BLANK_N: LOW = the strip line held LOW (74AHCT1G08)                    (10 k up: pass)
+ *  12       PB14       DE + /RE of the transceiver (tied): HIGH = drive (RO high-Z: no read-back) (47 k down)
+ *  10       PB10       USART3_TX -> DI: the reply (AF push-pull from boot: idles HIGH, driven only with DE)
+ *  11       PB11       USART3_RX on RO: spare listen input (USART3 RE stays 0)
+ *   8       PB0        ADC_IN8: the bus current (5 mohm x TPA158A3 x100, regular group)       IS_ADC
+ *   5       PA4        ADC_IN4, injected group (1 kHz): the bus, 220 k / 10 k                 VSENSE
+ *   1       PA0        ADC_IN0, injected group (1 kHz): V_B after F4, 120 k / 10 k            V_B
+ *  13       PB15       status LED, active high                                                STATUS
+ *   3 / 4   PA2 / PA3  console USART2 TX / TP6 the test jig's pad (pull-up input)             TP5 / TP6
+ *  14 / 9   PA8 / PB1  spare: input with pull-down
+ *  16 / 17  PA13 / PA14 SWD
+ * Timers: TIM3 CH1 captures PA6's falling edges, its TRGO (MMS 011) clocks TIM4 (ITR2): the bit counter, no
+ * interrupts (long HIGHs, latches and the quiet gap: the 20 kHz tick finds them in the ring); SysTick = the 20 kHz tick.
+ * DMA1 ch2 / ch3 = SPI1 RX / TX over one ring. TIM1 / TIM2 unclocked. The pulls hold mux direct, strip pass, receive
+ * at reset. */
 #ifndef BOARD_H
 #define BOARD_H
 
 #define BOARD_D2A_ULTRA  1          /* QuinLED dig2analog-ultra-5ch rev 0.4 (firmware update: hardware id 1, rev 3) */
 #define BOARD_DP_RX      2          /* QuinLED Diff-Power ultra receiver: its firmware build, no hardware yet */
+#define BOARD_DP_UD      3          /* QuinLED Diff-Power Ultra-Digital receiver (pixel delay line): v0r1, not built yet */
 #ifndef BOARD
 #define BOARD BOARD_D2A_ULTRA
+#endif
+
+/* (BOARD 3) what the board's hardware layer holds: the delay line (hal/hw_dline.c) instead of the PWM timers with their
+ * dither DMA, the phase slew, the forwarding gate and the DIN sampler (hal/hw.c, BOARD 1 / 2) */
+#if BOARD == BOARD_DP_UD
+#define BOARD_DLINE      1
+#define BOARD_PWM        0
+#else
+#define BOARD_DLINE      0
+#define BOARD_PWM        1
 #endif
 
 /* the supply / bus divider on PA4 (ADC_IN4): rev 0.4 has it (Quindor 2026-10-13: the supply in the console only;
@@ -53,8 +89,9 @@
 
 /* the return channel (core/rc.h; the protocol wiki, Return channel): the Diff-Power Ultra-Analog receiver only.
  * Its RS-485 transceivers: input (towards the host) DE on PB14, output (towards the next receiver) DE on PA10, both
- * ~RE on GND; USART3 TX on PB10 into the relay node. The dig2analog-ultra never reports back: none of it is built. */
-#if BOARD == BOARD_DP_RX
+ * ~RE on GND; USART3 TX on PB10 into the relay node. The dig2analog-ultra never reports back: none of it is built.
+ * The Ultra-Digital receiver (BOARD 3) answers too: one transceiver, DE + /RE tied on PB14, no relay. */
+#if BOARD == BOARD_DP_RX || BOARD == BOARD_DP_UD
 #define BOARD_RETURN     1
 #else
 #define BOARD_RETURN     0
@@ -72,6 +109,15 @@
  * dig2analog-ultra's (BENCH) */
 #define ISENSE_FUSE_MA   3000u      /* the reference: overload at 2.81 A, fast trip at 4.5 A (1.5 x; 3 PTCs' trip) */
 #define ISENSE_BOARD_MA  2250u      /* board rating = RXP_LINK_LIMIT_MA: default and maximum of the remote limit */
+#elif BOARD == BOARD_DP_UD
+/* the Ultra-Digital receiver: the bus current before its LDO and the LED module, monitoring only (no output to switch):
+ * over the link limit is a POWER event, never a trip (main_ud.c). 5 mohm x TPA158A3 (x100) = 0.5 V/A: gain 250 in
+ * the 2 mohm convention (1.6 mA per LSB at 3.28 V, full scale 6.6 A). BENCH: the amplifier's offset (no zero yet) */
+#define ISENSE_FUSE_MA   3000u      /* the reference: the port's 3 PTCs' trip, as BOARD 2 */
+#define ISENSE_BOARD_MA  2250u      /* = RXP_LINK_LIMIT_MA, the link limit */
+#ifndef ISENSE_AMP_GAIN
+#define ISENSE_AMP_GAIN  250u
+#endif
 #else
 #define ISENSE_FUSE_MA   10000u     /* soldered fuse: 10 A */
 #define ISENSE_BOARD_MA  8000u      /* board rating: default and maximum of the remote limit */
@@ -79,6 +125,13 @@
 /* current-sense amplifier gain (V/V) on the 2 mohm shunt: 100 = TPA158A3. Sets the ADC scale (main.c) */
 #ifndef ISENSE_AMP_GAIN
 #define ISENSE_AMP_GAIN  100u
+#endif
+/* the current sense's ADC channel (hal/hw.c hw_adc_init: the regular group): PA7 = ADC_IN7, the Ultra-Digital
+ * receiver PB0 = ADC_IN8 (its PA7 is SPI1_MOSI) */
+#if BOARD == BOARD_DP_UD
+#define ISENSE_ADC_CH    8u
+#else
+#define ISENSE_ADC_CH    7u
 #endif
 
 /* voltage channels (core/vsense.h): the divider on each input, top / bottom resistor in ohm. The ADC reference is
@@ -106,6 +159,16 @@
 
 #ifndef __ASSEMBLER__                        /* (isr.S includes this file: the record map is C only) */
 #include "../core/ultra_update.h"           /* UPPER_RECORDS: the layout */
+/* (round 11, B2) this build's firmware-update hardware id (core/ultra_update.h UPD_HW_ID_*): the image's descriptor
+ * carries it (tools/build_target.sh links it as the ELF's absolute symbol fw_hw_id, tools/release/mkimage.py takes it
+ * from there, never a default), and an app behind a bootloader of another hardware id keeps its outputs dark */
+#if BOARD == BOARD_DP_RX
+#define BOARD_HW_ID UPD_HW_ID_DP_ULTRA_RX
+#elif BOARD == BOARD_DP_UD
+#define BOARD_HW_ID UPD_HW_ID_DP_ULTRA_DIGITAL   /* the Ultra-Digital receiver (protocol 0.2.7) */
+#else
+#define BOARD_HW_ID UPD_HW_ID_D2A_ULTRA_5CH
+#endif
 #if UPPER_RECORDS
 /* 0.6.5 (Quindor 2026-10-14): the records in the upper CodeFlash (DS table 2-1: 160 KB
  * non-zero-wait at 0x08010000-0x08037FFF), every one an A/B pair. 0.6.6 (review round 5): each store in its own two

@@ -3,9 +3,16 @@
 # bootloader's code changes (anything that changes bl.bin besides the id); then the md5 below with it.
 # bootloader/build_bl.sh and tools/build_release.sh read the id here (BL_BUILD_ID=... overrides it for a test build).
 # build_release.sh stops when the bootloader it built doesn't match its md5 here: the code changed without a new id.
-# The md5: bl.bin built with xPack GCC 15.2 (tools/toolchain), the upper-records layout (the default), per revision.
+# The md5: bl.bin built with xPack GCC 15.2 (tools/toolchain), the upper-records layout (the default), per board
+# revision: rev<N> the dig2analog-ultra-5ch's (hardware 1), hw2-rev<N> the Diff-Power Ultra-Analog receiver's
+# (hardware 2, BL_HW_ID=2; round 11: tools/build_release.sh RX=1), hw3-rev<N> the Diff-Power Ultra-Digital receiver's
+# (hardware 3, BL_HW_ID=3: BLANK_N LOW from the first instruction, a marker before a frame skipped; its own code only: hw 1 / 2
+# unchanged; UD=1).
 #   20261013  0.5.0 - 0.6.2
 #   20261014  0.6.3 - 0.6.6
-#   20261015  0.6.7 on (review round 6 F1: a flash operation without EOP is an error), 6,604 B
-id 20261015
-md5 rev3 f6bf3181ce4721a72cd06b847baa91ef
+#   20261015  0.6.7 - round 10 (review round 6 F1: a flash operation without EOP is an error), 6,604 B
+#   20261016  round 11: early IWDG, recovery retry, descriptor revoke, DIN escape, bootloader WRPR; 7,496 B
+id 20261016
+md5 rev3 a902ffa56209cc05a9671d3f50f9c45f
+md5 hw2-rev0 043fe08c609ae5181a96cab913a02c41
+md5 hw3-rev0 c792d225ddefda9b0a9c37a52bbb4c8c

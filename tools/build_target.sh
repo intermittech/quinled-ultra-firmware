@@ -50,8 +50,14 @@ mkdir -p "$OUT"
 # only; the return channel carries its values), so 0.6.4's layout's texts (ZL), the records still upper; the test jig
 # on TP6 (0.6.7: the console's RX, hal/hw.c hw_jig_pad_low). (0.6.9: RC_PAGES_024 gone: OUTPUTS, ACKS and ERRORS are
 # official since protocol 0.2.4, always built in)
+# The Diff-Power Ultra-Digital receiver (BOARD=3, docs/ultradigital-firmware.md): the receiver's set too, and its own app
+# (src/app/main_ud.c: no light engine) with the delay line (src/hal/hw_dline.c, src/core/dline.c)
 RECEIVER=0
-case " $EXTRA_CFLAGS " in *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0" ;; esac
+UD=0
+case " $EXTRA_CFLAGS " in
+  *" -DBOARD=2 "*) RECEIVER=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0" ;;
+  *" -DBOARD=3 "*) RECEIVER=1; UD=1; EXTRA_CFLAGS="$EXTRA_CFLAGS -DMON_EXTRA=0" ;;
+esac
 # STACK_SIZE=<bytes> (0.6.6): the stack, 2048 by default. 1536 is ready (static worst case 928 B with the ISRs nested,
 # tools/stack.py, 0.6.7: main 800 + poll 80 + a slew 48; the QingKe V4B nests two levels) and waits for the bench: the
 # painted `stack=` high-water mark of the 30-day soak (test/ROUND4_BENCH_PLAN.md). The receiver needs at least 1792 B
@@ -119,8 +125,29 @@ if [ "${PERF:-0}" != 0 ]; then EXTRA_CFLAGS="$EXTRA_CFLAGS -DPERF_BUILD=$PERF"; 
 # ws_decode.c's -O2 changes: the WS2915 decode +0.9 %, the Ultra capture +1.8 %, the WS2805 / header rows faster: out).
 OPT="-Os -g -fno-partial-inlining -malign-data=natural --param=max-inline-insns-auto=5 --param=max-hoist-depth=0 --param=max-grow-copy-bb-insns=3 --param=gcse-unrestricted-cost=0 -fno-tree-sra -fno-jump-tables -fno-ipa-sra -fno-shrink-wrap-separate -fno-ipa-modref -ffunction-sections -fdata-sections -msmall-data-limit=400 -Wall -Wextra -Wno-unused-parameter"
 CFLAGS="$ARCH $OPT -fno-common -DCH32V20x_D6 -DUPD_CRC_ULTRA -I$FW/vendor/wch -I$FW/src/hal -I$FW/src -I$OUT/gen $EXTRA_CFLAGS"
-SRC="$FW/src/app/main.c $FW/src/hal/hw.c $FW/src/hal/hw_cold.c $FW/src/hal/mem.c"
-for f in "$FW"/src/core/*.c; do SRC="$SRC $f"; done
+# (round 11, B2) the build's firmware-update hardware id (board.h BOARD_HW_ID, from BOARD) as the ELF's absolute
+# symbol fw_hw_id: no byte in the image; tools/release/mkimage.py takes the descriptor's hw_id from it
+HW_ID="$(printf '#include "board.h"\nFW_HW_ID=BOARD_HW_ID\n' | "$GCC" $CFLAGS -E -P -x c - 2>/dev/null |
+         sed -n 's/^FW_HW_ID=\([0-9][0-9]*\)u\{0,1\}$/\1/p')"
+if [ -z "$HW_ID" ]; then echo "error: board.h's BOARD_HW_ID didn't resolve" >&2; exit 1; fi
+if [ "$UD" = 1 ]; then
+  # BOARD=3: its app, the hal with the delay line, and only the core files it uses (dline.c once it is there).
+  # calstore / scene / store: flashrec.c's record table names their descriptors (the lifetime record is BOARD 3's
+  # only store; ~280 B of their checks stay linked); scene.c also holds the write budgets (energy.c)
+  SRC="$FW/src/app/main_ud.c $FW/src/hal/hw.c $FW/src/hal/hw_cold.c $FW/src/hal/hw_dline.c $FW/src/hal/mem.c"
+  for f in ack calstore config div64 energy flashrec fwver mcutemp pagepair pwrev rc scene store upd_app vdip vsense ws_decode ud/wsenc ud/udfx; do
+    SRC="$SRC $FW/src/core/$f.c"
+  done
+  if [ -f "$FW/src/core/dline.c" ]; then SRC="$SRC $FW/src/core/dline.c"; fi
+  # the local pixel effects' engine (core/fx.h, docs/ultradigital-effects.md): src/core/fx*.c
+  CFLAGS="$CFLAGS -I$FW/src/core"        # (udfx.h includes "fx.h")
+  SRC="$SRC $(ls "$FW"/src/core/fx*.c | tr '\n' ' ')"
+else
+  # BOARD=1 / 2: the light engine's app and every core file but the Ultra-Digital receiver's delay line logic
+  SRC="$FW/src/app/main.c $FW/src/hal/hw.c $FW/src/hal/hw_cold.c $FW/src/hal/mem.c"
+  # (nor the local pixel effects' engine, core/fx*.c: core/ud/ is not globbed)
+  for f in "$FW"/src/core/*.c; do case "$f" in */dline.c|*/fx*.c) ;; *) SRC="$SRC $f" ;; esac; done
+fi
 # GCC 15 turns bitwise CRC loops into 256-entry tables (-foptimize-crc). The firmware update's CRCs (upd_app.c) run
 # once per update frame: built without them (1.8 KB). The CRC-8 / CRC-16 of ultra_protocol.h use nibble tables, which it
 # leaves alone. Older compilers don't know the option.
@@ -148,6 +175,7 @@ for s in $SRC; do
   case "$s" in */pwrev.c|*/fwver.c|*/health.c|*/vdip.c) f="$f $COLD" ;; esac   # also cold: every ms at most / boot
   case "$s" in */pagepair.c|*/vsense.c) f="$f $COLD" ;; esac   # 0.6.5: -56 B, no row slower (boot / flash ops; per ms)
   case "$s" in */hw_cold.c) f="$f $COLD" ;; esac   # (round 9) hw.c's boot / flash half; the ISRs and hot helpers stay in hw.c
+  case "$s" in */calhist.c) f="$f $COLD" ;; esac   # (round 11, O1-Q1) the calibration history: app -56 B XW=0 / -64 B XW
   # (flashrec.c not cold: +244 B, LTO inlines the stores into their callers; 0.6.5 re-measured: dark / ocled / energy /
   # sstart / smooth / gamma +8..+216 B, presets / ultra_update / rxpower 0)
   # (energy.c not since 0.6.3: LTO doesn't inline across -msave-restore, and its small calls into main / hw.c cost more)
@@ -170,7 +198,8 @@ fi
 # Pack aligned inputs first (--sort-section=alignment sorts within each input statement: the order's one-section
 # lines stay as they are); Link_sections.ld keeps startup and SRAM handler order with SORT_NONE.
 link() { m="$1"; e="$2"; shift 2; "$GCC" $LDARCH $LDLTO $STACK_LD -nostartfiles -Wl,--gc-sections \
-  -Wl,--sort-section=alignment -Wl,-Map="$OUT/$m" -L"$OUT" -L"$FW/vendor/wch" -T "$LDSCRIPT" $OBJS -o "$OUT/$e" -lgcc $LINK_EXTRA "$@"; }
+  -Wl,--sort-section=alignment -Wl,-Map="$OUT/$m" -L"$OUT" -L"$FW/vendor/wch" -T "$LDSCRIPT" $OBJS -o "$OUT/$e" -lgcc \
+  -Wl,--defsym=fw_hw_id="$HW_ID" $LINK_EXTRA "$@"; }
 cp "$FW/vendor/wch/text_order.ld" "$OUT/text_order.ld"
 if [ "${ORDER:-1}" = 1 ]; then
   link fw.norelax.map fw.norelax.elf -Wl,--no-relax -Wl,--noinhibit-exec 2>/dev/null

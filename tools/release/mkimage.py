@@ -27,6 +27,24 @@ def elf_entry(path):
     return struct.unpack_from("<I", h, 24)[0]
 
 
+def elf_symbol(path, name):
+    """the value of a symbol in a 32-bit little-endian ELF's .symtab, or None"""
+    e = open(path, "rb").read()
+    shoff, = struct.unpack_from("<I", e, 32)
+    shentsize, shnum = struct.unpack_from("<HH", e, 46)
+    secs = [struct.unpack_from("<IIIIIIIIII", e, shoff + i * shentsize) for i in range(shnum)]
+    for s in secs:
+        if s[1] != 2:                                   # SHT_SYMTAB
+            continue
+        strtab = secs[s[6]]                             # sh_link: its string table
+        for k in range(s[5] // 16):                     # sh_size / sizeof(Elf32_Sym)
+            st_name, st_value = struct.unpack_from("<II", e, s[4] + 16 * k)
+            end = e.index(b"\0", strtab[4] + st_name)
+            if e[strtab[4] + st_name:end] == name.encode("ascii"):
+                return st_value
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin", required=True, help="fw.bin of the app linked at 0x00002100")
@@ -34,7 +52,9 @@ def main():
     ap.add_argument("--version", required=True, help="0.6.0 or 0.6.0-alpha.N / -beta.N / -rc.N")
     ap.add_argument("--rev-mask", required=True, type=lambda s: int(s, 0),
                     help="board revisions it runs on (bit 0 v0.1 PB15 only, 1 PB11, 2 current sense)")
-    ap.add_argument("--hw-id", type=int, default=qdu.HW_ID_D2A_ULTRA_5CH)
+    ap.add_argument("--hw-id", type=int, help="the board's hardware id (1 dig2analog-ultra-5ch, 2 the Diff-Power "
+                    "Ultra-Analog receiver); default: the ELF's fw_hw_id (tools/build_target.sh, from BOARD), never a "
+                    "guess")
     ap.add_argument("--min-bl", type=int, default=qdu.MIN_BL, help="default: 2 (UPPER_RECORDS=0: 1)")
     ap.add_argument("--build-id", default="", help="git hash or similar (<= 16 characters)")
     ap.add_argument("--out", required=True)
@@ -43,6 +63,16 @@ def main():
     if a.elf and elf_entry(a.elf) != qdu.APP_ENTRY:
         raise SystemExit(f"{a.elf}: entry 0x{elf_entry(a.elf):08X}, expected 0x{qdu.APP_ENTRY:08X} "
                          "(build with LDSCRIPT=vendor/wch/Link_app.ld)")
+    # (round 11, B2) the hardware id from the build itself: a receiver image (BOARD=2) never carries 1
+    elf_hw = elf_symbol(a.elf, "fw_hw_id") if a.elf else None
+    if a.hw_id is None:
+        if elf_hw is None:
+            raise SystemExit("no hardware id: give --elf of a build with fw_hw_id (tools/build_target.sh) or --hw-id")
+        a.hw_id = elf_hw
+    elif elf_hw is not None and elf_hw != a.hw_id:
+        raise SystemExit(f"--hw-id {a.hw_id}, but {a.elf} was built for hardware {elf_hw} (BOARD)")
+    if a.hw_id not in qdu.HW_IDS:
+        raise SystemExit(f"hardware id {a.hw_id} unknown (known: {sorted(qdu.HW_IDS)})")
     body = open(a.bin, "rb").read()
     body += b"\xFF" * (-len(body) % 4)
     if len(body) > qdu.APP_BODY_MAX:

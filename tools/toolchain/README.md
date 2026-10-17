@@ -2,7 +2,7 @@
 
 | Build | Compiler | How the build finds it |
 |---|---|---|
-| The app (both boards), `XW=1`: the default since 0.6.7 | **WCH GCC 15.2** with WCH's XW extension (`-march=rv32imc_zicsr_zifencei_xw`) | `WCH_GCC_DIR=<its folder>` (the one with `bin/riscv32-wch-elf-gcc`) |
+| The app (every board), `XW=1`: the default | **WCH GCC 15.2** with WCH's XW extension (`-march=rv32imc_zicsr_zifencei_xw`) | `WCH_GCC_DIR=<its folder>` (the one with `bin/riscv32-wch-elf-gcc`) |
 | The app, `XW=0` (the comparison and the fallback) | xPack GNU RISC-V Embedded GCC 15.2.0-1 | `RISCV_GCC`, else `%LOCALAPPDATA%\xPacks\xpack-riscv-none-elf-gcc-*` |
 | The bootloader (frozen at the first factory hex) | xPack GCC 15.2.0-1, always | as `XW=0` |
 
@@ -13,8 +13,8 @@ SHA-256 of the files a build uses, `wch-gcc15-win64.sha256`) and stops if it dif
 
 The QingKe V4B core of the CH32V203 has 16-bit forms of the byte and halfword loads and stores that RV32C lacks
 (`c.lbu`, `c.lhu`, `c.sb`, `c.sh` and the sp-relative `c.lbusp`, `c.lhusp`, `c.sbsp`, `c.shsp`; QingKe V4 manual:
-"extended instructions"). WCH's GCC emits them with `_xw` in `-march`; the app gets ~1.6 KB smaller (0.6.7: 55,812 ->
-54,196 B before the other 0.6.7 changes). Without `_xw` WCH's GCC 15.2 gives byte-identical output to xPack's 15.2.
+"extended instructions"). WCH's GCC emits them with `_xw` in `-march`; the app gets ~1.6 KB smaller.
+Without `_xw` WCH's GCC 15.2 gives byte-identical output to xPack's 15.2.
 
 - **Tools:** no objdump disassembles XW (the listings show `.insn 2, 0x....`); `tools/rv32emu.py` executes it (its
   `xw_decode`), so `measure.py`, `hal_check.py`, `flash_stores.py`, `mainloop.py` and the cycle caps run XW images.

@@ -3,7 +3,8 @@
 /* CH32V203F8U6 drivers: PWM timers + dither DMA, the phase slew, DIN edge counter / gate, DIN sampler, ADC, return
  * channel, UART, the SRAM trip. The boot (clock, pins, peripherals) and the flash operation: hw_cold.c (round 9: built
  * with -msave-restore like the other cold files; what the two share: hw_priv.h). Register usage follows the WCH
- * CH32FV2x_V3xRM reference manual V2.5. Items marked BENCH need confirmation on real hardware. */
+ * CH32FV2x_V3xRM reference manual V2.5. Items marked BENCH need confirmation on real hardware. BOARD 3 (the Ultra-Digital
+ * receiver, board.h BOARD_PWM 0): none of the PWM / gate / DIN sampler; its delay line is hw_dline.c. */
 #include "ch32v20x.h"
 #include "hw.h"
 #include "hw_priv.h"
@@ -16,6 +17,7 @@
 
 uint32_t SystemCoreClock = 144000000u;
 
+#if BOARD_PWM                                 /* (BOARD 3, the Ultra-Digital receiver: no PWM, gate or DIN sampler) */
 /* DMA tables. Plain: TIM1 {CCR1, CCR2(, CCR3)}, TIM2 {CCR4}, TIM3 {CCR3, CCR4} per entry. Spread spectrum: every
  * entry also sets the period, burst from ATRLR: TIM1 {ARR, RPT, CCR1, CCR2}, TIM2 {ARR, -, CCR1, CCR2, CCR3 = 2,
  * CCR4}, TIM3 {ARR, -, CCR1 (capture: read-only), CCR2, CCR3, CCR4}. */
@@ -379,6 +381,7 @@ void pwm_force_off(uint8_t off)
     pwm_forced = off;
     pwm_outputs_mode();
 }
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- ADC */
 /* ADC1 at 12 MHz, no DMA (all seven DMA1 channels are taken).
@@ -411,9 +414,10 @@ void hw_adc_init(void)
     RCC->APB2PCENR |= RCC_ADC1EN;
     ADC1->CTLR1 = ADC_SCAN;                              /* independent; scan: the injected group converts in full */
     ADC1->SAMPTR1 = (7u << 18) | (7u << 21);             /* SMP16, SMP17 = 111: 239.5 cycles */
-    ADC1->SAMPTR2 = (6u << 21) | (6u << (3u * VSENSE_SUPPLY_CH)) | 6u; /* SMP7, SMP4, SMP0: 71.5 cycles */
+    ADC1->SAMPTR2 = (6u << (3u * ISENSE_ADC_CH)) | (6u << (3u * VSENSE_SUPPLY_CH)) | 6u;   /* SMP7 (BOARD 3: SMP8),
+                                                                                          SMP4, SMP0: 71.5 cycles */
     ADC1->RSQR1 = 0;                                     /* L = 0: one regular conversion */
-    ADC1->RSQR3 = 7u;                                    /* SQ1 = channel 7 */
+    ADC1->RSQR3 = ISENSE_ADC_CH;                         /* SQ1 = channel 7 (board.h; BOARD 3: 8, PB0) */
     ADC1->ISQR = INJ_VOLT;
     ADC1->CTLR2 = ADC_ADON | ADC_JEXTTRIG | ADC_JEXTSEL; /* calibrate with TSVREFE/BUFEN clear (RM 12.3.2) */
     for (i = 0; i < 1000u; i++) {                        /* tSTAB 1 us (and >= 2 ADC clocks before calibration) */
@@ -512,6 +516,7 @@ void hw_dma_check(void)
     DMA1->INTFCR = f;                                    /* (CTEIFx at the TEIFx positions) */
 }
 
+#if BOARD_PWM
 /* ---------------------------------------------------------------------------------------------------- gate */
 static volatile uint16_t gate_t1, gate_t2;
 
@@ -579,6 +584,7 @@ uint32_t din_ring_pos(void)
 {
     return (DIN_RING_WORDS - DMA1_Channel2->CNTR) & (DIN_RING_WORDS - 1u);
 }
+#endif
 
 /* ---------------------------------------------------------------------------------------------------- misc */
 
@@ -605,6 +611,63 @@ static const uint8_t *rc_next;
 static uint32_t rc_left;
 typedef char rc_one_lead_byte[RC_LEAD_BYTES == 1u ? 1 : -1];   /* (rc_hw_send writes one 0xFF) */
 
+#if BOARD == BOARD_DP_UD
+/* (BOARD 3, the Ultra-Digital receiver: docs/ultradigital-firmware.md section 4) one transceiver, DE + /RE tied on PB14:
+ * while DE is high RO is high-Z (PA6 reads LOW through its 22 k), so there is no read-back; the "turnaround check" is the
+ * hub's release, which the window logic saw (PA6 HIGH) before it turns around. PB10 is USART3_TX in AF push-pull from
+ * boot (hw_cold.c rc_hw_init): it idles HIGH, and the line follows it only while DE is high. */
+static void rc_release(void)
+{
+    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* no TXE / TC interrupt: a burst still running is cut */
+    GPIOB->BCR = 1u << 14;                               /* DE low: the hub's line again (RO drives PA6) */
+}
+
+void rc_hw_dir(uint32_t mode)
+{
+    if (mode == RC_DIR_ANSWER) {
+        GPIOA->BCR = 1u << 1;                            /* BLANK_N LOW first: the strip line held LOW (delayed: the ring
+                                                            is zero there already; direct: the AND cuts RO's LOW / HIGH) */
+        GPIOB->BSHR = 1u << 14;                          /* then DE high: the line HIGH (USART3 idle) */
+    } else {
+        rc_release();                                    /* (BLANK_N back HIGH: the window logic, dl_hw_blank(0)) */
+    }
+}
+
+/* the answer in LOCAL mode (udfx.h udfx_answer_blank): DE high only. The strip shows the encoder's ring words (the mux is
+ * delayed), so the answer's turnaround needs no BLANK_N, and dline never asks for its release there (dl_blank) */
+void rc_hw_answer_local(void)
+{
+    GPIOB->BSHR = 1u << 14;
+}
+
+uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
+{
+    uint32_t t = POLL_CNT(), d;
+    USART3->BRR = brr;
+    do {                                                 /* the line HIGH RC_PREAMBLE_CYC (DE high since rc_hw_dir) */
+        d = POLL_CNT() - t;
+        if ((int32_t)d < 0) {
+            d += 144000000u / POLL_HZ;                   /* (SysTick reloaded meanwhile: any caller, any phase) */
+        }
+    } while (d < RC_PREAMBLE_CYC);
+    if (n == 0u) {
+        rc_release();
+        return 0;
+    }
+    rc_next = b;
+    rc_left = n;
+    BARRIER();                                           /* the cursor published before its interrupt */
+    USART3->STATR = (uint16_t)~USART_STATR_TC;
+    USART3->DATAR = 0xFFu;                               /* RC_LEAD_BYTES (core/rc.h): the hub's UART in step */
+    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
+    return 0;
+}
+
+uint32_t rc_hw_busy(void)
+{
+    return (USART3->CTLR1 & (USART_CTLR1_TXEIE | USART_CTLR1_TCIE)) != 0u;   /* (TC: rc_uart_isr -> rc_release) */
+}
+#else
 static void rc_release(void)
 {
     USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* no TXE / TC interrupt */
@@ -644,8 +707,9 @@ uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
     USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
     return 0;
 }
+#endif
 
-void rc_uart_isr(void);                                  /* USART3, entered via isr.S (VTF, HPE + mret) */
+void rc_uart_isr(void);                                /* USART3, entered via isr.S (VTF, HPE + mret) */
 void rc_uart_isr(void)
 {
     BARRIER();                                           /* acquire the cursor published by the poll ISR */
@@ -660,6 +724,9 @@ void rc_uart_isr(void)
         return;
     }
     rc_release();                                        /* TC: the line back to the relay node (LOW idle) */
+#if BOARD == BOARD_DP_UD
+    dl_tx_done();                                        /* (DE low: the window logic's RETAKE starts at this word) */
+#endif
 }
 #endif
 
@@ -832,9 +899,19 @@ uint32_t hw_option_bytes(uint16_t ob[8])
     return ok;
 }
 
+#if BOARD_PWM
 /* the SRAM path's trip: all five outputs forced low (as pwm_force_off(1)); never back to PWM */
 RAMCODE void hw_flash_trip(void)
 {
     PWM_TRIP();
 }
+#else
+/* (BOARD 3) an exception during a flash operation (isr.S flash_fault, then the watchdog): the strip on the direct path
+ * (MUX_SEL LOW) and the hub's line released (DE low), as the pulls hold them after the reset */
+RAMCODE void hw_flash_trip(void)
+{
+    GPIOA->BCR = 1u << 10;
+    GPIOB->BCR = 1u << 14;
+}
+#endif
 

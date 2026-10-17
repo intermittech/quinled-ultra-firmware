@@ -55,6 +55,19 @@ static void pin_cfg(GPIO_TypeDef *g, uint32_t pin, uint32_t cfg)
 }
 
 /* ------------------------------------------------------------------------------------------------ reset / boot */
+#if BL_HW_ID == 3
+/* (the Ultra-Digital receiver) the first thing after every reset, at HSI, before any path is chosen: BLANK_N (PA1) LOW,
+ * the strip line held LOW. The pins float during a reset (PA10 MUX_SEL direct, PA1 pass by their pulls), so a poll
+ * arriving then would reach the strip as pixel data; this keeps that window to the reset itself. The fast path jumps
+ * with PA1 still LOW, the app holds it (hw_cold.c) until its delay line runs (docs/ultradigital-firmware.md: invisible
+ * on the strip) */
+void hw_blank_early(void)
+{
+    RCC->APB2PCENR |= RCC_IOPAEN;
+    GPIOA->BCR = 1u << 1;
+    pin_cfg(GPIOA, 1, CFG_OUT_PP);
+}
+#endif
 uint32_t hw_reset_flags_take(void)
 {
     uint32_t f = RCC->RSTSCKR;
@@ -92,6 +105,8 @@ void hw_soft_reset(void)
 
 void hw_jump_app(void)
 {
+    SysTick->CTLR = 0;                       /* the optional power-on DIN qualification used HSI ticks */
+    SysTick->CNT = 0;
     hw_crc_off();
     ((void (*)(void))UPD_APP_ENTRY)();        /* the app's startup sets sp, gp, mtvec, interrupts and its clock */
     for (;;) {
@@ -142,13 +157,8 @@ void hw_full_init(void)
     SysTick->CTLR = (1u << 5) /* INIT */ | (1u << 2) /* HCLK */ | 1u;
     tick_last = hw_ticks();
 
-    /* independent watchdog: LSI 25-60 kHz / 64, reload 2500 -> 2.7-6.4 s (typ. 4 s); kicked by the main loop and
-     * between flash operations (the longest single one is a 16 ms erase) */
-    IWDG->CTLR = 0x5555u;
-    IWDG->PSCR = 4u;
-    IWDG->RLDR = 2500u;
-    IWDG->CTLR = 0xAAAAu;
-    IWDG->CTLR = 0xCCCCu;
+    /* bl_boot started the independent watchdog before choosing any path. */
+    hw_kick();
 
     /* PVD: flash is only written while VDD >= ~2.9 V */
     PWR->CTLR = (PWR->CTLR & ~PWR_CTLR_PLS) | PWR_CTLR_PLS_2V9 | PWR_CTLR_PVDE;
@@ -160,9 +170,20 @@ void hw_full_init(void)
     pin_cfg(GPIOA, 4, 0x0u);
     pin_cfg(GPIOA, 6, CFG_IN_FLOAT);
     pin_cfg(GPIOA, 5, CFG_AF_PP);
+#if BL_HW_ID == 3
+    /* the QuinLED Diff-Power Ultra-Digital receiver (hardware id 3): PA1 is BLANK_N, the AND gate after the bypass
+     * mux (LOW = the strip line held LOW). Full mode is an update session, a trial window or recovery: the strip sees
+     * none of its frames (direct mode: PA10 MUX_SEL is left to its 10k pull-down, PB14 DE to its 47k: receive). PA1 a
+     * GPIO LOW until the software reset; TIM2's gate and TIM1's feedback run without pins (PA9 is the DNP USART1_TX
+     * option into DI there: left an input). The fast path never gets here: no dark time at a plain power-up. */
+    pin_cfg(GPIOA, 1, CFG_OUT_PP);
+#else
     pin_cfg(GPIOA, 1, CFG_AF_PP);
+#endif
     pin_cfg(GPIOA, 2, CFG_AF_PP);
+#if BL_HW_ID != 3
     pin_cfg(GPIOA, 9, CFG_AF_PP);
+#endif
     pin_cfg(GPIOB, 15, CFG_OUT_PP);
 
     /* gate: TIM3 CH1 captures DIN falling edges on PA6 (filter fCK, N = 2); its trigger output pulses on each capture
@@ -252,6 +273,34 @@ void hw_kick(void)
 void bl_plat_kick(void)
 {
     hw_kick();
+}
+
+void bl_plat_watchdog_start(void)
+{
+    /* LSI 25-60 kHz / 64, reload 2500: 2.7-6.4 s, including early app startup. */
+    IWDG->CTLR = 0x5555u;
+    IWDG->PSCR = 4u;
+    IWDG->RLDR = 2500u;
+    IWDG->CTLR = 0xAAAAu;
+    IWDG->CTLR = 0xCCCCu;
+    /* Enable PVD before reading the descriptor/options: it has time to settle before an option write. */
+    RCC->APB1PCENR |= RCC_PWREN;
+    PWR->CTLR = (PWR->CTLR & ~PWR_CTLR_PLS) | PWR_CTLR_PLS_2V9 | PWR_CTLR_PVDE;
+}
+
+int bl_plat_din_high(void)
+{
+    RCC->APB2PCENR |= RCC_IOPAEN;             /* PA6 is already a floating input after reset */
+    return (GPIOA->INDR & (1u << 6)) != 0u;
+}
+
+uint32_t bl_plat_boot_ticks(void)
+{
+    if (!(SysTick->CTLR & 1u)) {
+        SysTick->CMP = 0xFFFFFFFFFFFFFFFFull;
+        SysTick->CTLR = (1u << 5) | (1u << 2) | 1u;
+    }
+    return hw_ticks();
 }
 
 int bl_plat_power_ok(void)
@@ -358,4 +407,64 @@ int bl_plat_program_half(uint32_t addr, uint16_t v)
     FLASH->CTLR |= FLASH_CTLR_PG;
     *(volatile uint16_t *)addr = v;
     return fl_done(FLASH_CTLR_PG);
+}
+
+#define BL_OB_ADDR 0x1FFFF800u
+
+int bl_plat_boot_open(void)
+{
+    return (FLASH->WPR & 3u) != 0u;
+}
+
+int bl_plat_options_read(uint16_t ob[8])
+{
+    const volatile uint16_t *p = (const volatile uint16_t *)BL_OB_ADDR;
+    uint32_t i, ok = 1;
+    /* Called ONLY at HSI 8 MHz, before hw_full_init: no unsafe 144 MHz option reads. */
+    for (i = 0; i < 8u; i++) {
+        uint32_t a = p[i];
+        ok &= a == p[i] && ((a ^ (a >> 8)) & 0xFFu) == 0xFFu;
+        ob[i] = (uint16_t)(a & 0xFFu);
+    }
+    return (int)ok;
+}
+
+static int ob_wait(void)
+{
+    uint32_t st;
+    while (FLASH->STATR & FLASH_STATR_BSY) {
+    }
+    st = FLASH->STATR;
+    FLASH->STATR = FLASH_STATR_EOP | FLASH_STATR_WRPRTERR;
+    hw_kick();
+    return (st & FLASH_STATR_WRPRTERR) || !(st & FLASH_STATR_EOP) ? -1 : 0;
+}
+
+int bl_plat_options_write(const uint16_t ob[8])
+{
+    uint32_t i;
+    int rc = -1;
+    fl_unlock();                            /* HSI / 2, still well inside the safe flash clock */
+    FLASH->OBKEYR = FLASH_KEY1;
+    FLASH->OBKEYR = FLASH_KEY2;
+    if (!(FLASH->CTLR & FLASH_CTLR_LOCK) && (FLASH->CTLR & FLASH_CTLR_OPTWRE)) {
+        FLASH->STATR = FLASH_STATR_EOP | FLASH_STATR_WRPRTERR;
+        FLASH->CTLR |= FLASH_CTLR_OPTER;
+        FLASH->CTLR |= FLASH_CTLR_STRT;
+        rc = ob_wait();
+        FLASH->CTLR &= ~(FLASH_CTLR_OPTER | FLASH_CTLR_STRT);
+        FLASH->CTLR |= FLASH_CTLR_OPTPG;
+        for (i = 0; i < 8u && rc == 0; i++) {
+            volatile uint16_t *p = (volatile uint16_t *)(BL_OB_ADDR + 2u * i);
+            *p = ob[i];                      /* hardware supplies the inverse */
+            rc = ob_wait();
+            if ((*p & 0xFFu) != ob[i]) {
+                rc = -1;
+            }
+        }
+    }
+    FLASH->CTLR = (FLASH->CTLR & ~(FLASH_CTLR_OPTPG | FLASH_CTLR_OPTWRE)) |
+                  FLASH_CTLR_LOCK | FLASH_CTLR_FAST_LOCK;
+    RCC->CFGR0 = (RCC->CFGR0 & ~RCC_HPRE) | RCC_HPRE_DIV1;
+    return rc;
 }

@@ -42,6 +42,7 @@
 #define VDIP_ENTER_PCT   90u
 #define VDIP_LEAVE_PCT   93u
 #define VDIP_MIN_MS      3u
+#define VDIP_FALL_PCT    97u       /* (round 11) `falling`: a reading below this % of the reference */
 #define VDIP_Z_STEADY_MA 20        /* impedance: a window is settled with its current within this (+ 1/256 of it) of
                                       the two windows before */
 #define VDIP_Z_STEP_MA   250       /* a step: at least this much between two settled windows ... */
@@ -68,7 +69,8 @@ typedef struct {
     uint8_t  n_log;                /* dips in the log */
     uint8_t  head;                 /* the newest's index */
     uint8_t  planned;              /* (0.6.10, the receiver's main.c) a power-off notice holds: a dip starting now is
-                                      the planned cut's */
+                                      the planned cut's; (round 11) the reference holds meanwhile (and through the
+                                      cut's dip) */
     vdip_ev_t cur;                 /* the dip (or the candidate) in progress */
     vdip_ev_t log[VDIP_LOG];
     vdip_ev_t deep;                /* the deepest (ref_x 0: none yet) */
@@ -83,6 +85,8 @@ typedef struct {
     uint8_t  zok;                  /* windows the last settled one may still pair with a new one (0: none) */
     uint8_t  cand_planned;         /* (0.6.10) `planned` at the candidate's first low reading: its class when it is
                                       confirmed (taken again at each candidate's first low reading) */
+    uint8_t  falling;              /* (round 11) the last reading below VDIP_FALL_PCT % of the reference: with
+                                      `planned`, the cut has begun (main.c keeps the outputs dark) */
 } vdip_t;
 
 void vdip_init(vdip_t *d);

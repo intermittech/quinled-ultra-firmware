@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (C) 2026 QuinLED
  *
- * QuinLED Ultra protocol 0.2 (wire VERSION 2), this file: release 0.2.6 (CHANGELOG.md). Shared by the
+ * QuinLED Ultra protocol 0.2 (wire VERSION 2), this file: release 0.2.8 (CHANGELOG.md). Shared by the
  * board firmware (C) and the controllers (C / C++).
  * Master: include/ultra_protocol.h in https://github.com/intermittech/quinled-ultra-protocol (spec in its wiki).
  * Every copy (board firmware, ESPHome component, other controllers) must be byte-identical to one tagged release
@@ -12,8 +12,8 @@
  *         Each board takes the first slot of what it sees (its hardware gate holds the output LOW for those 256
  *         bits, as in WS2805 mode) and forwards the rest, so the position in the chain is the address and every
  *         board sees one contiguous frame ending with the header. Frame bits = 256 * N + 64.
- *         (Format 1, withdrawn and never released, had the header first: the board's closed gate then left a 320 us LOW gap after the header, which
- *         ended the frame at the next board, so boards after the first never got their slot.)
+ *         (Why last: with the header first, each board's closed gate would leave a 320 us LOW gap after the header,
+ *         ending the frame at the next board, so the boards after the first would never get their slot.)
  * HEADER: MAGIC (2) | VERSION<<4 | FLAGS (1) | TIME (4) | CRC-8 (1, SMBus poly 0x07)
  *         TIME = host clock (us, low 32 bits) at the end of the frame (the header's last bit); every board sees
  *         that moment within gate delays. FLAGS: ULTRA_HDR_* below.
@@ -26,18 +26,20 @@
  *         after the other, also a board still locked to WS2805 / WS2915 (it shows its WS window of those zeros:
  *         dark, never a colour). Idle frames afterwards use NOP slots.
  *
- * Compatibility rules (the wiki: Compatibility and versioning): a board ignores what it doesn't know, so new features
- * never disturb boards with older firmware; the host sends only values defined here (the builders below never set
+ * Compatibility rules (the wiki: Compatibility and versioning): a board ignores what it doesn't know, so a feature
+ * it lacks never disturbs it; the host sends only values defined here (the builders below never set
  * anything else).
- *  - Unknown slot TYPE (0x0B-0xFF; 0x0A before 0.2.3), LIGHT 5-14, IDENTIFY value or argument, SCENE mode: the slot
- *    is ignored.
+ *  - Unknown slot TYPE (0x0C-0xFF, and ULTRA_PIXEL_FX 0x0B on every board but the QuinLED Diff-Power Ultra-Digital
+ *    receiver), LIGHT 5-14, IDENTIFY value or argument, SCENE mode: the slot is ignored.
  *  - Unknown CONFIG id: that pair is skipped, the others apply. Unknown effect id: ULTRA_FX_NONE (the light's plain
  *    state). Unknown role: the channel is not part of the light.
  *  - Unknown flag bits (header HINT, slot FLAGS, SET / LIGHT_DEF / LIGHT_OPT flags), reserved bits and spare payload
  *    bytes: ignored. The host sends them as 0, so a future field's value 0 must always mean the old behaviour.
  *  - Header EXT ("must understand"): a board without the frame's extension keeps its lock and clock sync but ignores
- *    every slot of that frame, as for RW. New frame-level features go behind EXT (or RW / UPD) unless boards that
- *    don't know them can safely process the slots.
+ *    every slot of that frame, as for RW. On a line of mixed firmware that drops those boards' commands for that
+ *    frame, so new features go in new slot types and CONFIG ids (ignored where unknown) before EXT; a frame-level
+ *    feature only behind EXT (or RW / UPD) when boards that don't know it can't safely process the slots. How later
+ *    frame-level features share the full FLAGS nibble: ULTRA_HDR_* below.
  *  - ULTRA_VERSION changes only for incompatible changes: a board rejects every frame of another version.
  *  - Broadcast / extension slots (reserved): k slots after the last board's slot, types >= ULTRA_TYPE_BCAST only,
  *    frame bits 256 x (N + k) + 64. Every board forwards everything after its own slot, so they reach every board;
@@ -54,9 +56,9 @@ extern "C" {
 #endif
 
 #define ULTRA_MAGIC        0x5AD2u
-#define ULTRA_VERSION      2u          /* the wire format (releases 0.2.y); 1: header first (withdrawn, never
-                                          released). Only an incompatible change bumps it (release 0.3.0 for 3):
-                                          a board rejects other versions entirely (no lock, no clock, no slot) */
+#define ULTRA_VERSION      2u          /* the wire format (releases 0.2.y). Only an incompatible change bumps
+                                          it (release 0.3.0 for 3): a board rejects other versions entirely
+                                          (no lock, no clock, no slot) */
 #define ULTRA_HDR_BYTES    8u
 #define ULTRA_SLOT_BYTES   32u
 #define ULTRA_HDR_BITS     (ULTRA_HDR_BYTES * 8u)
@@ -68,15 +70,20 @@ extern "C" {
 #define ULTRA_MAX_STEPS    8u          /* strobe / sequence steps per light */
 
 /* header FLAGS (low nibble of byte 2). On an RW or EXT frame a board keeps its lock and clock sync; a board without a
- * return channel (every QuinLED Dig2Analog-Ultra-5ch) ignores every slot of it, and a QuinLED Diff-Power Ultra-Analog
- * receiver answers its POLL of an RW frame without EXT (the return channel, 0.2.4, below). An UPD frame a board leaves
+ * return channel (every QuinLED Dig2Analog-Ultra-5ch) ignores every slot of it, and a QuinLED Diff-Power Ultra
+ * receiver answers its POLL of an RW frame without EXT (the return channel, below). An UPD frame a board leaves
  * to the update side (no clock sync, no slot), HINT it ignores. RW and UPD are never set together; a board ignores
- * such a frame. The hub sets none of them in normal frames (0x00). */
+ * such a frame. The hub sets none of them in normal frames (0x00).
+ * The nibble is full: a later frame-level feature never gets a header bit of its own. An optional one sets
+ * HINT and names itself in a broadcast slot (its own TYPE, 0x80-0xFF, after the last board's slot; the payload carries
+ * it); several share HINT in one frame, one broadcast slot each, and a board uses those it knows and ignores the rest
+ * (HINT with no hint named: nothing). A must-understand one sets EXT and names itself the same way (EXT's cost: the
+ * rules above). The broadcast slot types are assigned here, as they come. */
 #define ULTRA_HDR_RW       0x01u       /* a response window follows this frame (wiki: Return channel) */
-#define ULTRA_HDR_HINT     0x02u       /* optional: a frame-level hint (none defined yet); a board that doesn't know it
-                                          processes the frame as usual */
-#define ULTRA_HDR_EXT      0x04u       /* must understand: the frame uses an extension (none defined yet; it is named
-                                          with it, e.g. in a broadcast slot); a board without it ignores every slot */
+#define ULTRA_HDR_HINT     0x02u       /* optional: the frame's broadcast slots name its hints (none defined yet); a
+                                          board that knows none of them processes the frame as usual */
+#define ULTRA_HDR_EXT      0x04u       /* must understand: the frame's broadcast slots name its extensions (none defined
+                                          yet); a board without one of them ignores every slot */
 #define ULTRA_HDR_UPD      0x08u       /* firmware update session (wiki: Reserved extensions) */
 
 /* slot types */
@@ -88,17 +95,21 @@ enum {
     ULTRA_STEP = 0x04,         /* light: one strobe step (SEQ = the EFFECT's SEQ) */
     ULTRA_CONFIG = 0x05,       /* board: up to 9 settings (id, value) */
     ULTRA_IDENTIFY = 0x06,     /* board: blink pattern */
-    ULTRA_POLL = 0x07,         /* answer / relay in a response window (RW frames only; 0.2.4: the return channel) */
+    ULTRA_POLL = 0x07,         /* answer / relay in a response window (RW frames only: the return channel) */
     ULTRA_SCENE = 0x08,        /* light: power-on scene (persisted on the board) */
     ULTRA_LIGHT_OPT = 0x09,    /* light: options (dim to warm) */
-    ULTRA_SCENE_EFFECT = 0x0A, /* light: power-on effect on the SCENE values (persisted on the board; 0.2.3) */
-    ULTRA_TYPES = 0x0B,        /* 0x0B-0x7F: future per-board commands (ignored) */
+    ULTRA_SCENE_EFFECT = 0x0A, /* light: power-on effect on the SCENE values (persisted on the board) */
+    ULTRA_PIXEL_FX = 0x0B,     /* segment: a local pixel effect (the Ultra-Digital receiver, ULTRA_HWCAP_PIXEL_FX; below).
+                                  Every other board ignores it as an unknown type */
+    ULTRA_TYPES = 0x0B,        /* the light engine's types are 0 .. ULTRA_TYPES - 1 (the Ultra-Analog receivers and the
+                                  Dig2Analog-Ultra-5ch size their per-type state by it and ignore the types from
+                                  here on); 0x0C-0x7F: future per-board commands (ignored) */
     ULTRA_TYPE_BCAST = 0x80,   /* 0x80-0xFF: broadcast / extension slots only (after the last board's slot), never
                                   applied as a board's own slot. (The UPD frame's block types 0x81-0x85 are another
                                   namespace: ultra_update.h) */
 };
 
-/* Return channel (0.2.4: QuinLED Diff-Power Ultra-Analog receivers only, firmware 0.6.6 and later with BOARD=2; wiki:
+/* Return channel (the QuinLED Diff-Power Ultra-Analog and Ultra-Digital receivers only; wiki:
  * Return channel). All times in us after t0 = the last falling edge of the RW frame as each board measures it locally
  * (the last edge the tail copy finds in the DIN ring, not the shared clock's phase), in host us (a board scales them
  * with the shared clock's measured rate). During the window the forwarding gate is held CLOSED (DOUT LOW, not high-Z):
@@ -140,7 +151,7 @@ enum {
 #define ULTRA_RW_GUARD_US     30u      /* the line LOW again by s_i + pitch - GUARD, the lead byte included (430 us at
                                           1 Mbaud) */
 #define ULTRA_RW_END_US       80u      /* forward mode again W .. W + END (W = FIRST + R x pitch); a 50 us tick with
-                                          +-200 ppm and the ISR latency needs more than the proposal's 60 */
+                                          +-200 ppm and the ISR latency needs more than 60 */
 #define ULTRA_RW_HOLDOFF_US   200u     /* host: next frame >= window end + this */
 #define ULTRA_RW_LOCK_MS      1000u    /* host: the first RW frame this long after the chain's preamble */
 #define ULTRA_RW_BAUD         1000000u /* UART 8N1, LSB first, line idle LOW between bursts (rate 0) */
@@ -148,6 +159,34 @@ enum {
 #define ULTRA_RW_SYNC_IDLE_BITS 9u     /* SYNC's start bit follows >= this many bit times of HIGH (the lead byte's data
                                           and stop bits): the hub's UART is idle at SYNC, whatever it made of the
                                           check pulses and the short HIGH before the lead byte */
+/* Digital ports (wiki: Return channel, digital ports): a receiver on a pixel line (the QuinLED Diff-Power
+ * Ultra-Digital receiver, ULTRA_HWCAP_PIXEL; one per port, so every frame holds N = 1 slot) takes Ultra frames behind a
+ * marker in a latch gap the hub stretches; the strip never sees them. Before every marker frame (RW, IDENTIFY, CONFIG,
+ * UPD) the line LOW >= ULTRA_DP_QUIET_US after the last pixel edge, the marker HIGH MARK_MIN..MARK_MAX, LOW
+ * GAP_MIN..GAP_MAX, then the frame. After a frame without RW: LOW >= ULTRA_DP_AFTER_US before pixels. An RW frame
+ * (t_end = its last falling edge): the hub releases the line by t_end + ULTRA_RW_RELEASE_US (a release starting after
+ * t_end + ULTRA_DP_RELEASE_MAX_US is taken as the end of a frame without RW: no answer); the receiver answers once it
+ * has seen the line released >= ULTRA_DP_RELEASED_US and by t_end + ULTRA_RW_DIR_MAX_US (the line HIGH, the lead byte
+ * and the 32-byte answer at the POLL's rate; no turnaround check: the release is the check, RFLAGS CONTENTION never
+ * set); the hub listens until SYNC + 31 bytes or t_end + ultra_dp_window_us(rate), then retakes the line (LOW), pixels
+ * >= ULTRA_DP_RETAKE_US later. Never pixels during a window. The hub: no marker for ULTRA_DP_POWERUP_MS after powering
+ * a port or starting its stream; an update's frames each behind a marker, the line LOW >= ULTRA_DP_UPD_LOW_MS after
+ * the ANNOUNCE's window, no pixels until the session ends; the back-off: a receiver that stops answering gets
+ * ULTRA_DP_TRIES polls in quick succession, ULTRA_DP_TRIES more ULTRA_DP_RETRY_S later, then none until the user
+ * intervenes (at most 2 x TRIES one-frame glitches on the first pixels from a dead or misconfigured receiver) */
+#define ULTRA_DP_QUIET_US       350u   /* the LOW before a marker (a receiver still direct switches to delayed in it) */
+#define ULTRA_DP_MARK_MIN_US    15u    /* the marker's HIGH (hub: 20 us); pixels never hold a HIGH this long */
+#define ULTRA_DP_MARK_MAX_US    40u
+#define ULTRA_DP_GAP_MIN_US     5u     /* the LOW between the marker and the frame (hub: 10 us) */
+#define ULTRA_DP_GAP_MAX_US     20u
+#define ULTRA_DP_AFTER_US       300u   /* the LOW after a frame without RW, before pixels */
+#define ULTRA_DP_RELEASE_MAX_US 250u   /* RW: the hub's release starts by t_end + this (aimed: ULTRA_RW_RELEASE_US) */
+#define ULTRA_DP_RELEASED_US    20u    /* RW: the receiver drives only after the line was released this long */
+#define ULTRA_DP_RETAKE_US      20u    /* pixels this long after the hub retakes the line */
+#define ULTRA_DP_POWERUP_MS     1000u  /* no marker this long after a port's power-up or the start of its stream */
+#define ULTRA_DP_UPD_LOW_MS     50u    /* an update: the line LOW this long after the ANNOUNCE's window */
+#define ULTRA_DP_TRIES          3u     /* the back-off: polls in quick succession, the same after RETRY_S, then none */
+#define ULTRA_DP_RETRY_S        60u
 /* POLL slot (type ULTRA_POLL, LIGHT 0xF; the payload's offsets, as slot bytes) */
 #define ULTRA_POLL_INDEX      3u       /* answer index 0..R-1, or ULTRA_POLL_RELAY_ONLY */
 #define ULTRA_POLL_SLOTS      4u       /* R: response slots in this window, 1..ULTRA_RW_MAX_SLOTS */
@@ -159,7 +198,7 @@ enum {
 #define ULTRA_RW_RATE_250K    2u       /* 250 kbaud: 1450 us (beyond 100 m) */
 #define ULTRA_RW_RATES        3u       /* 3-255 reserved: not a valid POLL (the board doesn't take part) */
 /* response slot: SYNC | PAGE | INDEX<<4 | RFLAGS | SEQ | UID16 (2) | DATA (24) | CRC-16 (2), after the lead byte.
- * UID16: CRC-16 (ultra_crc16) over the 12 bytes of the MCU's unique id in address order (IDENTITY 0..11); a
+ * UID16: CRC-16 (ultra_crc16) over the 12 bytes of the MCU's unique id in address order (IDENTITY part 0, 0..11); a
  * fingerprint, not an identity (the host reads IDENTITY for that). Unknown RFLAGS bits are ignored. */
 #define ULTRA_RSP_LEAD        0xFFu    /* the lead byte: one falling edge, its start bit */
 #define ULTRA_RSP_SYNC        0xA5u
@@ -172,39 +211,64 @@ enum {
                                           went out (that window: no relay, no answer) */
 enum {
     ULTRA_PAGE_STATUS = 0x00, ULTRA_PAGE_OUTPUTS = 0x01, ULTRA_PAGE_ACKS = 0x02, ULTRA_PAGE_ERRORS = 0x03,
-    ULTRA_PAGE_IDENTITY = 0x04, ULTRA_PAGE_FW_UPDATE = 0x05,
+    ULTRA_PAGE_IDENTITY = 0x04,        /* two parts (POLL argument 0: 0 = the board, 1 = its features; 2-255:
+                                          UNSUPPORTED) (ULTRA_ID_*) */
+    ULTRA_PAGE_FW_UPDATE = 0x05,
     ULTRA_PAGE_CALIBRATION = 0x06,     /* current sense: the model, connected load and limit in effect */
     ULTRA_PAGE_CAL_TEST = 0x07,        /* the stored test, in two parts (POLL argument 0: 0 = CH1-3, 1 = CH4-5 + rest;
                                           2-255: UNSUPPORTED) */
-    ULTRA_PAGE_POWER = 0x08,           /* 0.2.2: board current limit and overcurrent events (ULTRA_PW_*) */
-    ULTRA_PAGE_SUPPLY = 0x09,          /* 0.2.3: supply dips (ULTRA_SU_*) */
-    ULTRA_PAGE_HEALTH = 0x0A,          /* 0.2.3: channel health and the MCU temperature peak (ULTRA_HE_*) */
-    ULTRA_PAGE_ENERGY = 0x0B,          /* 0.2.3: input energy (ULTRA_EN_*) */
-    ULTRA_PAGE_LIFETIME = 0x0C,        /* 0.2.5: the board's lifetime record, its odometer (ULTRA_LT_*) */
-    ULTRA_PAGE_DIAG = 0x0D,            /* 0.2.5: diagnostics in two parts (POLL argument 0: 0 = the running board, 1 =
+    ULTRA_PAGE_POWER = 0x08,           /* board current limit and overcurrent events (ULTRA_PW_*) */
+    ULTRA_PAGE_SUPPLY = 0x09,          /* supply dips (ULTRA_SU_*) */
+    ULTRA_PAGE_HEALTH = 0x0A,          /* channel health and the MCU temperature peak (ULTRA_HE_*) */
+    ULTRA_PAGE_ENERGY = 0x0B,          /* input energy (ULTRA_EN_*) */
+    ULTRA_PAGE_LIFETIME = 0x0C,        /* the board's lifetime record, its odometer (ULTRA_LT_*) */
+    ULTRA_PAGE_DIAG = 0x0D,            /* diagnostics in two parts (POLL argument 0: 0 = the running board, 1 =
                                           the fault memory and the calibration trend; 2-255: UNSUPPORTED) (ULTRA_DG_*) */
-    ULTRA_PAGE_LIFE_SYNC = 0x0E,       /* 0.2.6: the hub's lifetime counters for the board to merge (ULTRA_LS_*; the
+    ULTRA_PAGE_LIFE_SYNC = 0x0E,       /* the hub's lifetime counters for the board to merge (ULTRA_LS_*; the
                                           answer: the counters after it and the result) (ULTRA_FEAT_LIFE_SYNC) */
-    ULTRA_PAGE_HW = 0x80,              /* 0x0F-0x7F: future official pages; 0x80-0xFD: hardware-specific */
+    ULTRA_PAGE_HW = 0x80,              /* 0x0F-0x7F: future official pages; 0x80-0xFD: hardware-specific, by hardware id
+                                          (hardware 3, the Ultra-Digital receiver: 0x80 PIXEL, its pixel statistics, and
+                                          0x81 PIXEL_FX, its local effects (ULTRA_PXG_* below); its firmware's wiki) */
+    ULTRA_PAGE_HW_FX = 0x81,           /* hardware 3: PIXEL_FX, in three parts (POLL argument 0: 0 = state, 1 = the
+                                          effects it has, 2 = its palettes; 3-255: UNSUPPORTED) (ULTRA_PXG_*) */
     ULTRA_PAGE_BUSY = 0xFE, ULTRA_PAGE_UNSUPPORTED = 0xFF,
 };
-/* IDENTITY page DATA: MCU UID (12) | firmware version word (4, ultra_update.h; 0 = unknown) | bootloader version (1,
- * 0 = none) | hardware id (1) | hardware capabilities (2, ULTRA_HWCAP_*: 0.2.4) | firmware features (4,
- * ULTRA_FEAT_*). Only over the return channel: for a board without one (every Dig2Analog-Ultra-5ch) the host can't
- * know its features and relies on the compatibility rules above (an unknown command does nothing, an unknown effect
- * shows the plain state). */
+/* IDENTITY page DATA, two parts (POLL argument 0 = ULTRA_ID_PART_*, 2-255: UNSUPPORTED). A host reads both at
+ * the start and whenever UID16 changes.
+ * Part 0, the board: MCU UID (12) | firmware version word (4, ultra_update.h; 0 = unknown) | bootloader version (1,
+ * 0 = none) | hardware id (1) | hardware revision (1) | reserved (1, 0) | hardware capabilities (4, ULTRA_HWCAP_*).
+ * Part 1, the firmware's features: 192 feature bits in six u32 words (big-endian each, ULTRA_IDF_*): word w holds
+ * bits 32 w .. 32 w + 31, bit 32 w its least significant (word 0: the ULTRA_FEAT_* masks; ultra_feat_has). Every bit
+ * is official, assigned here in order; a hardware-specific ability goes by the hardware id (its capabilities, pages
+ * 0x80-0xFD, CONFIG 128-255), never by a feature bit.
+ * Only over the return channel: for a board without one (every
+ * Dig2Analog-Ultra-5ch) the host can't know its features and relies on the compatibility rules above (an unknown
+ * command does nothing, an unknown effect shows the plain state). */
+#define ULTRA_ID_PART_BOARD       0u     /* POLL argument 0 */
+#define ULTRA_ID_PART_FEATURES    1u
+#define ULTRA_ID_UID              0u     /* part 0 */
 #define ULTRA_ID_FW_VERSION       12u
-#define ULTRA_ID_BL_VERSION       16u    /* 0.2.4: (the offsets of the layout above) */
+#define ULTRA_ID_BL_VERSION       16u
 #define ULTRA_ID_HW_ID            17u    /* 1 Dig2Analog-Ultra-5ch (never answers), 2 Diff-Power Ultra-Analog
-                                            receiver */
-#define ULTRA_ID_HW_CAPS          18u
-#define ULTRA_ID_FEATURES         20u
-#define ULTRA_HWCAP_RETURN        0x0001u  /* 0.2.4: answers POLLs */
-#define ULTRA_HWCAP_RELAY         0x0002u  /* relays the answers of the boards behind it */
-#define ULTRA_HWCAP_VBUS          0x0004u  /* measures its supply / bus voltage (STATUS 13) */
-#define ULTRA_HWCAP_CURRENT       0x0008u  /* measures its input current (STATUS 17) */
-#define ULTRA_HWCAP_NTC           0x0010u  /* a board temperature sensor (STATUS 11) */
-/*      0x0020-0x8000             reserved (0.2.4: the proposal's AUX_V 0x0020 dropped, no page carries its value) */
+                                            receiver, 3 Diff-Power Ultra-Digital receiver; 4-254 later boards
+                                            (ultra_update.h UPD_HW_ID_*, assigned there), 0 / 255 never */
+#define ULTRA_ID_HW_REV           18u    /* the board's revision: the bit number in a firmware image's revision
+                                            mask (ultra_update.h UPD_D_HW_REV_MASK: 16 revisions a board) */
+#define ULTRA_ID_CAPS             20u    /* u32, ULTRA_HWCAP_* */
+#define ULTRA_IDF_FEATURES        0u     /* part 1: the six words */
+#define ULTRA_IDF_WORDS           6u
+#define ULTRA_IDF_BITS            192u
+#define ULTRA_HWCAP_RETURN        0x00000001u  /* answers POLLs */
+#define ULTRA_HWCAP_RELAY         0x00000002u  /* relays the answers of the boards behind it */
+#define ULTRA_HWCAP_VBUS          0x00000004u  /* measures its supply / bus voltage (STATUS 13) */
+#define ULTRA_HWCAP_CURRENT       0x00000008u  /* measures its input current (STATUS 17) */
+#define ULTRA_HWCAP_NTC           0x00000010u  /* a board temperature sensor (STATUS 11) */
+#define ULTRA_HWCAP_PIXEL         0x00000040u  /* a pixel delay line on a digital port (the Ultra-Digital
+                                                  receiver): polled behind a marker (ULTRA_DP_* above), one per port */
+#define ULTRA_HWCAP_PIXEL_FX      0x00000080u  /* runs local pixel effects (the Ultra-Digital receiver): PIXEL_FX,
+                                                  CONFIG 129-139, page 0x81 (ULTRA_PX_* below) */
+/*      0x00000020                reserved
+ *      0x00000100-0x80000000     reserved: later official capabilities */
 /* STATUS page DATA (wiki: Return channel), the fields the firmware measures already (console `status`):
  * the MCU (die) temperature from the CH32V203's internal sensor, int16 0.1 C, ULTRA_ST_NA = not valid (no good
  * conversion yet, or 5 bad ones in a row; core/mcutemp.h), and the 3.3 V rail from VREFINT, mV (0 = not known).
@@ -212,9 +276,9 @@ enum {
 #define ULTRA_ST_MCU_TEMP         9u
 #define ULTRA_ST_VDDA             15u
 #define ULTRA_ST_NA               0x8000u
-/* the rest of STATUS (0.2.4) */
+/* the rest of STATUS */
 #define ULTRA_ST_FW_VERSION       0u     /* u24: major, minor, patch (0 = a development build) */
-#define ULTRA_ST_HW               3u     /* u8: hardware id << 4 | revision */
+#define ULTRA_ST_HW_ID            3u     /* u8: the hardware id, as IDENTITY 17 (its revision: IDENTITY part 0) */
 #define ULTRA_ST_UPTIME           4u     /* u24: s since power-up (wraps after 194 days: compare modulo 2^24; after a
                                             restart it starts at 0 again, RESET has the cause) */
 #define ULTRA_ST_RESET            7u     /* u8: the reset cause of this start, ULTRA_ST_RST_* (several may be set) */
@@ -236,7 +300,7 @@ enum {
 #define ULTRA_ST_M_CURRENT        0x02u  /* STATUS 17 is measured (the current sense in use) */
 #define ULTRA_ST_M_NTC            0x04u  /* STATUS 11 is measured */
 #define ULTRA_ST_M_CALIBRATED     0x08u  /* the channel currents (OUTPUTS 10..19) come from a calibrated model */
-/* OUTPUTS page DATA (0.2.4; optional: a board may answer ULTRA_PAGE_UNSUPPORTED) */
+/* OUTPUTS page DATA (optional: a board may answer ULTRA_PAGE_UNSUPPORTED) */
 #define ULTRA_OU_LEVEL            0u     /* 5 x u16: CH1..CH5 output now, after every limit (what the PWM shows) */
 #define ULTRA_OU_CURRENT          10u    /* 5 x u16: CH1..CH5 current from the channel model at that output, mA */
 #define ULTRA_OU_EFFECTS          20u    /* u8: lights with an effect running (bit n = light n) */
@@ -251,13 +315,13 @@ enum {
 #define ULTRA_OU_W_SOFT_START     0x20u  /* the soft start ramps them */
 #define ULTRA_OU_W_SIGNAL_LOSS    0x40u  /* signal loss (CONFIG 8) */
 #define ULTRA_OU_W_TEST           0x80u  /* a current calibration test or the test jig's pattern */
-/* ACKS page (0.2.4; optional): the last SEQ taken per target and slot type. POLL arguments (slot bytes 7, 8, 9): three
+/* ACKS page (optional): the last SEQ taken per target and slot type. POLL arguments (slot bytes 7, 8, 9): three
  * slot types for the three columns (0 = LIGHT_DEF, SET, EFFECT respectively). */
 #define ULTRA_AK_SEQ              0u     /* 18 x u8: targets lights 0..4 then the board (LIGHT 0xF), 3 columns each:
                                             byte 3 x target + column */
 #define ULTRA_AK_NEVER            18u    /* u24: bit (3 x target + column) = none since power-up (its byte reads 0) */
 #define ULTRA_AK_CONFIG_CRC       21u    /* u16: as ULTRA_ST_CONFIG_CRC */
-/* ERRORS page (0.2.4; optional): u16 counters since power-up (wrap; the host takes differences) */
+/* ERRORS page (optional): u16 counters since power-up (wrap; the host takes differences) */
 #define ULTRA_ER_FRAMES           0u     /* frame ends seen */
 #define ULTRA_ER_HEADERS          2u     /* Ultra headers decoded */
 #define ULTRA_ER_TAIL_ERRORS      4u     /* frames of an Ultra length without a valid header */
@@ -270,13 +334,13 @@ enum {
 #define ULTRA_ER_FLASH_WRITES     18u    /* flash records written */
 #define ULTRA_ER_STACK            20u    /* the stack's high-water mark, bytes */
 /*      22-23                     reserved */
-/* STATUS byte 8 (0.2.2): the board's power state now, so a plain STATUS poll shows it (details: POWER page). */
+/* STATUS byte 8: the board's power state now, so a plain STATUS poll shows it (details: POWER page). */
 #define ULTRA_ST_STATE            8u
 #define ULTRA_ST_LIMITING         0x01u  /* the board limit reduces the outputs (held 2 s after the last reduction) */
 #define ULTRA_ST_TRIPPED          0x02u  /* outputs off after an overcurrent trip, until the retry */
 #define ULTRA_ST_POWER_EVENT      0x04u  /* a power event is latched: a POWER page latch the host hasn't acknowledged */
 #define ULTRA_ST_CH_LIMITING      0x08u  /* a channel limit (CONFIG 16-20) reduces a channel (held 2 s) */
-/* (0.2.5) bits 4-7: why the light isn't as the host set it now, the first of these that applies (the limits: bits 0
+/* bits 4-7: why the light isn't as the host set it now, the first of these that applies (the limits: bits 0
  * and 3, alongside); 0 = nothing (as set) */
 #define ULTRA_ST_WHY_SHIFT        4u
 #define ULTRA_ST_WHY_NONE         0u
@@ -293,7 +357,7 @@ enum {
 #define ULTRA_ST_WHY_PATTERN      11u    /* an identify / acknowledge / version / fault-code pattern */
 #define ULTRA_ST_DIP_RECENT_S     30u
 /*      0x10-0x80                   reserved (0) */
-/* POWER page DATA (0x08, 0.2.2): the board current limit and overcurrent events of boards with the input current
+/* POWER page DATA (0x08): the board current limit and overcurrent events of boards with the input current
  * sense (ULTRA_FEAT_POWER_EVENTS); others answer ULTRA_PAGE_UNSUPPORTED. A limit event starts when the limiter
  * reduces the outputs after ULTRA_PW_HOLD_MS without reducing them. Counters are u16 and wrap; ages are u24 seconds
  * (0xFFFFFF = none since power-up). While a latch is set, every answer carries RFLAGS ULTRA_RSP_EVENT and STATUS
@@ -314,7 +378,7 @@ enum {
 #define ULTRA_PW_EV_LIMITED       0x01u  /* latched: a limit event */
 #define ULTRA_PW_EV_OVERLOAD      0x02u  /* latched: an overload trip (above the limit's trip level for 200 ms) */
 #define ULTRA_PW_EV_SHORT         0x04u  /* latched: a short-circuit trip (>= 1.5 x the fuse rating for 50-100 us) */
-#define ULTRA_PW_EV_SUPPLY_DIP    0x08u  /* latched (0.2.3): a supply dip (SUPPLY page) */
+#define ULTRA_PW_EV_SUPPLY_DIP    0x08u  /* latched: a supply dip (SUPPLY page) */
 #define ULTRA_PW_SRC_BOARD        0u     /* limit source: the board's rating (also the CALIBRATION page's encoding) */
 #define ULTRA_PW_SRC_USER         1u     /* limit source: CONFIG 21 / the stored setting */
 #define ULTRA_PW_SRC_PWM          2u     /* limit source: the PWM preset (input capacitor) */
@@ -324,12 +388,12 @@ enum {
 #define ULTRA_PW_CAUSE_OVERLOAD   2u
 #define ULTRA_PW_HOLD_MS          2000u  /* LIMITING / CH_LIMITING hold, and the quiet time that ends a limit event */
 /* POWER page POLL arguments (slot bytes 7..): flags (1) | limit events (2) | overload trips (2) | short trips (2) |
- * supply dips (2, 0.2.3: the SUPPLY page's count), the counts the host last read. With ULTRA_PW_ARG_ACK a latch clears
+ * supply dips (2: the SUPPLY page's count), the counts the host last read. With ULTRA_PW_ARG_ACK a latch clears
  * when its count equals the acknowledged one, so an event after the host's read stays latched, and a repeated or lost
- * POLL does no harm. The answer shows the state after the acknowledge. (A 0.2.2 host sends 0 for the dips: its
- * acknowledge leaves a dip latched.) */
+ * POLL does no harm. The answer shows the state after the acknowledge. (A host that sends 0 for the dips leaves
+ * a dip latched.) */
 #define ULTRA_PW_ARG_ACK          0x01u
-/* SUPPLY page DATA (0x09, 0.2.3): dips of the supply / bus voltage (ULTRA_FEAT_SUPPLY_DIPS). A dip: the 1 ms readings
+/* SUPPLY page DATA (0x09): dips of the supply / bus voltage (ULTRA_FEAT_SUPPLY_DIPS). A dip: the 1 ms readings
  * fall clearly below a slow mean of the supply (the firmware's: below 90 % of a ~4 s mean for >= 3 ms; it ends above
  * 93 % for >= 3 ms), so it works at 12, 24 or 48 V alike. Each dip also latches ULTRA_PW_EV_SUPPLY_DIP on the POWER
  * page. POLL argument (slot byte 7): the logged dip the ULTRA_SU_EV_* fields show, 0 = the newest. Counters wrap; ages
@@ -349,7 +413,7 @@ enum {
                                             isn't in the log yet) */
 #define ULTRA_SU_EV_MA            21u    /* u16: the board current at its lowest reading, mA */
 #define ULTRA_SU_LOG              4u     /* dips the board keeps (RAM: a power cycle clears them) */
-/* HEALTH page DATA (0x0A, 0.2.3): channel health from the current calibration test (IDENTIFY 2) and the running
+/* HEALTH page DATA (0x0A): channel health from the current calibration test (IDENTIFY 2) and the running
  * channel model, and the MCU temperature peak (ULTRA_FEAT_HEALTH). Display only: nothing here changes the outputs. */
 #define ULTRA_HE_FLAGS            0u     /* u8: ULTRA_HE_F_* */
 #define ULTRA_HE_CLASS            1u     /* 5 x u8, CH1..CH5: the last test's class (ULTRA_HE_UNTESTED..) | reasons */
@@ -365,9 +429,9 @@ enum {
 #define ULTRA_HE_F_ABNORMAL       0x02u  /* a channel's class is ULTRA_HE_ABNORMAL */
 #define ULTRA_HE_F_DARK           0x04u  /* current with every output off (a FET stuck on, leakage) */
 #define ULTRA_HE_F_DRIFT          0x08u  /* the running model is far off the stored test on a channel */
-#define ULTRA_HE_F_CAL_SUGGESTED  0x10u  /* (named in 0.2.5; sent since firmware 0.6.6) a calibration test is suggested:
+#define ULTRA_HE_F_CAL_SUGGESTED  0x10u  /* a calibration test is suggested:
                                             the model far off the stored test for 5 min lit, or a new load */
-#define ULTRA_HE_F_HOT            0x20u  /* (0.2.5) the MCU die over its warning level now (STATUS 8: ULTRA_ST_WHY_HOT) */
+#define ULTRA_HE_F_HOT            0x20u  /* the MCU die over its warning level now (STATUS 8: ULTRA_ST_WHY_HOT) */
 #define ULTRA_HE_UNTESTED         0u
 #define ULTRA_HE_NO_LOAD          1u     /* nothing connected (and nothing was at the test before) */
 #define ULTRA_HE_NORMAL           2u
@@ -376,7 +440,7 @@ enum {
 #define ULTRA_HE_R_ABOVE          0x20u  /* far above the test before */
 #define ULTRA_HE_R_BELOW          0x40u  /* far below the test before, or no load where it had one */
 #define ULTRA_HE_NA               (-128)
-/* ENERGY page DATA (0x0B, 0.2.3): the input energy, supply / bus voltage x the measured input current
+/* ENERGY page DATA (0x0B): the input energy, supply / bus voltage x the measured input current
  * (ULTRA_FEAT_ENERGY) */
 #define ULTRA_EN_BOOT_MWH         0u     /* u32: since power-up, mWh */
 #define ULTRA_EN_TOTAL_WH         4u     /* u32: the board's lifetime, Wh (stored on the board at most hourly, and when
@@ -384,11 +448,11 @@ enum {
 #define ULTRA_EN_POWER_MW         8u     /* u32: the input power now, mW */
 #define ULTRA_EN_SAVED_AGE        12u    /* u24: s since the lifetime value was last stored (0xFFFFFF = not since
                                             power-up) */
-#define ULTRA_EN_VB               15u    /* (0.2.5) u16: the LED supply after the receiver's buck (V_B), x 10 mV; 0xFFFF
+#define ULTRA_EN_VB               15u    /* u16: the LED supply after the receiver's buck (V_B), x 10 mV; 0xFFFF
                                             = not measured */
-#define ULTRA_EN_PEAK_MA          17u    /* (0.2.5) u16: the highest input current (~100 ms average) since this page was
+#define ULTRA_EN_PEAK_MA          17u    /* u16: the highest input current (~100 ms average) since this page was
                                             last answered, mA (an answer the host misses takes its window's peak) */
-/* CALIBRATION page byte 1 (0.2.5): the current model in use (bits 0-3: 0 none, 1 learned, 2 calibrated) | how the last
+/* CALIBRATION page byte 1: the current model in use (bits 0-3: 0 none, 1 learned, 2 calibrated) | how the last
  * calibration test (IDENTIFY 2) ended (bits 4-7, ULTRA_CA_END_*). A test that stopped early stores nothing: the
  * calibration before it stays in use */
 #define ULTRA_CA_MODEL            1u
@@ -396,7 +460,7 @@ enum {
 #define ULTRA_CA_END_TRIP         1u     /* stopped: a trip */
 #define ULTRA_CA_END_LIMIT        2u     /* stopped: the installation's limit (CONFIG 21) reached, never above it */
 #define ULTRA_CA_END_SUPPLY       3u     /* stopped: a supply dip */
-/* LIFETIME page DATA (0x0C, 0.2.5): the board's lifetime record, its odometer: kept across power cuts (stored with the
+/* LIFETIME page DATA (0x0C): the board's lifetime record, its odometer: kept across power cuts (stored with the
  * lifetime energy, ENERGY page; a factory reset keeps it). The values as they are now: the stored ones and what came
  * since (ULTRA_FEAT_LIFETIME). Counters: their low 24 / 16 bits */
 #define ULTRA_LT_POWERED          0u     /* u24: time powered, 0.1 h */
@@ -410,8 +474,8 @@ enum {
 #define ULTRA_LT_WATCHDOG         18u    /* u8: watchdog resets (saturating) */
 #define ULTRA_LT_UPDATES          19u    /* u16: firmware updates (starts with a new app version) */
 #define ULTRA_LT_RECORDS          21u    /* u24: the record's writes (its flash wear) */
-/* LIFE_SYNC page (0x0E, 0.2.6; ULTRA_FEAT_LIFE_SYNC): a hub that keeps each board's lifetime counters (its ledger,
- * by the board's full UID, IDENTITY 0..11) sends them back after the board's power-up, so what the board couldn't
+/* LIFE_SYNC page (0x0E, ULTRA_FEAT_LIFE_SYNC): a hub that keeps each board's lifetime counters (its ledger,
+ * by the board's full UID, IDENTITY part 0) sends them back after the board's power-up, so what the board couldn't
  * store before a power cut isn't lost. The board merges once per power-up, and only when the POLL's UID16 and RECORDS
  * low 8 bits are its own (the record the hub reconciled against: a board that wrote since, or another board, merges
  * nothing). Each counter is raised by the hub's step d ahead (in the wire's units) when 0 < d <= its step, else kept:
@@ -452,7 +516,7 @@ enum {
 #define ULTRA_LS_F_TRIPS          0x08u  /* overload or short */
 #define ULTRA_LS_F_DIPS           0x10u
 #define ULTRA_LS_F_WH             0x20u
-/* DIAG page DATA (0x0D, 0.2.5): what service looks at first (ULTRA_FEAT_DIAG). POLL argument 0, the running board: */
+/* DIAG page DATA (0x0D): what service looks at first (ULTRA_FEAT_DIAG). POLL argument 0, the running board: */
 #define ULTRA_DG_RESET            0u     /* u8: this start's reset cause, ULTRA_ST_RST_* (as STATUS 7) */
 #define ULTRA_DG_BC_CAUSE         1u     /* u8: the last run's breadcrumbs (kept by a watchdog, software or pin reset):
                                             the exception's cause (RISC-V mcause; 0 = none: a watchdog reset without
@@ -474,10 +538,10 @@ enum {
 #define ULTRA_DG_FP_CALIBRATION   0x02u
 #define ULTRA_DG_FP_SCENE         0x04u
 #define ULTRA_DG_FP_LIFETIME      0x08u  /* a write is due, waiting for the flash's admission and the write budget (a
-                                            regular one also for the outputs to go dark; 0.2.6: also a supply dip's
+                                            regular one also for the outputs to go dark; also a supply dip's
                                             write that couldn't be made then, which doesn't wait for dark) */
 #define ULTRA_DG_FP_EFFECTS       0x10u  /* the power-on effects */
-#define ULTRA_DG_FP_EXHAUSTED     0x80u  /* (0.2.6) not a record: the lifetime record's flash-wear allowance is used up
+#define ULTRA_DG_FP_EXHAUSTED     0x80u  /* not a record: the lifetime record's flash-wear allowance is used up
                                             (the receiver: 32,768 writes + one per 3 h powered); it is written again
                                             once a run earns a write (one per 3 h powered in one run; shorter runs
                                             don't add up). Its counts since the last write are lost at a power cut */
@@ -502,6 +566,7 @@ enum {
                                             against the first, % (ULTRA_HE_NA: not known) */
 #define ULTRA_DG_TREND_LIT_H      13u    /* u16: ... over how many lit hours (0xFFFF: not known) */
 #define ULTRA_DG_TREND_TESTS      15u    /* u8: tests in that history (0: not known) */
+/* the firmware's features: IDENTITY part 1's word 0 (bits 0-31) as masks (ultra_feat_has: any bit, 0-191) */
 #define ULTRA_FEAT_SCENE          0x00000001u  /* SCENE: power-on scene */
 #define ULTRA_FEAT_DIM_TO_WARM    0x00000002u  /* LIGHT_OPT dim to warm with red assist */
 #define ULTRA_FEAT_DTW_POINTS     0x00000004u  /* LIGHT_OPT set points */
@@ -512,21 +577,26 @@ enum {
 #define ULTRA_FEAT_BOOT_PROTOCOL  0x00000080u  /* CONFIG 22 */
 #define ULTRA_FEAT_STAGGER_ADAPTIVE 0x00000100u /* CONFIG 7 values 3 / 4 */
 #define ULTRA_FEAT_MCU_TEMP       0x00000200u  /* STATUS: the MCU temperature and the 3.3 V rail (ULTRA_ST_*) */
-#define ULTRA_FEAT_VERSION_BLINK  0x00000400u  /* IDENTIFY 5: the firmware version as blinks (0.2.1) */
-#define ULTRA_FEAT_POWER_EVENTS   0x00000800u  /* POWER page and STATUS byte 8 (0.2.2) */
-#define ULTRA_FEAT_SUPPLY_DIPS    0x00001000u  /* SUPPLY page, POWER latch ULTRA_PW_EV_SUPPLY_DIP (0.2.3) */
-#define ULTRA_FEAT_HEALTH         0x00002000u  /* HEALTH page (0.2.3) */
-#define ULTRA_FEAT_ENERGY         0x00004000u  /* ENERGY page (0.2.3) */
-#define ULTRA_FEAT_SOFT_START     0x00008000u  /* CONFIG 23 (0.2.3) */
-#define ULTRA_FEAT_SCENE_EFFECT   0x00010000u  /* SCENE_EFFECT: power-on effects (0.2.3) */
-#define ULTRA_FEAT_LIFETIME       0x00020000u  /* LIFETIME page (0.2.5) */
-#define ULTRA_FEAT_DIAG           0x00040000u  /* DIAG page (0.2.5) */
-#define ULTRA_FEAT_RETRY          0x00080000u  /* CONFIG 24: the trips' retry policy (0.2.5) */
-#define ULTRA_FEAT_LOSS_SCENE     0x00100000u  /* CONFIG 8 value 3: signal loss fades to the power-on scene (0.2.5) */
-#define ULTRA_FEAT_STANDBY        0x00200000u  /* IDENTIFY 7: the planned power-off notice (0.2.6) */
-#define ULTRA_FEAT_LIFE_SYNC      0x00400000u  /* LIFE_SYNC page: the hub's lifetime counters merged (0.2.6) */
-/*      0x00800000                future official features (e.g. broadcast slots, an EXT extension);
- *      0x01000000-0x80000000     hardware-specific */
+#define ULTRA_FEAT_VERSION_BLINK  0x00000400u  /* IDENTIFY 5: the firmware version as blinks */
+#define ULTRA_FEAT_POWER_EVENTS   0x00000800u  /* POWER page and STATUS byte 8 */
+#define ULTRA_FEAT_SUPPLY_DIPS    0x00001000u  /* SUPPLY page, POWER latch ULTRA_PW_EV_SUPPLY_DIP */
+#define ULTRA_FEAT_HEALTH         0x00002000u  /* HEALTH page */
+#define ULTRA_FEAT_ENERGY         0x00004000u  /* ENERGY page */
+#define ULTRA_FEAT_SOFT_START     0x00008000u  /* CONFIG 23 */
+#define ULTRA_FEAT_SCENE_EFFECT   0x00010000u  /* SCENE_EFFECT: power-on effects */
+#define ULTRA_FEAT_LIFETIME       0x00020000u  /* LIFETIME page */
+#define ULTRA_FEAT_DIAG           0x00040000u  /* DIAG page */
+#define ULTRA_FEAT_RETRY          0x00080000u  /* CONFIG 24: the trips' retry policy */
+#define ULTRA_FEAT_LOSS_SCENE     0x00100000u  /* CONFIG 8 value 3: signal loss fades to the power-on scene */
+#define ULTRA_FEAT_STANDBY        0x00200000u  /* IDENTIFY 7: the planned power-off notice */
+#define ULTRA_FEAT_LIFE_SYNC      0x00400000u  /* LIFE_SYNC page: the hub's lifetime counters merged */
+/*      0x00800000-0x80000000     bits 23-31, then words 1-5 (bits 32-191): later official features, in order (every
+ *                                 bit official, none hardware-specific) */
+/* feature bit `bit` (0-191) in IDENTITY part 1's DATA f (ULTRA_IDF_FEATURES): 1 = the firmware has it */
+static inline int ultra_feat_has(const uint8_t *f, uint32_t bit)
+{
+    return bit < ULTRA_IDF_BITS && ((f[4u * (bit >> 5) + 3u - ((bit & 31u) >> 3)] >> (bit & 7u)) & 1u);
+}
 
 /* SET flags (low nibble of byte 1; the other slot types send FLAGS 0) */
 #define ULTRA_SET_SMOOTH   0x01u       /* ESPHome's smoothstep curve (6x^5 - 15x^4 + 10x^3), else linear */
@@ -567,7 +637,7 @@ enum {
     ULTRA_CFG_MIN_PULSE = 6,       /* 5..100 x 10 ns */
     ULTRA_CFG_STAGGER = 7,         /* 0 off, 1 fixed (thirds), 2 fixed + spread spectrum,
                                       3 adaptive (least LED_+ ripple), 4 adaptive + spread spectrum */
-    ULTRA_CFG_LOSS = 8,            /* 0 hold, 1 off, 2 fade off, 3 scene (0.2.5): fade to the light's stored power-on
+    ULTRA_CFG_LOSS = 8,            /* 0 hold, 1 off, 2 fade off, 3 scene: fade to the light's stored power-on
                                       scene / effect (a light without one holds) */
     ULTRA_CFG_LOSS_TIMEOUT = 9,    /* x 100 ms, 5..600 */
     ULTRA_CFG_FEEDBACK = 10,       /* identify channel: 0 red, 1 all, 2 off */
@@ -577,11 +647,11 @@ enum {
                                       channels scaled together (0 = the board rating) */
     ULTRA_CFG_BOOT_PROTOCOL = 22,  /* persisted: protocol mode after power-up, 0 auto, 1 WS2915, 2 WS2805, 3 Ultra
                                       (auto / Ultra apply at once; WS2915 / WS2805 from the next power-up on) */
-    ULTRA_CFG_SOFT_START = 23,     /* persisted (0.2.3): 0 off, 1 on (the default). After power-up (the first light)
+    ULTRA_CFG_SOFT_START = 23,     /* persisted: 0 off, 1 on (the default). After power-up (the first light)
                                       and after a trip's retry the board ramps its outputs from 20 to 100 % over 0.3 s,
                                       starting 0-100 ms late (from its chip id), so the boards of a pin don't switch
                                       their load on at once */
-    ULTRA_CFG_RETRY = 24,          /* persisted (0.2.5): the trips' retry policy, count | interval << 8. Count: 0
+    ULTRA_CFG_RETRY = 24,          /* persisted: the trips' retry policy, count | interval << 8. Count: 0
                                       never retry, 1-254 retries, 255 forever; the interval 1-255 s (0 = 1 s). The
                                       default 0x010A: 10 retries 1 s apart. After the last one the outputs stay off
                                       until a new command or frame value, or a power cycle; 60 s without a trip
@@ -590,7 +660,149 @@ enum {
     ULTRA_CFG_HW = 128,            /* 128-255: hardware-specific (e.g. a Diff-Power receiver, a current-sense revision) */
     ULTRA_CFG_MCU_TEMP_OFFSET = 128,   /* reserved, not settable yet: MCU temperature offset, int16 0.1 C (a one-point
                                           calibration, core/mcutemp.h); the board skips it like any unknown id */
+    /* hardware 3 (the Ultra-Digital receiver): the local pixel effects' settings, all persisted (ULTRA_PX_* below) */
+    ULTRA_CFG_PX_CHIP = 129,           /* the strip's chip (ULTRA_PXC_*): its timing, bytes per pixel and colour order */
+    ULTRA_CFG_PX_ORDER = 130,          /* the wire order of the channels (ULTRA_PX_ORDER; 0 = the chip's own) */
+    ULTRA_CFG_PX_PIXELS = 131,         /* pixels on the strip (0 = none yet: no local effect runs) */
+    ULTRA_CFG_PX_FPS = 132,            /* frames per second at most (0 = as many as the line allows) */
+    ULTRA_CFG_PX_MA_CH = 133,          /* LED current of one channel at 255, 0.1 mA, at the strip's supply (0 = 20 mA): the
+                                          limiter's estimate */
+    ULTRA_CFG_PX_LIMIT_MA = 134,       /* the limit of the receiver's bus-side input current, mA, as it measures and reports
+                                          it (0 = the link's, 2,250 mA): a lit frame is dimmed to stay under it */
+    ULTRA_CFG_PX_WHITE = 135,          /* bits 0-1: the default auto-white mode (ULTRA_PXW_*; 0 = accurate); bits 8-15: the
+                                          WS2805 white split, the share of the cold white (0 = even) */
+    ULTRA_CFG_PX_VOFFSET = 136,        /* this strip starts at this pixel of a virtual strip (an effect continuing over
+                                          ports and receivers) */
+    ULTRA_CFG_PX_VLENGTH = 137,        /* ... the virtual strip's length (0 = this strip alone) */
+    ULTRA_CFG_PX_POLICY = 138,         /* standalone behaviour (ULTRA_PXP_*) */
+    ULTRA_CFG_PX_LOSS_TIMEOUT = 139,   /* x 100 ms with no pixel frame and no marker = signal loss, 5..600 (0 = 30) */
+    ULTRA_CFG_PX_FIRST = 129,
+    ULTRA_CFG_PX_COUNT = 11,           /* ids 129 .. 139 */
 };
+
+/* ----------------------------------------------------------------------------------- local pixel effects (hardware 3) */
+/* The QuinLED Diff-Power Ultra-Digital receiver (ULTRA_HWCAP_PIXEL_FX) can make the strip's data itself. The hub starts
+ * an effect with PIXEL_FX, a command like any other on a digital port (behind a marker, ULTRA_DP_*; applied once per
+ * SEQ, repeated for redundancy). Until then, and after a PIXEL_FX with effect 0, the hub's pixels pass (stream mode,
+ * the delay line). The receiver changes between the two only inside a latch: the strip gets whole frames only (the
+ * hub's last one, then its own, or the other way round), and a poll never shows. The effects run on the host clock
+ * (the header TIME): receivers that got the same PIXEL_FX render the same picture at the same host time, and their frames
+ * start on a host-time grid (ULTRA_CFG_PX_FPS), so ports and receivers stay in step. The hub sends a header (a poll, a
+ * NOP) at least once a second to a local port: the receiver's phase comes from it. Frames are as long as the strip is
+ * (ULTRA_CFG_PX_PIXELS): the frame rate the line allows is the chip's, not the hub's.
+ *
+ * PIXEL_FX slot (type ULTRA_PIXEL_FX; LIGHT = the segment 0 .. ULTRA_PX_SEGMENTS - 1, ULTRA_LIGHT_BOARD = the whole
+ * strip as one segment 0 with the others stopped; LIGHT 4-14 and slot FLAGS: ignored, sent as 0). Offsets are slot
+ * bytes, 16- and 32-bit fields big-endian:
+ *   EFFECT      u8      0 = stream (leave local mode: LIGHT and every field but STORE are ignored), 1-127 the official
+ *                       catalogue (catalogue.json in the protocol repository; ids are never reused), 128-255 custom. An
+ *                       effect the receiver doesn't have shows Solid (page ULTRA_PAGE_HW_FX part 1 says which it has)
+ *   START       i32     ms relative to the header TIME: the effect's time zero (the phase anchor, as EFFECT's start). A
+ *                       PIXEL_FX applies when the host clock reaches it (a late copy catches up)
+ *   SPEED, INTENSITY, PALETTE  u8 each; the palette 0-127 built-in (the catalogue), ULTRA_PX_PAL_COLORS c1 -> c2 -> c3,
+ *                       ULTRA_PX_PAL_DEFAULT the effect's own
+ *   C1, C2, C3  R, G, B (white comes from the auto-white mode)
+ *   BRIGHTNESS  u8      0 = dark (the strip is held LOW: flash writes allowed), 255 = full; scaled down by the current limit
+ *   TRANSITION  u16     ms: brightness and colour ramps; another effect than the running one fades the old out and the new in
+ *                       (half of it each)
+ *   SEG_START, SEG_LEN  u16 each: the segment's first pixel and its length (0 = to the end of the strip). Segments are
+ *                       drawn in order, a higher one over a lower one
+ *   FLAGS       u8      ULTRA_PXF_*
+ *   CUSTOM1, CUSTOM2  u8 each: the effect's extra sliders (the catalogue names them)
+ */
+#define ULTRA_PX_SEGMENTS     4u
+#define ULTRA_PX_EFFECT       3u
+#define ULTRA_PX_START        4u
+#define ULTRA_PX_SPEED        8u
+#define ULTRA_PX_INTENSITY    9u
+#define ULTRA_PX_PALETTE      10u
+#define ULTRA_PX_C1           11u      /* C2 at 14, C3 at 17 */
+#define ULTRA_PX_C2           14u
+#define ULTRA_PX_C3           17u
+#define ULTRA_PX_BRIGHTNESS   20u
+#define ULTRA_PX_TRANSITION   21u
+#define ULTRA_PX_SEG_START    23u
+#define ULTRA_PX_SEG_LEN      25u
+#define ULTRA_PX_FLAGS        27u
+#define ULTRA_PX_CUSTOM1      28u
+#define ULTRA_PX_CUSTOM2      29u
+#define ULTRA_PX_FX_STREAM    0u       /* EFFECT 0 */
+#define ULTRA_PX_PAL_COLORS   0xFEu    /* PALETTE: c1 -> c2 -> c3 -> c1 */
+#define ULTRA_PX_PAL_DEFAULT  0xFFu    /* PALETTE: the effect's own */
+/* FLAGS. STORE: this segment's fields (not START and SEQ) and CONFIG 129-139 become the power-on / standalone effect
+ * (CONFIG 138); with EFFECT 0 the stored effect is cleared. The record is written only in stream mode or while the strip
+ * is dark, never as a visible pause. LOCK: a plain pixel stream from the controller doesn't take the strip back
+ * (otherwise, with ULTRA_PXP_STREAM_WINS, it does). RESTART: this slot is not a renewal of the running effect: the
+ * time-driven effects begin again at START (so START must be new; the same START restarts no time) and the random ones
+ * are re-seeded. Without it, the same effect with every parameter the same and only START new (the hub renewing an old
+ * START before its signed 32-bit ms run out, ~every 20 days) changes nothing: phase and picture go on. RESTART is an
+ * action, not a setting: STORE keeps it out of the stored effect. Bit 7: reserved, sent as 0 */
+#define ULTRA_PXF_REVERSE     0x01u
+#define ULTRA_PXF_MIRROR      0x02u
+#define ULTRA_PXF_WHITE_MASK  0x0Cu    /* auto-white mode, ULTRA_PXW_*, of RGBW and RGBCCT strips (0: CONFIG 135's) */
+#define ULTRA_PXF_WHITE_SHIFT 2u
+#define ULTRA_PXF_STORE       0x10u
+#define ULTRA_PXF_LOCK        0x20u
+#define ULTRA_PXF_RESTART     0x40u
+#define ULTRA_PXW_DEFAULT     0u       /* in FLAGS: the strip's own (CONFIG 135); in CONFIG 135: accurate */
+#define ULTRA_PXW_OFF         1u       /* no white from the colour (white only where an effect asks for it) */
+#define ULTRA_PXW_ACCURATE    2u       /* W = min(R, G, B), taken out of R, G, B: the colour stays true */
+#define ULTRA_PXW_BRIGHT      3u       /* W = min(R, G, B), R, G, B kept: brighter, paler */
+
+/* CONFIG 129: the chip (one preset: the timing on the receiver's 1.333 us bit grid, the bytes per pixel, the default
+ * colour order; the strip's reset time). The presets of the V5 class share one timing */
+#define ULTRA_PXC_WS2812B_V5      0u   /* WS2812B V5 / 2020, WS2811 V2.2 and later: RGB, wire order G R B */
+#define ULTRA_PXC_WS2812B_CLASSIC 1u   /* WS2812B before V5: RGB, G R B */
+#define ULTRA_PXC_SK6812_RGB      2u   /* SK6812, SK6812 B/1 RGB: G R B */
+#define ULTRA_PXC_SK6812_RGBW     3u   /* SK6812 RGBW: G R B W */
+#define ULTRA_PXC_WS2814_RGBW     4u   /* WS2814 (12 V: R G B W; the 24 V WS2814A / WS2814F strips are W R G B): the default
+                                          is R G B W, ULTRA_CFG_PX_ORDER picks the other */
+#define ULTRA_PXC_WS2805_RGBCCT   5u   /* WS2805 (RGB + warm + cold white, 5 bytes): R G B WW CW */
+#define ULTRA_PXC_WS2815          6u   /* WS2815 (12 V, backup data line): G R B */
+#define ULTRA_PXC_WS2811_400K     7u   /* WS2811 at 400 kHz: R G B */
+#define ULTRA_PXC_COUNT           8u
+/* CONFIG 130: wire byte k (0-4) = the channel in bits 3k .. 3k + 2 (ULTRA_PXCH_*); only as many bytes as the chip has,
+ * each channel once; anything else is ignored. 0 = the chip's own order */
+#define ULTRA_PXCH_R   0u
+#define ULTRA_PXCH_G   1u
+#define ULTRA_PXCH_B   2u
+#define ULTRA_PXCH_W   3u              /* the white (WS2805: the warm white) */
+#define ULTRA_PXCH_CW  4u              /* WS2805: the cold white */
+#define ULTRA_PX_ORDER(b0, b1, b2, b3, b4) \
+    ((uint16_t)((b0) | ((b1) << 3) | ((b2) << 6) | ((b3) << 9) | ((b4) << 12)))
+/* CONFIG 138 (0 = none of them: the hub's stream is all the strip shows, as before). The stored effect is the one a
+ * PIXEL_FX with STORE left */
+#define ULTRA_PXP_POWER_ON     0x01u   /* from power-up: when the line stays quiet (no pixel frame, no marker) for 2 s,
+                                          the stored effect fades in */
+#define ULTRA_PXP_ON_LOSS      0x02u   /* signal loss (CONFIG 139) starts the stored effect (else the strip holds its last
+                                          frame, as a WS28xx strip does) */
+#define ULTRA_PXP_STREAM_WINS  0x04u   /* a pixel stream from the controller takes the strip back from a local effect
+                                          that isn't locked (ULTRA_PXF_LOCK): at the second frame, inside a latch */
+
+/* Page ULTRA_PAGE_HW_FX (0x81), three parts (POLL argument 0), big-endian. Part 0, the state: */
+#define ULTRA_PXG_STATE        0u      /* part 0 */
+#define ULTRA_PXG_CATALOGUE    0u      /* u16: the catalogue's version (catalogue.json) */
+#define ULTRA_PXG_EFFECTS      2u      /* u8: effects the firmware has */
+#define ULTRA_PXG_PALETTES     3u      /* u8: palettes */
+#define ULTRA_PXG_CHIPS        4u      /* u8: chip presets (ULTRA_PXC_COUNT) */
+#define ULTRA_PXG_SEGMENTS     5u      /* u8: segments (ULTRA_PX_SEGMENTS) */
+#define ULTRA_PXG_MAX_PIXELS   6u      /* u16: the most pixels CONFIG 131 takes with the chip's bytes per pixel now */
+#define ULTRA_PXG_MODE         8u      /* u8: ULTRA_PXM_* */
+#define ULTRA_PXG_RUNNING      9u      /* 4 x u8: each segment's running effect (0 = none) */
+#define ULTRA_PXG_SEQ          13u     /* 4 x u8: the SEQ of each segment's last PIXEL_FX applied */
+#define ULTRA_PXG_FPS10        17u     /* u16: frames per second x 10 (local frames, the last second) */
+#define ULTRA_PXG_LOAD         19u     /* u8: the CPU load of the last second, 0.5 % steps (0-200) */
+#define ULTRA_PXG_LIMIT        20u     /* u8: the current limiter's brightness scale now, 255 = none */
+#define ULTRA_PXG_LATE         21u     /* u8: frames that started after their grid time (saturating) */
+#define ULTRA_PXG_CONFIG_CRC   22u     /* u16: ultra_px_config_crc over CONFIG 129-139 as the receiver has them */
+/* part 1: bit (id & 7) of byte id >> 3 (ids 0-191) = the effect id is in the firmware's catalogue; part 2 the same for
+ * the palettes */
+#define ULTRA_PXG_PART_STATE    0u
+#define ULTRA_PXG_PART_EFFECTS  1u
+#define ULTRA_PXG_PART_PALETTES 2u
+#define ULTRA_PXM_STREAM        0u     /* the hub's pixels pass */
+#define ULTRA_PXM_LOCAL         1u     /* a PIXEL_FX effect runs */
+#define ULTRA_PXM_STANDALONE    2u     /* the stored effect runs (CONFIG 138: power-on, signal loss) */
 
 /* ----------------------------------------------------------------------------------------------- helpers */
 /* CRC-8/SMBus (poly 0x07, init 0) and CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), a nibble at a time: 16-entry
@@ -844,24 +1056,42 @@ static inline void ultra_slot_config(uint8_t *s, uint8_t seq, const uint8_t *ids
     ultra_slot_seal(s);
 }
 
+/* CONFIG for the Ultra-Digital receiver's local pixel effects: up to 9 (id, value) pairs of ULTRA_CFG_PX_FIRST ..
+ * ULTRA_CFG_PX_FIRST + ULTRA_CFG_PX_COUNT - 1; any other id is left out (an unused pair is (0, 0)). Every other board skips
+ * these ids as unknown ones. */
+static inline void ultra_slot_config_px(uint8_t *s, uint8_t seq, const uint8_t *ids, const uint16_t *values, uint32_t n)
+{
+    uint8_t *p = s + ULTRA_PAYLOAD;
+    uint32_t i, j = 0;
+    ultra_slot_begin(s, ULTRA_CONFIG, ULTRA_LIGHT_BOARD, 0, seq);
+    for (i = 0; i < n && j < 9u; i++) {
+        if (ids[i] >= ULTRA_CFG_PX_FIRST && ids[i] < ULTRA_CFG_PX_FIRST + ULTRA_CFG_PX_COUNT) {
+            p[3 * j] = ids[i];
+            ultra_put16(p + 3 * j + 1, values[i]);
+            j++;
+        }
+    }
+    ultra_slot_seal(s);
+}
+
 /* IDENTIFY: on = 1 blinks the board's identify pattern (30 s), 0 stops it.
  * ULTRA_IDENT_CAL: boards with the input current sense measure each channel alone (zero, then R, G, B, W1, W2) and
  * store the result: `arg` 0 = the standard test at 25 / 50 / 75 / 100 % (0.95 s), 5..100 = at that duty only
- * (0.18 s; older firmware takes 0 as 25 %). Boards without it ignore it.
+ * (0.18 s). Boards without it ignore it.
  * ULTRA_IDENT_DARK: every output fades to dark (0.3 s) and stays dark for `arg` s (0 = 60 s) or until
  * ULTRA_IDENT_RELEASE, which fades back; the light engine keeps running underneath, so states and effects continue.
  * The hub darkens a whole pin this way and then calibrates its boards one after the other.
- * ULTRA_IDENT_VERSION (0.2.1): the board blinks its firmware version once on its feedback channel (3 fast, then
+ * ULTRA_IDENT_VERSION: the board blinks its firmware version once on its feedback channel (3 fast, then
  * major, minor and patch as value codes, then alpha / beta / rc as 1 / 2 / 3 short), then shows its outputs again.
- * Firmware from before 0.2.1 ignores it (reserved value): no blink means older firmware.
- * ULTRA_IDENT_POWER_OFF (0.2.6, ultra_slot_power_off): a planned power-off notice. The hub sends it in the slot of every
+ * ULTRA_IDENT_POWER_OFF (ultra_slot_power_off): a planned power-off notice. The hub sends it in the slot of every
  * board of a line, 3 copies with the same SEQ (applied once) at 0, 50 and 100 ms, and cuts the line's power at 200 ms;
  * once sent it always cuts (no take-back: a command after it waits for the power to be off, then wakes the line). A
- * board that knows it (the QuinLED Diff-Power Ultra-Analog receiver, ULTRA_FEAT_STANDBY) fades to dark (0.3 s) and takes the
- * coming cut as planned: no supply dip, and the lifetime record written only if there is something worth storing (a
- * board doesn't write its record for every standby cycle). After 2 s without the cut it forgets the notice. Its next
- * start is a power-up as any: such a receiver stays dark after every power-up until the first valid frame or 1.5 s,
- * then shows its power-on scene. Other boards ignore it (a reserved value before 0.2.6).
+ * board that knows it (a QuinLED Diff-Power Ultra receiver, ULTRA_FEAT_STANDBY) fades to dark (0.3 s) and takes the
+ * coming cut as planned: no supply dip in the 10 s after it, and the lifetime record written only if there is something
+ * worth storing (a board doesn't write its record for every standby cycle). Still powered 2 s after it with the supply
+ * steady, its outputs come back; after 10 s without the cut it forgets the notice. Its
+ * next start is a power-up as any: such a receiver stays dark after every power-up until the first valid
+ * frame or 1.5 s, then shows its power-on scene. Other boards ignore it.
  * Values 6 and 8-255 and CAL arguments 1-4 / 101-255 are reserved: a board ignores the slot. STOP / ON / RELEASE /
  * VERSION / POWER_OFF send argument 0. */
 #define ULTRA_IDENT_STOP 0u
@@ -869,8 +1099,8 @@ static inline void ultra_slot_config(uint8_t *s, uint8_t seq, const uint8_t *ids
 #define ULTRA_IDENT_CAL  2u
 #define ULTRA_IDENT_DARK 3u
 #define ULTRA_IDENT_RELEASE 4u
-#define ULTRA_IDENT_VERSION 5u         /* 0.2.1 */
-#define ULTRA_IDENT_POWER_OFF 7u       /* 0.2.6 (6: reserved) */
+#define ULTRA_IDENT_VERSION 5u
+#define ULTRA_IDENT_POWER_OFF 7u       /* (6: reserved) */
 #define ULTRA_IDENT_CAL_MIN 5u         /* CAL argument: 0 = the standard test, else MIN..MAX % */
 #define ULTRA_IDENT_CAL_MAX 100u
 static inline void ultra_slot_identify(uint8_t *s, uint8_t seq, uint8_t on)
@@ -880,7 +1110,7 @@ static inline void ultra_slot_identify(uint8_t *s, uint8_t seq, uint8_t on)
     ultra_slot_seal(s);
 }
 
-/* (0.2.6) the planned power-off notice (ULTRA_IDENT_POWER_OFF above) */
+/* the planned power-off notice (ULTRA_IDENT_POWER_OFF above) */
 static inline void ultra_slot_power_off(uint8_t *s, uint8_t seq)
 {
     ultra_slot_begin(s, ULTRA_IDENTIFY, ULTRA_LIGHT_BOARD, 0, seq);
@@ -926,7 +1156,7 @@ static inline void ultra_slot_scene(uint8_t *s, uint8_t light, uint8_t seq, uint
     ultra_slot_seal(s);
 }
 
-/* SCENE_EFFECT (0.2.3): the light's power-on effect. From the board's power-up until the controller takes over, the
+/* SCENE_EFFECT: the light's power-on effect. From the board's power-up until the controller takes over, the
  * board runs this effect on the light's SCENE values (mode 1) by itself, no controller needed: e.g. a candle, a slow
  * colour loop, a sunrise. The board stores it in its flash together with the light's LIGHT_DEF, LIGHT_OPT and SCENE
  * (written only when it changes, a few times a day at most: send a fixed power-on effect, not the live one).
@@ -934,7 +1164,7 @@ static inline void ultra_slot_scene(uint8_t *s, uint8_t light, uint8_t seq, uint
  * power-up). ULTRA_FX_NONE = no effect (the plain SCENE values). ULTRA_FX_STROBE is shown as the plain values (its
  * steps aren't stored). The effect stays until a SCENE_EFFECT changes it or a factory reset; a light whose SCENE mode
  * is 0 shows none. When the controller takes over (its first SET / EFFECT, or WS data), the outputs cross-fade from
- * the effect as from a plain scene (the SCENE fade). Boards before 0.2.3 ignore the slot (an unknown type). */
+ * the effect as from a plain scene (the SCENE fade). A board without it ignores the slot (an unknown type). */
 static inline void ultra_slot_scene_effect(uint8_t *s, uint8_t light, uint8_t seq, uint8_t fx, const uint8_t *params,
                                            uint32_t nparams)
 {
@@ -946,6 +1176,76 @@ static inline void ultra_slot_scene_effect(uint8_t *s, uint8_t light, uint8_t se
         p[1 + i] = params[i];
     }
     ultra_slot_seal(s);
+}
+
+/* PIXEL_FX (the Ultra-Digital receiver's local pixel effects, ULTRA_PX_* above) */
+typedef struct {
+    uint8_t  effect, speed, intensity, palette;
+    uint8_t  c[3][3];                  /* c1, c2, c3: R, G, B */
+    uint8_t  brightness, flags, custom1, custom2;
+    int32_t  start_ms;                 /* relative to the header TIME */
+    uint16_t transition_ms, seg_start, seg_len;
+} ultra_pixel_fx_t;
+
+static inline void ultra_slot_pixel_fx(uint8_t *s, uint8_t segment, uint8_t seq, const ultra_pixel_fx_t *f)
+{
+    uint32_t i;
+    ultra_slot_begin(s, ULTRA_PIXEL_FX, segment, 0, seq);
+    s[ULTRA_PX_EFFECT] = f->effect;
+    ultra_put32(s + ULTRA_PX_START, (uint32_t)f->start_ms);
+    s[ULTRA_PX_SPEED] = f->speed;
+    s[ULTRA_PX_INTENSITY] = f->intensity;
+    s[ULTRA_PX_PALETTE] = f->palette;
+    for (i = 0; i < 9u; i++) {
+        s[ULTRA_PX_C1 + i] = f->c[i / 3u][i % 3u];
+    }
+    s[ULTRA_PX_BRIGHTNESS] = f->brightness;
+    ultra_put16(s + ULTRA_PX_TRANSITION, f->transition_ms);
+    ultra_put16(s + ULTRA_PX_SEG_START, f->seg_start);
+    ultra_put16(s + ULTRA_PX_SEG_LEN, f->seg_len);
+    s[ULTRA_PX_FLAGS] = (uint8_t)(f->flags & 0x7Fu);
+    s[ULTRA_PX_CUSTOM1] = f->custom1;
+    s[ULTRA_PX_CUSTOM2] = f->custom2;
+    ultra_slot_seal(s);
+}
+
+/* a CRC-checked slot of type ULTRA_PIXEL_FX into f: the segment (LIGHT) 0 .. ULTRA_PX_SEGMENTS - 1 or ULTRA_LIGHT_BOARD
+ * (the whole strip), else -1 (LIGHT 4-14: the slot is ignored) */
+static inline int ultra_pixel_fx_parse(const uint8_t *s, ultra_pixel_fx_t *f)
+{
+    const uint32_t light = (uint32_t)s[1] >> 4, flags = s[ULTRA_PX_FLAGS];
+    uint32_t i;
+    if (light >= ULTRA_PX_SEGMENTS && light != ULTRA_LIGHT_BOARD) {
+        return -1;
+    }
+    f->effect = s[ULTRA_PX_EFFECT];
+    f->start_ms = (int32_t)ultra_get32(s + ULTRA_PX_START);
+    f->speed = s[ULTRA_PX_SPEED];
+    f->intensity = s[ULTRA_PX_INTENSITY];
+    f->palette = s[ULTRA_PX_PALETTE];
+    for (i = 0; i < 9u; i++) {
+        f->c[i / 3u][i % 3u] = s[ULTRA_PX_C1 + i];
+    }
+    f->brightness = s[ULTRA_PX_BRIGHTNESS];
+    f->transition_ms = (uint16_t)ultra_get16(s + ULTRA_PX_TRANSITION);
+    f->seg_start = (uint16_t)ultra_get16(s + ULTRA_PX_SEG_START);
+    f->seg_len = (uint16_t)ultra_get16(s + ULTRA_PX_SEG_LEN);
+    f->flags = (uint8_t)(flags & 0x7Fu);
+    f->custom1 = s[ULTRA_PX_CUSTOM1];
+    f->custom2 = s[ULTRA_PX_CUSTOM2];
+    return (int)light;
+}
+
+/* page 0x81's CONFIG CRC: ultra_crc16 over (id, value u16) of ids 129 .. 139 in order; values[k] = id 129 + k */
+static inline uint16_t ultra_px_config_crc(const uint16_t *values)
+{
+    uint8_t b[ULTRA_CFG_PX_COUNT * 3u];
+    uint32_t k;
+    for (k = 0; k < ULTRA_CFG_PX_COUNT; k++) {
+        b[3u * k] = (uint8_t)(ULTRA_CFG_PX_FIRST + k);
+        ultra_put16(b + 3u * k + 1u, values[k]);
+    }
+    return ultra_crc16(b, (uint32_t)sizeof b);
 }
 
 /* NOP: a valid slot that does nothing (keep-alive frames to boards that are locked to Ultra) */
@@ -967,7 +1267,7 @@ static inline void ultra_slot_dark(uint8_t *s)
     }
 }
 
-/* POLL (0.2.4; host side): in an RW frame (ultra_build_header_flags ULTRA_HDR_RW), board k's slot. index 0..slots-1 or
+/* POLL (host side): in an RW frame (ultra_build_header_flags ULTRA_HDR_RW), board k's slot. index 0..slots-1 or
  * ULTRA_POLL_RELAY_ONLY; up to 23 argument bytes */
 static inline void ultra_slot_poll(uint8_t *s, uint8_t seq, uint8_t index, uint8_t slots, uint8_t page, uint8_t rate,
                                    const uint8_t *arg, uint32_t nargs)
@@ -995,11 +1295,13 @@ static inline int ultra_poll_valid(const uint8_t *s)
 /* the slot pitch and the window W for a rate, us (host: next frame >= W + ULTRA_RW_HOLDOFF_US after the frame end).
  * The pitch: the burst's 33 bytes (the lead byte and the answer, 330 bit times) + 130 us for EARLY / LATE / START /
  * GUARD and the gap to the next slot */
-static inline uint32_t ultra_rw_slot_us(uint8_t rate) { return ((uint32_t)330u << rate) + 130u; }   /* (0.2.6: 32-bit) */
+static inline uint32_t ultra_rw_slot_us(uint8_t rate) { return ((uint32_t)330u << rate) + 130u; }   /* (32-bit) */
 static inline uint32_t ultra_rw_window_us(uint8_t slots, uint8_t rate)
 {
     return ULTRA_RW_FIRST_US + ultra_rw_slot_us(rate) * slots;
 }
+/* a digital port's window W_D, us after t_end: the hub listens this long at most (1,360 / 1,690 / 2,350 us) */
+static inline uint32_t ultra_dp_window_us(uint8_t rate) { return ULTRA_RW_DIR_MAX_US + ultra_rw_slot_us(rate); }
 
 /* an answer (32 bytes as received): 0 = SYNC and CRC valid */
 static inline int ultra_answer_check(const uint8_t *a)
@@ -1013,7 +1315,7 @@ static inline uint16_t ultra_config_crc(uint32_t valid, const uint16_t *values)
     uint8_t b[ULTRA_CFG_COUNT * 3u];
     uint32_t id, n = 0;
     for (id = 0; id < ULTRA_CFG_COUNT; id++) {
-        if (valid & ((uint32_t)1u << id)) {   /* (0.2.6: 32-bit: ids >= 16 on a 16-bit int target) */
+        if (valid & ((uint32_t)1u << id)) {   /* (32-bit: ids >= 16 on a 16-bit int target) */
             b[n] = (uint8_t)id;
             ultra_put16(b + n + 1u, values[id]);
             n += 3u;

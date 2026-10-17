@@ -38,8 +38,13 @@ used before) and the new md5 in that file, in the same commit.
 
 1. Set `FW_VERSION` in `src/app/main.c` to the version, commit, tag (`git tag -a v0.6.0-beta.1 -m "one line"`) and push
    the tag.
-2. `.github/workflows/release.yml` builds and runs the host tests. It also installs the built image through the
-   bootloader logic (`BL_TEST_IMAGE`), creates the GitHub release and writes the channel manifests.
+2. `.github/workflows/release.yml` builds and runs the host tests and the size and cycle gate (`tools/size_gate.py
+   --measure tools/measure_baseline.txt --corpus`: the images against their budgets, `measure.py`'s rows, the frozen
+   record corpus). It also installs the built image through the bootloader logic (`BL_TEST_IMAGE`), creates the
+   GitHub release and writes the channel manifests.
+   - An image under its floor, a row slower than allowed, or a corpus a build no longer reads stops the release.
+     Raising a budget or a baseline (`--write-measure`) is a decision, in its own commit.
+   - After a release whose record formats changed: freeze its corpus (`test/records/README.md`).
 3. **alpha / beta / rc:** signed with the CI key and published at once.
 4. **Stable:** the release stays a draft with an unsigned `stable.json`. On the signing PC (a Claude session can do
    this on request):
@@ -55,10 +60,27 @@ Program `...-factory.hex` with WCH-LinkUtility / wlink (WCH-LinkE on TP1-TP4):
 
 1. Erase the whole chip.
 2. Program the hex. Its addresses are 0x0000-based like the build's `fw.hex`; the tools map them to 0x08000000.
-3. Let the board boot once. Since 0.6.8 the app write-protects sectors 0-1 itself at its first boot (WRPR0 bits 0
-   and 1 = 0; README "New in 0.6.8"), then resets: the bootloader can then never be erased by the app. The jig's
-   `wrp = verify` checks FLASH->WPR after that reset (and RDPR 0xA5: no read protection). A power cut during that
-   rewrite leaves the chip read-protected: erase it (which lifts the protection) and program it again.
+3. Let the board boot. **The bootloader protects sectors 0–1 before any app runs**, then resets and checks loaded WPR, RDPR=0xA5 and all eight option values against the written snapshot.
+   Only WRPR0 bits 0–1 change; USER, DATA and WRPR1–3 are retained. Already protected boards are never rewritten.
+   The jig's `wrp = verify` still checks FLASH->WPR after the reset and RDPR=0xA5 (no read protection).
+4. Protection must succeed before releasing the board from the jig. Low VDD, an invalid option snapshot, a write
+   error or a failed read-back keep it in recovery, dark (Quindor: never an unprotected app). **What the jig
+   sees:** no app on TP5 (no banner, no live line, no `jig` line), only the bootloader's `QDBL action 00000004` and
+   `protection 5053000A` (written, not as written) / `50530008` (options unreadable; any other value: low supply or a
+   read-protected chip); the outputs dark but the red feedback channel's 1 Hz, 10 % recovery blink; FLASH->WPR sectors
+   0-1 still open. **Recovery:** fix the supply and power up again (the bootloader retries at every boot while the
+   sectors are open); still failing: SWD erase and program the factory hex again. A cut during option erase /
+   rewrite can leave RDPR read-protected (the bootloader never touches such a chip): SWD erase (which lifts the
+   protection) and program the factory hex again. The wiki's Test jig page has the same table.
+
+The app doesn't set the protection; a data-line update never replaces the bootloader (a new bootloader comes only
+with the factory hex, over SWD). Run bootloader bench checks 3, 9–14 before the first factory release with this
+build; host models do not settle the physical halfword reprogram, partial erase, option-byte reload or watchdog
+timing questions.
+
+The bootloader reports the protection through the hand-over's `reserved` word; the app reports protection events
+and the jig reads the option / WPR registers. The bootloader's build id, its exact rev3 binary md5 and size are in
+`bootloader/BL_BUILD_ID` and `bootloader/README.md`.
 
 **Two cautions:**
 

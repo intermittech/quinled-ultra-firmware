@@ -274,7 +274,8 @@ static void sc_rcpages(void)
     /* STATUS */
     pg = rc_ask(ULTRA_PAGE_STATUS, 0, 0, &o);
     CHECK(pg == ULTRA_PAGE_STATUS, "rcpages: STATUS answered (%d)", pg);
-    CHECK(ultra_get24(D(&o)) == fw_version >> 8 && D(&o)[3] == (BOARD << 4) && labs((long)ultra_get24(D(&o) + 4) -
+    CHECK(ultra_get24(D(&o)) == fw_version >> 8 && D(&o)[ULTRA_ST_HW_ID] == BOARD_HW_ID &&   /* (0.2.7: the whole byte) */
+          labs((long)ultra_get24(D(&o) + 4) -
           (long)up_s) <= 1 && D(&o)[7] == 0x03u, "rcpages: STATUS version %06X, hw %02X, uptime %u (%u), reset %02X",
           ultra_get24(D(&o)), D(&o)[3], ultra_get24(D(&o) + 4), up_s, D(&o)[7]);
     CHECK(D(&o)[ULTRA_ST_STATE] == pwrev_state(&pw) && (int16_t)ultra_get16(D(&o) + ULTRA_ST_MCU_TEMP) == mt.c10 &&
@@ -288,6 +289,23 @@ static void sc_rcpages(void)
           "rcpages: STATUS V+ %u x10 mV, I %u mA (%d), "
           "flags %02X, preset %u, CONFIG crc %04X, mode %02X", ultra_get16(D(&o) + 13), ultra_get16(D(&o) + 17),
           (int)is.i_avg, D(&o)[19], D(&o)[20], ultra_get16(D(&o) + 21), D(&o)[23]);
+    {   /* (round 11, F1) rc_cfg_crc's 3-byte chain = ultra_config_crc, over random sets of CONFIG ids and values */
+        uint32_t save_valid = ul.cfg_valid, x = 0x2545F491u, k, bad = 0;
+        uint16_t save_cfg[ULTRA_CFG_COUNT];
+        memcpy(save_cfg, ul.cfg, sizeof save_cfg);
+        for (k = 0; k < 500u; k++) {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            ul.cfg_valid = k == 0u ? 0u : k == 1u ? (1u << ULTRA_CFG_COUNT) - 1u : x & ((1u << ULTRA_CFG_COUNT) - 1u);
+            for (i = 0; i < (int)ULTRA_CFG_COUNT; i++) {
+                x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+                ul.cfg[i] = (uint16_t)x;
+            }
+            bad += rc_cfg_crc() != ultra_config_crc(ul.cfg_valid, ul.cfg);
+        }
+        ul.cfg_valid = save_valid;
+        memcpy(ul.cfg, save_cfg, sizeof save_cfg);
+        CHECK(bad == 0u, "rcpages: rc_cfg_crc = ultra_config_crc over 500 random CONFIG sets (%u differ)", bad);
+    }
     CHECK(o.a[2] == 0x00u, "rcpages: no RFLAGS (%02X; latched %02X, limit events %u, i %d mA)", o.a[2],
           pwrev_latched(&pw), pw.limit_events, is.i_avg);
 
@@ -332,14 +350,27 @@ static void sc_rcpages(void)
           ultra_get16(D(&o)), frames, ultra_get16(D(&o) + 10), ultra_get16(D(&o) + 12), ultra_get16(D(&o) + 14),
           ultra_get16(D(&o) + 16), ultra_get16(D(&o) + 8));
 
-    /* IDENTITY */
-    pg = rc_ask(ULTRA_PAGE_IDENTITY, 0, 0, &o);
-    CHECK(pg == ULTRA_PAGE_IDENTITY && memcmp(D(&o), rc_uid, 12) == 0 &&
-          ultra_get32(D(&o) + ULTRA_ID_FW_VERSION) == fw_version && D(&o)[17] == BOARD &&
-          ultra_get16(D(&o) + 18) == 0x000Fu && ultra_get32(D(&o) + ULTRA_ID_FEATURES) == 0x7FFFBFu,   /* (0.6.9:
-                                                    LIFETIME, DIAG, RETRY, LOSS_SCENE; 0.6.10 STANDBY, LIFE_SYNC) */
-          "rcpages: IDENTITY version %08X, hw %u, caps %04X, features %08X", ultra_get32(D(&o) + 12), D(&o)[17],
-          ultra_get16(D(&o) + 18), ultra_get32(D(&o) + 20));
+    /* IDENTITY (0.2.7: two parts, POLL argument 0) */
+    {
+        static const uint8_t part[3] = { ULTRA_ID_PART_BOARD, ULTRA_ID_PART_FEATURES, 2u };
+        uint32_t w, rest = 0;
+        pg = rc_ask(ULTRA_PAGE_IDENTITY, part, 1, &o);
+        CHECK(pg == ULTRA_PAGE_IDENTITY && memcmp(D(&o), rc_uid, 12) == 0 &&
+              ultra_get32(D(&o) + ULTRA_ID_FW_VERSION) == fw_version && D(&o)[ULTRA_ID_HW_ID] == BOARD_HW_ID &&
+              D(&o)[ULTRA_ID_HW_REV] == stat.hw_rev && D(&o)[19] == 0u && ultra_get32(D(&o) + ULTRA_ID_CAPS) == 0x0Fu,
+              "rcpages: IDENTITY part 0: version %08X, hw %u rev %u, caps %08X", ultra_get32(D(&o) + 12),
+              D(&o)[ULTRA_ID_HW_ID], D(&o)[ULTRA_ID_HW_REV], ultra_get32(D(&o) + ULTRA_ID_CAPS));
+        pg = rc_ask(ULTRA_PAGE_IDENTITY, part + 1, 1, &o);
+        for (w = 1; w < ULTRA_IDF_WORDS; w++) {
+            rest |= ultra_get32(D(&o) + ULTRA_IDF_FEATURES + 4u * w);
+        }
+        CHECK(pg == ULTRA_PAGE_IDENTITY && ultra_get32(D(&o) + ULTRA_IDF_FEATURES) == 0x7FFFBFu && rest == 0u &&
+              ultra_feat_has(D(&o), 22u) && !ultra_feat_has(D(&o), 6u),   /* (0.6.9: LIFETIME, DIAG, RETRY,
+                                                    LOSS_SCENE; 0.6.10 STANDBY, LIFE_SYNC; standalone: no FW_UPDATE) */
+              "rcpages: IDENTITY part 1: features %08X, words 1-5 %08X", ultra_get32(D(&o)), rest);
+        CHECK(rc_ask(ULTRA_PAGE_IDENTITY, part + 2, 1, &o) == ULTRA_PAGE_UNSUPPORTED, "rcpages: IDENTITY part 2: "
+              "UNSUPPORTED");
+    }
 
     /* CALIBRATION / CAL_TEST before and after a test (IDENTIFY 2) */
     pg = rc_ask(ULTRA_PAGE_CALIBRATION, 0, 0, &o);
@@ -386,6 +417,36 @@ static void sc_rcpages(void)
         pg = rc_ask(ULTRA_PAGE_ENERGY, 0, 0, &o);
         CHECK(pg == ULTRA_PAGE_ENERGY && ultra_get32(D(&o)) > 0u && ultra_get32(D(&o) + 8) > 1000u,
               "rcpages: ENERGY %u mWh, %u mW", ultra_get32(D(&o)), ultra_get32(D(&o) + 8));
+    }
+
+    /* (round 11, A5) LIFE_SYNC (0.2.6): the POLL with its 23 argument bytes through the window (the longest POLL);
+     * the hub ahead by 2 h / 30 power-ups / 2 dips: merged, the answer the counters after it; again: once a boot */
+    {
+        uint8_t a[23];
+        uint32_t ups, on, wh, rec;
+        CHECK(rc_ask(ULTRA_PAGE_LIFETIME, 0, 0, &o) == ULTRA_PAGE_LIFETIME, "rcpages: LIFETIME answered");
+        memset(a, 0, sizeof a);
+        memcpy(a + ULTRA_LS_LIFETIME, D(&o), 16);
+        on = ultra_get24(D(&o) + ULTRA_LT_POWERED);
+        ups = ultra_get24(D(&o) + ULTRA_LT_POWER_UPS);
+        rec = ultra_get24(D(&o) + ULTRA_LT_RECORDS);
+        wh = energy_total_wh(&en);
+        ultra_put16(a + ULTRA_LS_UID16, rc_uid16);
+        ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_POWERED, on + 20u);
+        ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_POWER_UPS, ups + 30u);
+        ultra_put24(a + ULTRA_LS_LIFETIME + ULTRA_LT_DIPS, ultra_get24(D(&o) + ULTRA_LT_DIPS) + 2u);
+        ultra_put32(a + ULTRA_LS_TOTAL_WH, wh + 5u);
+        a[ULTRA_LS_RECORDS] = (uint8_t)rec;
+        pg = rc_ask(ULTRA_PAGE_LIFE_SYNC, a, sizeof a, &o);
+        CHECK(pg == ULTRA_PAGE_LIFE_SYNC && D(&o)[ULTRA_LS_A_RESULT] == ULTRA_LS_R_APPLIED &&
+              ultra_get24(D(&o) + ULTRA_LT_POWERED) == on + 20u && ultra_get24(D(&o) + ULTRA_LT_POWER_UPS) == ups + 30u &&
+              ultra_get32(D(&o) + ULTRA_LS_A_TOTAL_WH) == wh + 5u && en.lt.ups == ups + 30u,
+              "rcpages: LIFE_SYNC merged (result %u, powered %u, power-ups %u, %u Wh)", D(&o)[ULTRA_LS_A_RESULT],
+              ultra_get24(D(&o) + ULTRA_LT_POWERED), ultra_get24(D(&o) + ULTRA_LT_POWER_UPS),
+              ultra_get32(D(&o) + ULTRA_LS_A_TOTAL_WH));
+        pg = rc_ask(ULTRA_PAGE_LIFE_SYNC, a, sizeof a, &o);
+        CHECK(pg == ULTRA_PAGE_LIFE_SYNC && D(&o)[ULTRA_LS_A_RESULT] == ULTRA_LS_R_ONCE, "rcpages: LIFE_SYNC again: "
+              "once a boot (result %u)", D(&o)[ULTRA_LS_A_RESULT]);
     }
 
     /* pages this firmware doesn't have */

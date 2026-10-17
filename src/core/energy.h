@@ -60,9 +60,10 @@
  * The hub's counters (0.6.10, protocol 0.2.6, the receiver's LIFE_SYNC page, energy_sync): a hub that keeps each
  * board's counters sends them back after its power-up; what the board lost at a cut (a short wake's time, energy and
  * power-up) comes back into RAM, a bounded step per counter, once a boot. A merged step counts as stored (saved_on_s /
- * saved_wh with it): it never makes a write due, it rides along with the board's own next write. The allowance counts
- * only the board's own powered time (on_s - merged x 360 s, format 3's `merged`, exact in 0.1 h, 24 bits: 190 years),
- * so no hub, buggy or hostile, raises the write rate.
+ * saved_wh with it): it never makes a write due, it rides along with the board's own next write; (round 11) only a
+ * day or more of powered time makes one due, as a day powered does. The allowance counts only the board's own powered
+ * time (on_s - merged x 360 s, format 3's `merged`, exact in 0.1 h, 24 bits: 190 years), so no hub, buggy or hostile,
+ * gets more writes than the allowance (at most one a boot, each for a day of powered time).
  *
  * Energy per channel (0.6.5): the measured input energy split over the five channels by the channel model. Every ms
  * the outputs in effect (core/isense.h `applied`, after the limiter and the soft start) and the board current are
@@ -97,8 +98,13 @@
 #define ENERGY_UJ_PER_MWH  3600000u
 /* (0.6.10, protocol 0.2.6) the hub's counters (LIFE_SYNC page, energy_sync): the steps a merge takes at most */
 #define LIFE_SYNC_MAX_H10  7200u    /* powered time: 30 days (0.1 h) */
-#define LIFE_SYNC_EV_S     10u      /* power-ups, trips, dips: one per this much of the powered time raised ... */
-#define LIFE_SYNC_EV_MIN   64u      /* ... + this */
+#define LIFE_SYNC_EV_S     10u      /* power-ups: one per this much of the powered time raised ... */
+#define LIFE_SYNC_EV_MIN   64u      /* ... + this; the trips and dips: this (round 11) */
+#define ENERGY_SYNC_ONCE   0x01u    /* energy_t.synced: a merge applied this boot (the next one: ULTRA_LS_R_ONCE) */
+#define ENERGY_SYNC_HUB    0x02u    /* (round 12, S6) the hub synced this boot, applied or nothing ahead (not CAPPED):
+                                       writes only for an event, a dip or a week (energy_second; the receivers) */
+#define LIFE_SYNC_SAVE_S   604800u  /* (round 12, S6) a synced boot's time write: a week powered since the last write
+                                       (merges included), well under the 30-day step (LIFE_SYNC_MAX_H10) */
 #define LIFE_SYNC_MAX_W    1000u    /* energy: this power over the powered time raised + 1 h, Wh */
 
 /* why energy_due() wants a write (either goes into an erased entry); also the bits of its `admit` argument */
@@ -172,7 +178,8 @@ typedef struct {
     uint16_t dips;                  /* the supply dips since boot, as last seen (vdip's count, u16: differences) */
     uint16_t trips_seen[2];         /* the trips since boot (core/pwrev.h's u16 counts), as last seen */
     uint8_t  saved;                 /* stored since boot */
-    uint8_t  synced;                /* (0.6.10) energy_sync applied a merge this boot (one a boot) */
+    uint8_t  synced;                /* (0.6.10) energy_sync this boot: ENERGY_SYNC_ONCE a merge applied (one a boot);
+                                       (round 12) ENERGY_SYNC_HUB the hub's ledger agrees (applied or nothing ahead) */
     scene_budget_t budget;
     /* energy per channel (0.6.5, RAM only) */
     uint32_t ch_d[ISENSE_CH];       /* this second: each output's sum (16-bit levels x ms) */
@@ -206,11 +213,18 @@ void     energy_saved(energy_t *e, uint32_t now_s);
  * hub's step d ahead (wire units: 0.1 h, Wh, counts; a 24-bit field ahead below 2^23, modular; the others plain: a
  * lower value never) when 0 < d <= its step: powered LIFE_SYNC_MAX_H10 (and `merged` below 2^24); lit the powered
  * step + 1; both also no further than the room below their seconds' ceiling (round 9 phase B: 2^32 - 1 s, ~136 years;
- * a merge never wraps them: further ahead, CAPPED); power-ups, trips, dips one per LIFE_SYNC_EV_S of the powered time
- * raised + LIFE_SYNC_EV_MIN; the energy LIFE_SYNC_MAX_W over it + 1 h. At the ceiling the board's own counting stops
- * too (on_s, lit_s, the energy: they stay, never lowered; its own time, and so the allowance, stop growing).
+ * a merge never wraps them: further ahead, CAPPED); power-ups one per LIFE_SYNC_EV_S of the powered time raised +
+ * LIFE_SYNC_EV_MIN, trips and dips LIFE_SYNC_EV_MIN (round 11); the energy LIFE_SYNC_MAX_W over it + 1 h. At the
+ * ceiling the board's own counting stops too (on_s, lit_s, the energy: they stay, never lowered; its own time, and so
+ * the allowance, stop growing).
  * A merged step counts as stored (saved_on_s / saved_wh too): it never makes a write due; it rides along with the
- * board's own next one. Returns the applied fields (ULTRA_LS_F_*) | ULTRA_LS_R_* << 8 */
+ * board's own next one. (round 11) Except powered time of LIFE_IDLE_S (a day) or more: that makes a write due, as a
+ * day powered does, so a receiver whose standby wakes never write keeps it and the hub's lead never grows past its
+ * step. (round 12, S6) Applied or nothing ahead (not CAPPED) marks the boot ENERGY_SYNC_HUB: the hub's ledger carries
+ * the energy and the time, so this boot writes the record only for an event (a trip, a watchdog reset, an update), an
+ * unplanned dip, or a week powered since the last write (LIFE_SYNC_SAVE_S, merges included); never for the energy, a
+ * day or the 10 minutes alone (a planned cut, a dark moment). Returns the applied fields (ULTRA_LS_F_*) |
+ * ULTRA_LS_R_* << 8 */
 uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16);
 /* the record's version field for a core/fwver.h word: its CRC-8 (crc8_smbus over its 4 bytes) */
 uint32_t energy_ver(uint32_t ver);

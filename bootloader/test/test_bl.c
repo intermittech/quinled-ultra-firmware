@@ -50,6 +50,8 @@ static uint8_t fl_prog[FL_SIZE / 2u];     /* half-word programmed since its eras
 static uint32_t fl_ops, fl_cut_at;        /* power cut when fl_ops reaches fl_cut_at (0 = never) */
 static uint32_t fl_busy_us;               /* flash time since the simulator last looked */
 static int fl_power = 1, fl_violations;
+static int fl_partial_erase, fl_revoke_fail;
+static uint32_t fl_erases, fl_revokes;
 static jmp_buf cut_jmp;
 
 static void fl_fill_erased(uint32_t off, uint32_t n)
@@ -92,6 +94,20 @@ int bl_plat_erase_sector(uint32_t a)
     if ((a & 4095u) != 0u || a < UPD_APP_DESC || a + 4096u > UPD_APP_END) {
         fl_violation("sector erase", a);
         return -1;
+    }
+    fl_erases++;
+    if (fl_partial_erase && a == UPD_APP_DESC) {
+        uint32_t i;
+        /* A cut can affect only body bits, leaving the whole descriptor/status page untouched.
+         * Flip ONE programmed bit towards its erased E339 readout, not random replacement data. */
+        for (i = UPD_APP_BODY - FL_BASE; i < a - FL_BASE + 4096u; i++) {
+            uint8_t diff = (uint8_t)(fl[i] ^ ((i & 1u) ? 0xE3u : 0x39u));
+            if (diff) {
+                fl[i] ^= (uint8_t)(diff & (0u - diff));
+                break;
+            }
+        }
+        longjmp(cut_jmp, 1);
     }
     fl_op(a - FL_BASE, 4096u);
     fl_fill_erased(a - FL_BASE, 4096u);
@@ -138,7 +154,13 @@ int bl_plat_program_half(uint32_t a, uint16_t v)
         fl_violation("half-word program outside the descriptor page", a);
         return -1;
     }
-    if (fl_prog[off / 2u]) {
+    if (a == UPD_APP_DESC && v == 0u) {
+        fl_revokes++;
+        if (fl_revoke_fail) {
+            return -1;
+        }
+        /* The sole permitted reprogram: clear the descriptor magic before its sector erase. */
+    } else if (fl_prog[off / 2u]) {
         fl_violation("half-word programmed twice", a);
         return -1;
     }
@@ -157,6 +179,34 @@ uint32_t bl_plat_crc32(uint32_t addr, uint32_t nwords)
 
 int bl_plat_power_ok(void) { return fl_power; }
 void bl_plat_kick(void) {}
+
+/* Reset hardware model. Default: a factory board already protected; r11 tests exercise provisioning too. */
+static uint32_t watchdog_starts, din_high_for, boot_tick, din_start, options_writes, options_reads;
+static uint16_t options[8] = {0xA5, 0x3F, 0x12, 0x34, 0xFC, 0xFF, 0xFF, 0xFF};
+static int options_ok = 1, options_fail, options_corrupt, options_cut, boot_open;
+void bl_plat_watchdog_start(void) { watchdog_starts++; }
+int bl_plat_din_high(void) { return din_high_for && boot_tick - din_start <= din_high_for; }
+uint32_t bl_plat_boot_ticks(void) { uint32_t t = boot_tick; boot_tick += 8u; return t; }
+int bl_plat_boot_open(void) { return boot_open; }
+int bl_plat_options_read(uint16_t ob[8])
+{
+    options_reads++;
+    memcpy(ob, options, sizeof options);
+    return options_ok;
+}
+int bl_plat_options_write(const uint16_t ob[8])
+{
+    options_writes++;
+    if (options_cut) {
+        options[0] = 0xFF;                 /* cut after option erase: RDPR no longer A5, requires jig repair */
+        options_ok = 0;
+        longjmp(cut_jmp, 1);
+    }
+    if (options_fail) { return -1; }
+    memcpy(options, ob, sizeof options);
+    if (options_corrupt) { options[6] ^= 1u; }
+    return 0;
+}
 
 /* =============================================================================================== images */
 typedef struct {
@@ -246,6 +296,8 @@ typedef struct {
     int app_half;              /* app model: ANNOUNCE halves seen */
     int app_takes;             /* app model: reboot into the bootloader on an ANNOUNCE */
     int app_confirmed;
+    int app_hung;
+    uint64_t watchdog_deadline;
     uint64_t now_us, busy_until_us;
     uint32_t boots, sessions_entered, exits, jumps;
     bl_action_t last_act;
@@ -265,8 +317,13 @@ static void board_boot(uint32_t reset)
         bl_action_t act;
         B.boots++;
         B.now_us += 3000u;                            /* reset + code load (gate closed meanwhile) */
-        bl_app_read(&BA);
-        act = bl_decide(&BA, &HO, reset, 0);
+        act = bl_boot(&BA, &HO, reset, 0);
+        B.watchdog_deadline = watchdog_starts ? B.now_us + 4000000u : 0u;
+        if (act == BL_ACT_RESET) {
+            boot_open = (options[4] & 3u) != 0u;      /* WPR loads at a system reset */
+            reset = soft_kind;
+            continue;
+        }
         if (act == BL_ACT_VERIFY) {
             fl_busy_us = 0;
             act = bl_after_verify(&BA);
@@ -307,6 +364,9 @@ static void board_stall(uint32_t us)
 static void board_poll(void)
 {
     if (B.in_app) {
+        if (B.app_hung && B.watchdog_deadline && B.now_us >= B.watchdog_deadline) {
+            board_boot(BL_RST_WATCHDOG);
+        }
         return;
     }
     fl_busy_us = 0;
@@ -510,6 +570,13 @@ static void board_reset_model(void)
     fl_power = 1;
     fl_cut_at = 0;
     fl_violations = 0;
+    fl_partial_erase = fl_revoke_fail = 0;
+    fl_erases = fl_revokes = 0;
+    watchdog_starts = din_high_for = boot_tick = din_start = options_writes = options_reads = 0;
+    options_ok = 1;
+    options_fail = options_corrupt = options_cut = boot_open = 0;
+    options[0] = 0xA5; options[1] = 0x3F; options[2] = 0x12; options[3] = 0x34;
+    options[4] = 0xFC; options[5] = options[6] = options[7] = 0xFF;
 }
 
 static int running(const image_t *im)
@@ -1286,11 +1353,23 @@ static void test_release_image(const char *path)
 }
 
 #include "test_bl_r4.c"                         /* review round 4: the cases above did not cover */
+#include "test_bl_r11.c"
 
 #ifndef BL_TEST_NO_MAIN
 int main(void)
 {
     const char *img = getenv("BL_TEST_IMAGE");
+    const char *r11 = getenv("BL_TEST_R11");
+    if (r11 && *r11) {
+        if (!strcmp(r11, "a")) { test_r11_watchdog(); }
+        else if (!strcmp(r11, "b")) { test_r11_recovery(); }
+        else if (!strcmp(r11, "c")) { test_r11_erase(); }
+        else if (!strcmp(r11, "d")) { test_r11_escape(); }
+        else if (!strcmp(r11, "D1")) { test_r11_protection(); }
+        else { test_r11_all(); }
+        printf("\n%d checks, %d failed\n", checks, fails);
+        return fails ? 1 : 0;
+    }
     if (img != 0 && *img != 0) {
         test_release_image(img);
         printf("\n%d checks, %d failed\n", checks, fails);
@@ -1312,6 +1391,7 @@ int main(void)
     test_decoder();
     test_e2e_waveform();
     test_r4_all();
+    test_r11_all();
     printf("\n%d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

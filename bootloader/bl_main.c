@@ -3,10 +3,11 @@
 /* QuinLED dig2analog-ultra-5ch bootloader (wiki: Updating over the data line; README.md here).
  *
  * Every reset starts here, at HSI 8 MHz:
- *   fast path: descriptor CRC (CRC unit, 15 words) + status records -> confirmed app: jump (well under 0.1 ms, no
- *              clock, no peripheral touched, so a Diff-Power switch-on is as fast as without a bootloader);
+ *   fast path: start IWDG, descriptor/status + option-byte protection check -> confirmed app: jump at HSI;
+ *              DIN high for 20 ms on power-on requests a 3 s session window (low has no qualification wait);
  *   full mode: 144 MHz, DIN sampler, gate, watchdog: verify a fresh image, an unconfirmed app's trial window, a
  *              session the app asked for, or recovery. It always leaves through a software reset.
+ *   first provisioning: protect sectors 0-1, reset and read back all option bytes before running an app.
  * No interrupts are used. */
 #include "ch32v20x.h"
 #include "bl_core.h"
@@ -49,10 +50,15 @@ int main(void)
     uint32_t flags = hw_reset_flags_take(), reset, rd = 0, last_feed, gate_tick, now;
     uint16_t gate_cnt = 0;
 
+#if BL_HW_ID == 3
+    hw_blank_early();                         /* (before anything else: bl_hw.c) */
+#endif
     reset = bl_reset_kind(flags);             /* software / watchdog first: they may raise PINRSTF as well */
     hw_crc_on();
-    bl_app_read(&app);
-    act = bl_decide(&app, HO, reset, flags);
+    act = bl_boot(&app, HO, reset, flags);
+    if (act == BL_ACT_RESET) {
+        hw_soft_reset();
+    }
     if (act == BL_ACT_JUMP) {
         hw_jump_app();
     }
@@ -60,6 +66,7 @@ int main(void)
     hw_full_init();
     report("QDBL action ", act);
     report("app version ", app.version);
+    report("protection ", HO->reserved);
     if (act == BL_ACT_VERIFY) {
         act = bl_after_verify(&app);
         report("verified ", act);

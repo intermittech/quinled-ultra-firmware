@@ -89,9 +89,12 @@ static void sc_r9b(const char *c)
             run_ms(2200);                                /* 2.6 s after the notice (no cut), 3.6 s into the hold */
             printf("  2.6 s after the notice (no cut): out %u, planned %u, dark hold active %u\n", out_now[0],
                    vdip.planned, dk.active);
-            CHECK(out_now[0] == 0u && dk.active && !vdip.planned, "r9b hold: the 60 s dark hold stays after the "
-                  "forgotten notice (out %u, active %u)", out_now[0], dk.active);
-            run_ms(57000);                               /* the hold's end, 60 s after IDENTIFY 3 */
+            CHECK(out_now[0] == 0u && dk.active, "r9b hold: the 60 s dark hold stays after the notice's 2 s (out %u, "
+                  "active %u)", out_now[0], dk.active);
+            run_ms(PLAN_CUT_MS);                         /* (round 11) the notice forgotten after 10 s */
+            CHECK(out_now[0] == 0u && dk.active && !vdip.planned, "r9b hold: ... and after the forgotten notice (out "
+                  "%u, active %u)", out_now[0], dk.active);
+            run_ms(57000u - PLAN_CUT_MS);                /* the hold's end, 60 s after IDENTIFY 3 */
             CHECK(out_now[0] > 30000u && !dk.active, "r9b hold: the light back at the hold's end (%u)", out_now[0]);
         }
         return;

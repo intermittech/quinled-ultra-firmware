@@ -15,14 +15,8 @@
 
 RC_MEASURED int rc_poll_parse(const uint8_t *s)
 {
-    uint32_t r = s[RC_P_SLOTS], i = s[RC_P_INDEX];
-    return (s[0] == ULTRA_POLL && (s[1] >> 4) == ULTRA_LIGHT_BOARD && r - 1u < ULTRA_RW_MAX_SLOTS &&
-            (i < r || i == ULTRA_POLL_RELAY_ONLY) && s[RC_P_RATE] < RC_RATES) ? 0 : -1;
-}                                          /* (slot FLAGS: unknown bits are ignored, as in every slot) */
-
-uint32_t rc_slot_us(uint8_t rate)
-{
-    return (330u << rate) + 130u;          /* as ultra_rw_slot_us (0.2.4: the lead byte and the answer, 33 bytes) */
+    return ultra_poll_valid(s);            /* (round 11, F1: the header's, one copy of the rule; slot FLAGS: unknown bits
+                                              are ignored, as in every slot) */
 }
 
 RC_MEASURED int32_t rc_last_edge(const uint16_t *w, uint32_t words)

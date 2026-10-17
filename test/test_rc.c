@@ -171,7 +171,9 @@ static void test_rc_units(void)
 /* ------------------------------------------------------------------------------------------------ the chain */
 #define RCS_MAX     8
 #define RCS_STEP    0.05                   /* us: 20 steps per bit at 1 Mbaud */
+#ifndef RCS_HOST_US
 #define RCS_HOST_US 150.0                  /* the hub's sender releases this long after the frame end */
+#endif                                   /* round 14: the boundary harness sweeps the hub's release */
 enum { RCS_NONE = 0, RCS_LOST, RCS_UNRATED, RCS_LATE };   /* why a receiver doesn't take part */
 
 typedef struct {

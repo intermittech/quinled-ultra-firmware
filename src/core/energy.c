@@ -7,6 +7,12 @@
 #include "lto.h"
 #include "ultra_protocol.h"
 #include "rc.h"                         /* rc_pack */
+#include "../hal/board.h"
+
+#ifndef ENERGY_HUB
+#define ENERGY_HUB BOARD_RETURN       /* (round 12, S6) a hub's sync spares the writes: the receivers' (the host tests
+                                         build it with ENERGY_HUB=1; the dig2analog-ultra has no LIFE_SYNC) */
+#endif
 
 #define LIT_FAR 0x40000000u         /* lit_ms is kept at most this far back (2^30 ms) */
 typedef char life_rec_size[(sizeof(life_rec_t) == LIFE_REC_BYTES && LIFE_RECS * LIFE_REC_BYTES <= 256u) ? 1 : -1];
@@ -118,7 +124,25 @@ MEASURED void energy_second(energy_t *e, uint32_t now, uint32_t now_s, uint32_t 
     allow = life_allow(r);
     e->held = (uint8_t)!allow;
     k = wh || n >= LIFE_DIP_S;                           /* (a dip's own: something to store) */
+#if ENERGY_HUB
+    {
+        uint32_t j = (e->ev & 1u) || k;                  /* (a planned cut's) */
+        if (e->synced & ENERGY_SYNC_HUB) {
+            /* (round 12, S6) a hub's LIFE_SYNC this boot (applied or nothing ahead): its ledger carries the energy and
+             * the time. The record is written for an event: a trip, watchdog reset or update (ev bit 0), a dip's
+             * pending write (bit 2), and a week powered since the last write (LIFE_SYNC_SAVE_S, merges included: the
+             * hub's lead stays well under its 30-day step, round 11's never-writing receiver); never for the energy,
+             * the 10 minutes or a day alone, at a planned cut or in a dark moment. An unplanned dip (the power may be
+             * going) as before */
+            wh = 0;
+            n = n >= LIFE_SYNC_SAVE_S ? LIFE_IDLE_S : 0u;   /* (the regular write's day rule below: the week instead) */
+            j = (e->ev & 5u) || n;
+        }
+        e->dip_ok = (uint8_t)(allow && (e->ev || k)) | (uint8_t)(allow && j) << 1;
+    }
+#else
     e->dip_ok = (uint8_t)(allow && (e->ev || k)) | (uint8_t)(allow && ((e->ev & 1u) || k)) << 1;
+#endif
     e->due = (uint8_t)(allow && ((e->ev & 4u) ||      /* (round 8) a dip's write still pending: no dark wait */
                                  (((e->ev & e->ev_save) || (wh && e->lit_new) || n >= LIFE_IDLE_S) &&   /* (dark: the
                                                                          logic's own Wh wait for a day) */
@@ -213,7 +237,7 @@ NOINLINE uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16)
     if (a[ULTRA_LS_RECORDS] != (uint8_t)r->writes) {
         return ULTRA_LS_R_RECORDS << 8;                  /* (the record the hub's counters aren't reconciled with) */
     }
-    if (e->synced) {
+    if (e->synced & ENERGY_SYNC_ONCE) {
         return ULTRA_LS_R_ONCE << 8;
     }
     ls_capped = 0;
@@ -225,7 +249,11 @@ NOINLINE uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16)
                                                             merge never wraps it: a hub further ahead, CAPPED) */
     ds = d * 360u;                                       /* the powered time raised, s */
     e->base_on_s += ds;
-    e->saved_on_s += ds;                                 /* (merged = stored: no write due for it) */
+    e->saved_on_s += ds < LIFE_IDLE_S ? ds : 0u;         /* (merged = stored: no write due for it); (round 11, A4) a
+                                                            day or more: a write is due, so the record keeps it (a
+                                                            receiver whose wakes never write would otherwise lose it at
+                                                            every cut, and the hub's lead pass 30 days: CAPPED); (round
+                                                            12, S6) synced, a week (energy_second) */
     r->on_s += ds;
     k += d;                                              /* (the allowance: own time only) */
     r->merged = (uint16_t)k;
@@ -237,6 +265,9 @@ NOINLINE uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16)
     cap = ds / LIFE_SYNC_EV_S + LIFE_SYNC_EV_MIN;
     for (k = 0; k < 4u; k++) {
         uint8_t *f = (uint8_t *)r + cnt[k][0];
+        if (k != 0u) {
+            cap = LIFE_SYNC_EV_MIN;                      /* (round 11, A4) the trips and dips: never more than this */
+        }
         if (cnt[k][2] == 3u) {
             d = ls_step(*(uint32_t *)f, l + cnt[k][1], 3u, cap);
             *(uint32_t *)f += d;
@@ -250,7 +281,9 @@ NOINLINE uint32_t energy_sync(energy_t *e, const uint8_t *a, uint32_t uid16)
     e->base_wh += d;
     e->saved_wh += d;
     m |= (uint32_t)(d != 0u) << 5;                       /* (ULTRA_LS_F_WH) */
-    e->synced = (uint8_t)(m != 0u);
+    e->synced = (uint8_t)((m != 0u ? ENERGY_SYNC_ONCE : 0u) | (ls_capped ? 0u : ENERGY_SYNC_HUB));
+                                                         /* (round 12, S6) HUB: applied or nothing ahead, the hub's
+                                                            ledger agrees: no write for the energy or the time alone */
     return m | (ls_capped ? ULTRA_LS_R_CAPPED : m ? ULTRA_LS_R_APPLIED : ULTRA_LS_R_NOOP) << 8;
 }
 

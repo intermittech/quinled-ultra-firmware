@@ -38,7 +38,7 @@ if %errorlevel% neq 0 exit /b 1
 python "%HERE%..\tools\gen_console_text.py" "%OUT%\genlow" --full
 if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%\isense" mkdir "%OUT%\isense"
-cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /I "%OUT%\gen" /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
+cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /DCONSOLE_FULL=1 /DVDIP_PLANNED=1 /DENERGY_HUB=1 /I "%OUT%\gen" /Fe:"%OUT%\host_tests.exe" /Fo:"%OUT%\\" ^
    "%HERE%test_main.c" "%HERE%..\src\core\*.c"
 if %errorlevel% neq 0 exit /b 1
 cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /Fe:"%OUT%\isense_tests.exe" /Fo:"%OUT%\isense\\" ^
@@ -137,6 +137,13 @@ for %%t in (pagepair calhist rc) do (
   "%OUT%\r6_%%t.exe"
   if errorlevel 1 exit /b 1
 )
+rem (round 12, S10) the page-transaction prototype (test\pagetx: not in the firmware): writes, cuts, the control
+if not exist "%OUT%\pagetx" mkdir "%OUT%\pagetx"
+cl /nologo /O2 /W4 /wd4996 /Fe:"%OUT%\pagetx_tests.exe" /Fo:"%OUT%\pagetx\\" ^
+   "%HERE%pagetx\test_pagetx.c" "%HERE%pagetx\pagetx.c"
+if errorlevel 1 exit /b 1
+"%OUT%\pagetx_tests.exe"
+if errorlevel 1 exit /b 1
 rem (review round 9, code size) core/ultra.c's maths in 32 bits against the 64-bit code it replaced, every 16-bit
 rem input exhaustively (test_r9_math.c: its own main, it includes ultra.c itself; `r9_math.exe long`: the 2^32 sweeps)
 cl /nologo /O2 /W4 /wd4996 /DUPD_CRC_ULTRA /Fe:"%OUT%\r9_math.exe" /Fo:"%OUT%\r6\\" ^
@@ -200,7 +207,7 @@ for %%v in (tp9 host) do (
 rem (0.6.9, review round 7) the approved items' scenarios (test_r7.c): the main board, the receiver, 0.6.4's layout and
 rem the release console's builds
 for %%e in (soak_tests soak_rc_tests soak_tests_lower soak_rel_tests soak_rc_rel_tests) do (
-  for %%s in ("r7ack 0" "r7ack 2" "r7cal ok" "r7cal limit" "r7cal supply" "r7cal trip" r7retry r7retryws "r7loss ultra scene" "r7loss ultra none" "r7loss ws scene" "r7loss ws none" r7fault "r7con ultra" "r7con ws" r7pages r7hot r7why r7b3 "r7upd 0" "r7upd 1" r8evtype "r8sb worth" "r8sb nothing" "r8sb darkwait" "r8sb missed" "r8sb brief" "r8sb copies" "r8sb bright" "r8sb cal" "r8sb pending" "r8sb race" "r8sb expire" "r8sb cross" "r8sb pre" "r8sb ack" "r8sb cal_edge" "r8sb pvd" "r8sb pgfail" "r8sb exhaust" "r8sb sync" "r8sb syncgate" "r8sb syncneg" "r8sb g_frame" "r8sb g_none" "r8sb g_ws" "r8sb g_app" "r8sb app" "r9b fx3" "r9b release" "r9b hold" "r9b dip1s") do (
+  for %%s in ("r7ack 0" "r7ack 2" "r7cal ok" "r7cal limit" "r7cal supply" "r7cal trip" r7retry r7retryws "r7loss ultra scene" "r7loss ultra none" "r7loss ws scene" "r7loss ws none" r7fault "r7con ultra" "r7con ws" r7pages r7hot r7why r7b3 "r7upd 0" "r7upd 1" r8evtype "r8sb worth" "r8sb nothing" "r8sb darkwait" "r8sb missed" "r8sb brief" "r8sb copies" "r8sb bright" "r8sb slow" "r8sb cal" "r8sb pending" "r8sb race" "r8sb expire" "r8sb cross" "r8sb pre" "r8sb ack" "r8sb cal_edge" "r8sb pvd" "r8sb pgfail" "r8sb exhaust" "r8sb sync" "r8sb syncgate" "r8sb syncneg" "r8sb g_frame" "r8sb g_none" "r8sb g_noslot" "r8sb g_ws" "r8sb g_app" "r8sb app" "r9b fx3" "r9b release" "r9b hold" "r9b dip1s" "r11confirm ws" "r11confirm ultra" "r11confirm wd" "r11confirm none" r11hwid) do (
     "%OUT%\%%e.exe" %%~s
     if errorlevel 1 exit /b 1
   )

@@ -1,0 +1,76 @@
+function / path                                         instr  cycles~      time
+WS2915 slot (112 bits) decode                            9125    11264    78.2 us ok
+WS2805 slot (40 bits) decode                             4074     5107    35.5 us ok
+dither_build dither, steps 1440, table 50 (x5 per update)      549      790     5.5 us 
+dither_build dither, steps 5760, table 12 (x5 per update)      181      283     2.0 us 
+dither_build dither, steps 65535, table 1 (x5 per update)       63      109     0.8 us 
+dither_build pulse skipping, steps 5760, table 12 (x5 per update)      199      317     2.2 us 
+dither_build pulse skipping, steps 1440, table 50 (x5 per update)      655      925     6.4 us 
+smooth_update (5 channels, every 1 ms)                     87      190     1.3 us 
+gamma_apply 2.8, 5 channels (per WS2805 frame)            732      806     5.6 us 
+mcutemp_sample (once a second)                             71      132     0.9 us 35.0 C
+poll ISR, line idle                                        51       71     0.5 us [image]
+poll ISR, line idle, 1 ms tick (ADC injected read + start)      112      155     1.1 us [image]
+poll ISR, first edges of a frame (note ring pos)          150      209     1.5 us [image]
+poll ISR, frame running                                    78      112     0.8 us [image]
+poll ISR, own bits complete                                79      112     0.8 us [image]
+poll ISR, ring copy (600 words)                          1167     1680    11.7 us [image]
+poll ISR, WS frame end (re-arm + tail copy: auto, unlocked)     1203     1717    11.9 us [image]
+poll ISR, Ultra frame end (re-arm + 576-word tail copy)     1194     1706    11.8 us [image]
+poll ISR, ring copy (1728 words, longest Ultra capture)     3002     4360    30.3 us [image]
+poll ISR, current sense fast trip (outputs forced off)       99      132     0.9 us [image]
+slew ISR TIM2 (per PWM period while moving)                69       87     0.6 us [image]
+slew ISR TIM3 incl. W2 CCR3 shift (per period while moving)      128      163     1.1 us [image]
+proto_parse WS2915                                        423      536     3.7 us 
+Ultra capture decode (256-bit slot)                     19098    23431   162.7 us ok
+Ultra header decode (last 64 bits of 576 words)         13596    16257   112.9 us ok, 157 bits in the window
+Ultra header: clock sync                                  125      170     1.2 us 
+Ultra slot: SET (CRC + new ramp)                          492      637     4.4 us 
+ultra_render: idle (no light defined)                     208      312     2.2 us 
+ultra_render: RGBWW light, steady                        1465     1905    13.2 us 
+ultra_render: RGBWW light, steady, every ms after the first      370      538     3.7 us 
+ultra_render: RGBWW light, smooth transition             1536     1997    13.9 us 
+ultra_render: RGBWW light, via-off transition            1468     1914    13.3 us 
+ultra_render: RGB + CW/WW constant brightness, transition     2299     3015    20.9 us 
+ultra_render: 5 single-channel lights, all fading        3303     4372    30.4 us 
+ultra_render: RGBWW, color loop effect                   1439     2037    14.1 us 
+ultra_render: RGBWW, flicker effect                      3810     4796    33.3 us 
+ultra_render: RGBWW constant brightness + dim to warm, red assist, transition     1787     2489    17.3 us 
+ultra_render: 5 lights, breathe effect each              4373     5962    41.4 us 
+stagger_choose: example mix 83/70/42/9/34 %             34445    44088   306.2 us -> 0.250 / 0.167 T
+stagger_choose: all five at 42 %                        32430    41216   286.2 us -> 0.167 / 0.833 T
+stagger_choose: RGB only 50 %                           27254    34374   238.7 us -> 0.125 / 0.000 T
+dither_build_var (spread) mid, steps 5760, table 32 (x5)     1007     1231     8.5 us 
+dither_build_var (spread) just above floor, steps 5760, table 32 (x5)     3087     4004    27.8 us 
+dither_build_var (spread) below floor, steps 5760, table 32 (x5)     1588     2108    14.6 us 
+dither_build_var (spread) off-time near floor, steps 5760, table 32 (x5)     3148     4053    28.1 us 
+dither_build_var (spread) mid, steps 1440, table 50 (x5)     1535     1867    13.0 us 
+dither_build_var (spread) just above floor, steps 1440, table 50 (x5)     5053     6503    45.2 us 
+dither_build_var (spread) below floor, steps 1440, table 50 (x5)     2395     3146    21.8 us 
+dither_build_var (spread) off-time near floor, steps 1440, table 50 (x5)     5152     6566    45.6 us 
+dither_build_var (spread) mid, steps 65535, table 32 (x5)     1007     1231     8.5 us 
+dither_build_var (spread) just above floor, steps 65535, table 32 (x5)     1672     2195    15.2 us 
+dither_build_var (spread) below floor, steps 65535, table 32 (x5)     1459     1919    13.3 us 
+dither_build_var (spread) off-time near floor, steps 65535, table 32 (x5)     1737     2232    15.5 us 
+stagger_slew (per period while moving)                     22       28     0.2 us 
+stagger_cap_second: C10's ripple load (once a second, worst)      152      220     1.5 us 
+isense_ms, no model, 2 A (regression windows) (every 1 ms, worst)     1327     2001    13.9 us 
+isense_apply, no model, 2 A (regression windows) (per output update, worst)      149      202     1.4 us 
+isense_ms, no model, limiting 12 A of content (every 1 ms, worst)     1045     1846    12.8 us 
+isense_apply, no model, limiting 12 A of content (per output update, worst)      164      212     1.5 us 
+isense_ms, calibrated, limiting (every 1 ms, worst)       742     1001     7.0 us 
+isense_apply, calibrated, limiting (per output update, worst)      476      626     4.3 us 
+isense_ms, calibration running (every 1 ms, worst)        146      224     1.6 us 
+isense_apply, calibration running (per output update, worst)      114      161     1.1 us 
+vdip_ms, steady supply (every 1 ms)                        20       41     0.3 us 
+vdip_ms, a dip: start / its end into the log (worst)      137      191     1.3 us 
+vdip_z, inside a supply average (every 1 ms)                6       10     0.1 us 
+vdip_z, an average's end, steady (every 16 ms)             39       52     0.4 us 
+vdip_z, a load step (once per step)                        54       70     0.5 us 
+energy_ms / energy_due (every 1 ms, worst of the two)       14       32     0.2 us 
+energy_second: lifetime counters and what is due (once a second)      181      313     2.2 us 
+ss_factor, soft start running (per output update)          23       45     0.3 us 
+health_run (once a second)                                328      504     3.5 us 
+health_test_done (after a calibration test)               416      606     4.2 us 
+energy_ch_ms: the outputs and the current summed (every 1 ms)       45       62     0.4 us 
+energy_ch_second: the split by the channel model (once a second)      424      890     6.2 us 

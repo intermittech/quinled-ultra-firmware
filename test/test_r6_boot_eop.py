@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 QuinLED
 """Run real compiled bootloader flash helpers with EOP/WRP/unlock failures.
-Usage: python test/test_r6_boot_eop.py build/bootloader/bl.elf
+Usage: python test/test_r6_boot_eop.py build/bootloader/bl.elf [hardware_id]
+The optional hardware id (1, 2 or 3) selects the integration fixture's descriptor;
+default 1 preserves the original test. Receiver revisions are 0, main board is 3.
 """
 from pathlib import Path
 import struct
@@ -10,6 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 from rv32emu import Emu
 
 FLASH = 0x40022000
+hw_id = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+assert hw_id in (1, 2, 3), 'hardware id must be 1, 2 or 3'
+hw_rev = 3 if hw_id == 1 else 0
 
 def word_crc(c, w):
     c ^= w
@@ -97,8 +102,8 @@ for fn, args in [('bl_plat_erase_sector', [0x08002000]), ('bl_plat_erase_page', 
 # cut immediately after accept must never boot the damaged old confirmed body.
 body = bytes((i*71+3) & 255 for i in range(6000))
 desc = bytearray(64)
-desc[:6] = b'QDU5\x01\x01'
-struct.pack_into('>HIIIII', desc, 6, 8, 0x000606ff, len(body), crc32(body), 0x08002100, 0x2100)
+desc[:6] = b'QDU5\x01' + bytes([hw_id])
+struct.pack_into('>HIIIII', desc, 6, 1 << hw_rev, 0x000606ff, len(body), crc32(body), 0x08002100, 0x2100)
 desc[28] = 2
 struct.pack_into('>I', desc, 60, crc32(desc[:60]))
 e = Flash(sys.argv[1], 'no_eop')
@@ -108,7 +113,7 @@ app, frame = 0x20004700, 0x20004740
 e.call('bl_app_read', [app])
 assert e.peek(app, 3) == b'\x01\x01\x01', 'confirmed factory fixture'
 sess = e.addr('sess')
-e.call('bl_sess_init', [sess, 3, app, 0])
+e.call('bl_sess_init', [sess, hw_rev, app, 0])
 desc[10] = 7
 struct.pack_into('>I', desc, 60, crc32(desc[:60]))
 e.once = True

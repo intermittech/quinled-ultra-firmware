@@ -41,6 +41,12 @@ enum {
  * Returns nbits on success, else a WS_ERR_* code. */
 int ws_decode_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, const ws_timing_t *t, uint8_t *out);
 
+/* A frame whose length is to be checked (the Ultra-Digital receiver's marker frames): as ws_decode_frame, but the
+ * walk goes on to the end of buf. Decodes the first nbits bits into out ((nbits + 7) / 8 bytes, zeroed) and counts
+ * every complete bit in buf (a HIGH at the end without its fall is no bit). Returns that count (only the first nbits
+ * are in out), or a WS_ERR_* code (a reset gap inside: WS_ERR_SHORT). */
+int ws_decode_count(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, const ws_timing_t *t, uint8_t *out);
+
 /* The end of a frame (Ultra trailer header): buf may start anywhere inside the frame (a bit cut at the start is
  * skipped) and must end after its last bit. Decodes every complete bit and keeps the last 64 in out (8 bytes, MSB
  * first). Returns the number of complete bits, or a WS_ERR_* code (a reset gap inside: WS_ERR_SHORT). */

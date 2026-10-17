@@ -139,6 +139,73 @@ bl_action_t bl_decide(const bl_app_t *a, upd_handover_t *ho, uint32_t reset, uin
     return act;
 }
 
+/* At reset HSI, before clocks/sampler/output startup. An untrusted snapshot never reaches the option erase.
+ * The pending CRC is kept in the hand-over (app RAM is not safe across the bootloader's own reset). */
+static int protect(upd_handover_t *ho)
+{
+    uint16_t ob[8];
+    uint32_t check = ho->reserved;
+    int ok = bl_plat_options_read(ob), open = bl_plat_boot_open();
+    if ((check & 0xFFFF0000u) == BL_PROT_PENDING) {
+        ok = ok && !open && ob[0] == 0xA5u &&
+             (check & 0xFFFFu) == upd_crc16((const uint8_t *)ob, sizeof ob);
+        ho->reserved = ok ? BL_PROT_OK : BL_PROT_FAIL;
+        return ok ? 0 : -1;
+    }
+    if (!ok) {
+        ho->reserved = BL_PROT_BAD;
+        return -1;
+    }
+    if (ob[0] != 0xA5u) {
+        return -1;                             /* never lift or enable read protection */
+    }
+    if (!open) {
+        return 0;
+    }
+    if (!bl_plat_power_ok()) {
+        return -1;                             /* dark recovery until a safe reboot; no unprotected app */
+    }
+    ob[4] &= 0xFCu;
+    ho->reserved = BL_PROT_PENDING | upd_crc16((const uint8_t *)ob, sizeof ob);
+    if (bl_plat_options_write(ob) == 0) {
+        return 1;
+    }
+    ho->reserved = BL_PROT_FAIL;
+    return -1;
+}
+
+bl_action_t bl_boot(bl_app_t *a, upd_handover_t *ho, uint32_t reset, uint32_t rcc_flags)
+{
+    bl_action_t act;
+    int prot;
+    bl_plat_watchdog_start();
+    bl_app_read(a);
+    act = bl_decide(a, ho, reset, rcc_flags);
+    if (reset == BL_RST_POWER && bl_plat_din_high()) {
+        uint32_t start = bl_plat_boot_ticks();
+        while (bl_plat_din_high()) {
+            if (bl_plat_boot_ticks() - start >= BL_ESCAPE_TICKS) {
+                act = BL_ACT_SESSION;
+                break;
+            }
+        }
+    }
+    prot = protect(ho);
+    if (prot > 0) {
+        /* Protection's reset must not lose a requested session or the power-on escape. */
+        if (act == BL_ACT_SESSION) {
+            ho->request = UPD_REQ_ENTER;
+        }
+        bl_ho_seal(ho);
+        return BL_ACT_RESET;
+    }
+    if (prot < 0) {
+        a->desc_ok = 0;                         /* disallow every session exit/timeout jump this boot */
+        return BL_ACT_RECOVERY;
+    }
+    return act;
+}
+
 int bl_verify(bl_app_t *a)
 {
     if (!a->desc_ok) {
@@ -233,14 +300,21 @@ static void accept(bl_sess_t *s)
     if (!bl_plat_power_ok()) {
         return;                                               /* try again on the next ANNOUNCE */
     }
+    /* Revoke the magic before an erase can touch the body in the SAME sector. A partial erase may leave the
+     * descriptor and its CONFIRMED record intact. Zero cannot erase back to 'QD' (0x4451) by flipping bits
+     * towards the chip's 0xE339 erased readout (0x4451 needs bits absent from both zero and 0xE339).
+     * A failed/torn revoke never reaches an erase; its old body is still intact. */
+    s->app.desc_ok = 0;
+    if (bl_plat_program_half(UPD_APP_DESC, 0) != 0) {
+        s->flash_errors++;
+        to_recovery(s);
+        return;
+    }
     n = bl_erase_plan(len, ops, 24u);                         /* full slot: 13 sectors + 7 pages */
     for (i = 0; i < n; i++) {
         int rc;
         bl_plat_kick();
         rc = (ops[i] & 1u) ? bl_plat_erase_page(ops[i] & ~1u) : bl_plat_erase_sector(ops[i]);
-        if (i == 0u) {
-            s->app.desc_ok = 0;                               /* the old app is gone with the first erase */
-        }
         if (rc != 0) {
             s->flash_errors++;
             to_recovery(s);
@@ -407,7 +481,8 @@ static void finish(bl_sess_t *s, int abort)
     uint32_t v = upd_get32(s->desc + UPD_D_FW_VERSION), i;
     if (s->state == BL_S_SKIP) {
         if (s->app.desc_ok) {
-            leave(s, UPD_REQ_BOOT_ONCE, abort ? UPD_RES_NONE : s->skip_result, v);
+            leave(s, s->app.verified ? UPD_REQ_BOOT_ONCE : UPD_REQ_NONE,
+                  abort ? UPD_RES_NONE : s->skip_result, v);
         } else {
             to_recovery(s);
         }
@@ -521,11 +596,16 @@ int bl_sess_poll(bl_sess_t *s, uint32_t now_ms)
             (void)st_append(&s->app, s->seen_ultra ? UPD_ST_TRIAL_SEEN : UPD_ST_TRIAL_QUIET, BL_ST_RESERVE);
             leave(s, UPD_REQ_BOOT_ONCE, UPD_RES_NONE, 0);
         } else if (s->mode == BL_ACT_SESSION && now_ms - s->t_last >= BL_WAIT_MS) {
-            if (s->app.desc_ok) {
+            if (s->app.desc_ok && s->app.verified) {
                 leave(s, UPD_REQ_BOOT_ONCE, UPD_RES_NONE, 0);
+            } else if (s->app.desc_ok) {
+                leave(s, UPD_REQ_NONE, UPD_RES_NONE, 0);      /* reset through VERIFY (or recovery if invalid) */
             } else {
                 to_recovery(s);
             }
+        } else if (s->mode == BL_ACT_RECOVERY && s->app.desc_ok && s->app.verified && s->app.confirmed &&
+                   now_ms - s->t_start >= BL_RECOVERY_MS) {
+            leave(s, UPD_REQ_BOOT_ONCE, UPD_RES_NONE, 0);
         }
         break;
     case BL_S_RECEIVE:
@@ -546,7 +626,8 @@ void bl_ho_exit(upd_handover_t *ho, const bl_sess_t *s)
         ho->result = s->exit_result;
         ho->result_version = s->exit_version;
     }
-    if (s->exit_result == UPD_RES_UPDATED) {
+    if (s->exit_result == UPD_RES_UPDATED ||
+        (s->exit_request == UPD_REQ_BOOT_ONCE && s->app.desc_ok && s->app.verified && s->app.confirmed)) {
         ho->wd_resets = 0;
     }
     bl_ho_seal(ho);

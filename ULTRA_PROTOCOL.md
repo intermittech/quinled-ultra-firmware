@@ -3,23 +3,28 @@
 **The specification** is the QuinLED Ultra protocol repository, intermittech/quinled-ultra-protocol: the header
 `include/ultra_protocol.h` with every constant and builder, `CHANGELOG.md`, the test vectors, and its wiki (frame
 layout, slot types, effects, CONFIG ids, the shared clock, the compatibility rules, the return channel, host
-behaviour). `src/core/ultra_protocol.h` here is a byte-identical copy (protocol 0.2.6, wire VERSION 2), and so is the
+behaviour). `src/core/ultra_protocol.h` here is a byte-identical copy (protocol 0.2.8, wire VERSION 2), and so is the
 ESPHome component's: its host test checks the two match. This file keeps only what is this firmware's own: what it
 implements, how it renders, and its firmware update frames.
 
-## What it implements (firmware 0.6.10, protocol 0.2.6)
+## What it implements
 
 - **QuinLED Dig2Analog-Ultra-5ch** (`BOARD=1`, the default): Ultra mode next to the WS2915 and WS2805 emulation (CONFIG
   22 picks the boot protocol; WS config frames switch a board forced to a WS protocol: the wiki, Host behaviour). Every
-  slot type, effect and CONFIG id of 0.2.6 (the wiki's Config ids are this board's), the power-on scene and effects,
-  signal-loss mode 3 (0.2.5), firmware updates behind the bootloader (below). No return channel: it ignores the slots
+  slot type, effect and CONFIG id (the wiki's Config ids are this board's), the power-on scene and effects,
+  signal-loss mode 3, firmware updates behind the bootloader (below). No return channel: it ignores the slots
   of RW frames, so it never answers a POLL, and it ignores IDENTIFY 7 (the planned power-off notice).
-- **QuinLED Diff-Power Ultra-Analog receiver** (`BOARD=2`): all of the above and the return channel (0.2.4): pages
-  STATUS, OUTPUTS, ACKS, ERRORS, IDENTITY, CALIBRATION, CAL_TEST, POWER, SUPPLY, HEALTH, ENERGY, LIFETIME and DIAG
-  (0.2.5), LIFE_SYNC (0x0E, 0.2.6: the receiver's steps and the counters' 32-bit room, wiki: Return channel); IDENTIFY
-  7 (standby, 0.2.6). IDENTITY: hardware id 2, hardware capabilities 0x000F (answers, relays, bus voltage, input
-  current), firmware features 0x7FFFFF behind the bootloader (bits 0-22; 0x7FFFBF without bit 6, the update, in a
-  standalone build).
+- **QuinLED Diff-Power Ultra-Analog receiver** (`BOARD=2`): all of the above and the return channel: pages
+  STATUS, OUTPUTS, ACKS, ERRORS, IDENTITY, CALIBRATION, CAL_TEST, POWER, SUPPLY, HEALTH, ENERGY, LIFETIME and DIAG,
+  LIFE_SYNC (0x0E: the receiver's steps and the counters' 32-bit room, wiki: Return channel); IDENTIFY
+  7 (standby). IDENTITY (two parts): part 0 hardware id 2, the revision, capabilities 0x0000000F
+  (answers, relays, bus voltage, input current); part 1 features word 0 0x007FFFFF behind the bootloader (bits 0-22;
+  0x007FFFBF without bit 6, the update, in a standalone build), words 1-5 0. STATUS 3: the hardware id.
+- **QuinLED Diff-Power Ultra-Digital receiver** (`BOARD=3`, in development): a pixel port's delay line, polled
+  behind a marker with the release-keyed window (the protocol wiki: Return channel, digital ports). The Ultra-Analog
+  receiver's pages it can fill, + 0x80 PIXEL; IDENTIFY 7. IDENTITY part 0: hardware id 3, capabilities 0x4D
+  (answers, bus voltage, input current, PIXEL; no relay), its features: [docs/ultradigital-firmware.md](docs/ultradigital-firmware.md)
+  section 8.
 
 ## How it renders a SET (beyond the specification)
 
@@ -86,11 +91,15 @@ PING frames are sent outside sessions (after one, and when the line resyncs).
   and a newer version unless FORCE.
   - Taken: it leaves a request in a RAM hand-over block and resets into the bootloader, which installs the image
     during the session. Its gate forwards everything meanwhile.
-  - Not taken: the board stays transparent and blinks at END, on its status LED only (firmware 0.6.9: the outputs
-    keep their light, so a repeated session doesn't flash the strips): 1 short = already this version, 1 long
+  - Not taken: the board stays transparent and blinks at END, on its status LED only (the outputs keep
+    their light, so a repeated session doesn't flash the strips): 1 short = already this version, 1 long
     (NACK) = rejected.
 - **After the install:** the new app's first boot blinks ACK + its minor version + 1. It confirms itself (a status
-  record in its descriptor page) at the first PING after it has also seen normal Ultra frames. Until then, every
-  boot gives the bootloader a listen window (≤ 150 ms, ended by the first normal Ultra frame), so a new session can
-  still reach it. An app that ends in 3 watchdog resets in a row falls back to recovery: dark, a slow red blink,
-  waiting for a session.
+  record in its descriptor page) on whichever comes first:
+  - the first PING after it has also seen normal Ultra frames since boot;
+  - without a PING (a host that sends none: WLED, the sender library): once it has run 60 s (`UPD_APP_AUTO_S`) with
+    at least 100 frames of any protocol decoded (`UPD_APP_AUTO_FRAMES`), if this boot wasn't a watchdog reset.
+
+  Until it is confirmed, every boot gives the bootloader a listen window (≤ 150 ms, ended by the first normal Ultra
+  frame), so a new session can still reach it; a confirmed app's boots have none. An app that ends in 3 watchdog
+  resets in a row falls back to recovery: dark, a slow red blink, waiting for a session.

@@ -281,6 +281,26 @@ static void test_update(void)
     tu_upd(&b, UPD_ABORT, 0x17, 0, 0, 0);
     tu_end(&b, 0x17);
     CHECK(b.nact == 0, "ABORT: no pattern");
+    tu_init(&b, TU_V(0, 4, 0, 0xFF), 1, 1);        /* an ABORT between the halves: the half (and its FORCE) dropped */
+    tu_upd(&b, UPD_PING, 0, 0, 0, 0);
+    tu_upd(&b, UPD_PING, 0, 0, 0, 0);               /* (transparent: whole frames from here) */
+    tu_upd(&b, UPD_ANNOUNCE, 0x1C, 0, UPD_F_FORCE, d_old);
+    CHECK(b.u.have_half == 1u && b.u.force, "half 0 with FORCE taken");
+    tu_upd(&b, UPD_ABORT, 0x1C, 0, 0, 0);
+    tu_upd(&b, UPD_ANNOUNCE, 0x1C, 1, 0, d_old + 32u);
+    CHECK(b.nact == 0 && b.u.have_half == 2u && !b.u.force,
+          "ABORT drops the cancelled session's half descriptor: the remaining half alone takes nothing");
+    tu_upd(&b, UPD_ANNOUNCE, 0x1C, 0, 0, d_old);
+    tu_end(&b, 0x1C);
+    CHECK(b.nact == 1 && b.actions[0] == UPD_APP_SHOW_REJECTED,
+          "... a new pair after it is evaluated without the cancelled FORCE: older, NACK");
+    tu_init(&b, TU_V(0, 4, 0, 0xFF), 1, 1);
+    tu_upd(&b, UPD_PING, 0, 0, 0, 0);
+    tu_upd(&b, UPD_PING, 0, 0, 0, 0);
+    tu_upd(&b, UPD_ANNOUNCE, 0x1D, 0, 0, d_new);
+    tu_upd(&b, UPD_ABORT, 0x1E, 0, 0, 0);              /* another session's ABORT: the half stays */
+    tu_upd(&b, UPD_ANNOUNCE, 0x1D, 1, 0, d_new + 32u);
+    CHECK(tu_has(&b, UPD_APP_TAKE), "another session's ABORT leaves the half: TAKE");
     tu_init(&b, TU_V(0, 4, 0, 0xFF), 1, 1);
     tu_announce(&b, 0x18, d_same, 0, 3);
     CHECK(upd_app_poll(&b.u, b.now + UPD_APP_IDLE_MS) == UPD_APP_SHOW_SAME, "END missed: the result at the timeout");
@@ -338,6 +358,37 @@ static void test_update(void)
     tu_upd(&b, UPD_PING, 0, 0, 0, 0);
     tu_upd(&b, UPD_PING, 0, 0, 0, 0);
     CHECK(b.nact == 0 && upd_app_poll(&b.u, b.now) == UPD_APP_NONE, "already confirmed: nothing written");
+
+    /* (round 11, B4) no PING: main.c's auto_ok (a minute up, frames decoded, no watchdog reset) confirms the same way */
+    tu_init(&b, TU_V(0, 5, 0, 0xFF), 1, 0);
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_NONE, "B4: no PING, no auto_ok: nothing");
+    b.u.auto_ok = 1;
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_CONFIRM, "B4: auto_ok without a PING or an Ultra frame: CONFIRM");
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_NONE, "B4: ... once");
+    upd_app_confirmed(&b.u, 0);
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_CONFIRM, "B4: the write not admitted: asked again at the next poll");
+    upd_app_confirmed(&b.u, 1);
+    CHECK(b.u.info.confirmed && b.u.info.st_next == 3 && upd_app_poll(&b.u, ++b.now) == UPD_APP_NONE,
+          "B4: confirmed once, then nothing");
+    tu_init(&b, TU_V(0, 5, 0, 0xFF), 1, 1);
+    b.u.auto_ok = 1;
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_NONE, "B4: already confirmed: nothing written");
+    tu_init(&b, TU_V(0, 5, 0, 0xFF), 0, 0);
+    b.u.auto_ok = 1;
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_NONE, "B4: no bootloader (a standalone build): nothing");
+    tu_init(&b, TU_V(0, 5, 0, 0xFF), 1, 0);
+    b.u.info.st_next = UPD_ST_COUNT;
+    b.u.auto_ok = 1;
+    CHECK(upd_app_poll(&b.u, ++b.now) == UPD_APP_NONE, "B4: the status records full: nothing");
+
+    /* (round 11, B2) behind another hardware's bootloader: main.c dark, main_ud.c's delay line off */
+    tu_init(&b, TU_V(0, 5, 0, 0xFF), 1, 1);
+    CHECK(!upd_app_wrong_hw(&b.u.info, UPD_HW_ID_D2A_ULTRA_5CH) && upd_app_wrong_hw(&b.u.info, UPD_HW_ID_DP_ULTRA_RX) &&
+          upd_app_wrong_hw(&b.u.info, UPD_HW_ID_DP_ULTRA_DIGITAL), "B2: the bootloader's hardware id (1) against the "
+          "build's");
+    tu_init(&b, TU_V(0, 5, 0, 0xFF), 0, 0);
+    CHECK(!upd_app_wrong_hw(&b.u.info, UPD_HW_ID_D2A_ULTRA_5CH) &&
+          !upd_app_wrong_hw(&b.u.info, UPD_HW_ID_DP_ULTRA_DIGITAL), "B2: no bootloader (standalone): never wrong");
 
     /* the descriptor page reader */
     {

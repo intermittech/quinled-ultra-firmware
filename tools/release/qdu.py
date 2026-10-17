@@ -20,6 +20,10 @@ MIN_BL = 2 if UPPER_RECORDS else 1         # the oldest bootloader that takes su
 BL_SIZE = 0x2000
 DESC_BYTES = 64
 HW_ID_D2A_ULTRA_5CH = 1
+HW_ID_DP_ULTRA_RX = 2                      # (round 11, B2) the QuinLED Diff-Power Ultra-Analog receiver
+HW_ID_DP_ULTRA_DIGITAL = 3                 # the QuinLED Diff-Power Ultra-Digital receiver (BOARD=3; protocol 0.2.7 proposal)
+HW_IDS = {HW_ID_D2A_ULTRA_5CH: "dig2analog-ultra-5ch", HW_ID_DP_ULTRA_RX: "diff-power-ultra-analog",
+          HW_ID_DP_ULTRA_DIGITAL: "diff-power-ultra-digital"}
 REV_V01_PB15, REV_PB11, REV_ISENSE = 0, 1, 2
 ST_VERIFIED, ST_CONFIRMED = 0xA5B7, 0xA5C3
 STAGES = {"alpha": 0x00, "beta": 0x40, "rc": 0x80}

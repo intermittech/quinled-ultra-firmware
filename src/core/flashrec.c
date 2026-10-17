@@ -6,6 +6,9 @@
 #include "pagepair.h"
 #include "scratch.h"
 #include "lto.h"
+#if BOARD == BOARD_DP_UD
+#include "ud/udfx.h"
+#endif
 #include "../hal/board.h"
 
 /* the record being programmed: in the main loop's scratch (core/scratch.h; the lifetime record: in place), written as
@@ -22,7 +25,15 @@ typedef struct {
     uint32_t page[2];                                    /* A, B (hal/board.h) */
 } rec_t;
 
+#if BOARD == BOARD_DP_UD
+static int ufx_valid(const uint8_t *r)                   /* the Ultra-Digital receiver's local-effects record */
+{
+    return udfx_rec_valid(r);
+}
+static const pp_desc_t set_pp = { UX_REC_BYTES, 2u, 4u, 0u, ufx_valid };   /* (REC_SET's pair: BOARD 3 has no settings) */
+#else
 static const pp_desc_t set_pp = { STORE_SLOT_BYTES, STORE_SLOTS, 4u, 0u, store_valid };
+#endif
 static const pp_desc_t cal_pp = { CAL_REC_BYTES, CAL_RECS, 4u, 0u, cal_valid };
 #if MON_EXTRA
 static const pp_desc_t hist_pp = { CALHIST_REC_BYTES, CALHIST_RECS, 4u, 0u, calhist_valid };
@@ -45,7 +56,10 @@ static const rec_t recs[REC_COUNT] = {
 #endif
 };
 static pp_pos_t rec_pos[REC_COUNT];
-static uint32_t set_seq, cal_seq;
+#if BOARD != BOARD_DP_UD
+static uint32_t set_seq;
+#endif
+static uint32_t cal_seq;
 static uint16_t cal_cnt, scene_seq;
 
 /* a pair's page p (0 / 1), and an entry's address */
@@ -103,6 +117,35 @@ static uint32_t rec_program(uint32_t i, uint32_t at, const void *src)
     return r;
 }
 
+#if BOARD == BOARD_DP_UD
+/* ---- the local-effects record (core/ud/udfx.h): two 128-byte records a page, the CRC last */
+MEASURED uint32_t ufx_load(uint8_t rec[128])
+{
+    const uint8_t *r = rec_find(REC_SET);
+    uint32_t i;
+    if (!r) {
+        return 0;
+    }
+    for (i = 0; i < UX_REC_BYTES; i++) {
+        rec[i] = r[i];
+    }
+    return 1;
+}
+
+MEASURED uint32_t ufx_store(struct udfx_s *u)
+{
+    uint32_t r, at = rec_write_at(REC_SET, &r), buf[UX_REC_BYTES / 4u];   /* (the stack: this board has no scratch RAM) */
+    if (at == PP_NONE) {
+        return r;
+    }
+    udfx_rec_pack(u, u->rec_seq + 1u, (uint8_t *)buf);
+    r = rec_program(REC_SET, at, buf);
+    if (r == FLASH_OK) {
+        u->rec_seq++;
+    }
+    return r;
+}
+#else
 /* ---- settings */
 MEASURED int settings_load(settings_t *s, store_ext_t *ext)
 {
@@ -126,6 +169,7 @@ MEASURED uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
     store_pack_ext(s, ext, ++set_seq, (store_slot_t *)core_scratch);
     return rec_program(REC_SET, at, core_scratch);
 }
+#endif
 
 /* ---- current calibration */
 MEASURED int cal_load(isense_cal_t *c, uint16_t *count)

@@ -40,6 +40,21 @@ set "BL_TEST_IMAGE="
 "%OUT%\bl_tests_lower.exe"
 if %errorlevel% neq 0 exit /b 1
 endlocal
+rem (round 11) the hardware-id-3 bootloader's marker skip (bl_rx.c BL_RX_MARKER, the Ultra-Digital receiver): UPD
+rem frames behind a 15-40 us marker decode with BL_HW_ID=3; hardware 1 (the negative control) takes the marker as a
+rem bad first bit
+if not exist "%OUT%\marker3" mkdir "%OUT%\marker3"
+if not exist "%OUT%\marker1" mkdir "%OUT%\marker1"
+cl /nologo /O2 /W4 /wd4996 /DBL_HW_ID=3 /I"%HERE%.." /Fe:"%OUT%\bl_marker_hw3.exe" /Fo:"%OUT%\marker3\\" ^
+   "%HERE%test_bl_marker.c" "%HERE%..\bl_rx.c"
+if %errorlevel% neq 0 exit /b 1
+"%OUT%\bl_marker_hw3.exe"
+if %errorlevel% neq 0 exit /b 1
+cl /nologo /O2 /W4 /wd4996 /I"%HERE%.." /Fe:"%OUT%\bl_marker_hw1.exe" /Fo:"%OUT%\marker1\\" ^
+   "%HERE%test_bl_marker.c" "%HERE%..\bl_rx.c"
+if %errorlevel% neq 0 exit /b 1
+"%OUT%\bl_marker_hw1.exe"
+if %errorlevel% neq 0 exit /b 1
 set "ESPH="
 if defined ULTRA_ESPHOME set "ESPH=%ULTRA_ESPHOME%\components\dig2analog_ultra"
 if not defined ESPH if exist "%HERE%..\..\..\quinled-ultra-esphome\components\dig2analog_ultra\update_session.h" (

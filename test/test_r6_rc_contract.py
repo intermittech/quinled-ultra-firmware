@@ -8,8 +8,13 @@ import sys
 root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
 
 
+def unity(path):
+    """the file's text with each local #include "x.c" in place (round 12: src/app/main.c's units)"""
+    return re.sub(r'^#include "(\w+\.c)"$', lambda m: unity(path.parent / m.group(1)), path.read_text(), flags=re.M)
+
+
 def function(path, name):
-    s = (root / path).read_text()
+    s = unity(root / path)
     s = re.sub(r'/\*[\s\S]*?\*/|//[^\n]*', '', s)
     m = re.search(r'\b' + name + r'\s*\([^;{}]*\)\s*\{', s)
     start = end = m.end()

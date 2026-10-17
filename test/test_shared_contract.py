@@ -13,8 +13,13 @@ FW = Path(__file__).resolve().parents[1]
 failures = []
 
 
+def unity(path):
+    """the file's text with each local #include "x.c" in place (round 12: src/app/main.c's units)"""
+    return re.sub(r'^#include "(\w+\.c)"$', lambda m: unity(path.parent / m.group(1)), path.read_text(), flags=re.M)
+
+
 def source(rel):
-    text = (FW / rel).read_text()
+    text = unity(FW / rel)
     return re.sub(r'/\*[\s\S]*?\*/|//[^\n]*', '', text)
 
 

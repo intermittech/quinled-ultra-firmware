@@ -263,6 +263,36 @@ static void test_vdip_planned(void)
     }
     CHECK(d.in_dip == 1u && d.count == 1u, "a new candidate after the hint: real (in_dip %u, count %u)", d.in_dip,
           d.count);
+    /* (round 11, A4) a slow decay after the notice (big port caps: 0.08 % of the level a ms, 10 % in 1.25 s): the
+     * reference holds from the notice, so the decay is `falling` from 3 % down, a dip from 10 % and the planned cut's;
+     * it stays one through the decay after the hint ends (the reference held through it too). Without the hint the
+     * reference follows the decay: the same decay is a dip later (the negative control) */
+    for (k = 0; k < 2u; k++) {
+        uint32_t fall = 0, dip = 0, x;
+        vdip_init(&d);
+        d.ref_q12 = 1000u << 12;
+        d.planned = (uint8_t)!k;
+        for (t = 0; t < 8000u; t++) {
+            x = 1000u - (t * 8u) / 100u;                 /* 1000 -> 360 over 8 s */
+            if (t == 5000u) {
+                d.planned = 0;                           /* (main.c: PLAN_CUT_MS) */
+            }
+            vdip_low(&d, 1000u + t, x);
+            fall = fall ? fall : d.falling ? t : 0u;
+            dip = dip ? dip : d.in_dip ? t : 0u;
+        }
+        printf("  slow decay, %s: falling from %u ms, a dip from %u ms (class %u), the reference %u\n",
+               k ? "no notice" : "the notice", fall, dip, d.in_dip, d.ref_q12 >> 12);
+        if (!k) {
+            CHECK(fall >= 385u && fall <= 395u && dip >= 1260u && dip <= 1270u && d.in_dip == 2u && d.count == 0u &&
+                  (d.ref_q12 >> 12) == 1000u, "a slow decay after the notice: falling at 3 %%, the planned cut's dip at "
+                  "10 %% and to the end, the reference held (fall %u, dip %u, in_dip %u, ref %u)", fall, dip, d.in_dip,
+                  d.ref_q12 >> 12);
+        } else {
+            CHECK(dip > 1300u && d.in_dip == 1u && d.count == 1u && (d.ref_q12 >> 12) < 1000u,
+                  "the same decay without the notice: a real dip, later (the reference follows: %u ms)", dip);
+        }
+    }
 }
 
 static void test_vdip(void)

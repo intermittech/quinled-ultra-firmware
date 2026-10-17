@@ -19,6 +19,7 @@ from rv32emu import Emu  # noqa: E402
 
 ELF = os.environ.get("BL_ELF") or os.path.join(FW, "build", "bootloader", "bl.elf")
 CRC_DATAR = 0x40023000
+FLASH_STATR = 0x4002200C                         # (round 11, B9) FLASH->STATR: EOP (bit 5), BSY / WRBSY clear
 FS = float(os.environ.get("BL_FS", "36e6"))      # DIN sample rate
 F_CPU = float(os.environ.get("BL_FCPU", "144e6"))
 THR = {24e6: (13, 53, 2400), 36e6: (17, 80, 3600), 18e6: (10, 40, 1800)}
@@ -112,6 +113,11 @@ def wave(frame, gap_us=300.0):
 def main():
     emu = Emu(ELF)
     s = emu.syms
+    # (round 11, B9) every flash operation ends with EOP: the bootloader takes a missing EOP as a failed operation
+    # (round 6: bl_hw.c fl_done), and rv32emu has no flash controller, so STATR read 0 and the first erase of the
+    # session "failed": recovery, no page programmed, the MISMATCH below. Erases are not modelled (the memory stays);
+    # programs land in the emulated flash as the bootloader writes them.
+    emu.mmio[FLASH_STATR] = 0x20
     print(f"bootloader {ELF}")
 
     # ---------------------------------------------------------------- fast boot path (8 MHz, no PLL)
@@ -178,6 +184,8 @@ def main():
           f" the max includes a page program's register work, not its 2 ms)")
     ok = emu.peek(0x08002100, 512) == body[:512]
     print(f"2 pages programmed through the flash registers (emulated memory): {'match' if ok else 'MISMATCH'}")
+    if not ok:
+        sys.exit(1)                                  # (round 11, B9) a mismatch fails the run
 
 
 if __name__ == "__main__":

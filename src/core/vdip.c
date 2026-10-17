@@ -4,6 +4,12 @@
 #include "vdip.h"
 #include "rc.h"                             /* rc_pack */
 #include "lto.h"
+#include "../hal/board.h"
+
+#ifndef VDIP_PLANNED
+#define VDIP_PLANNED BOARD_RETURN         /* (round 11) the held reference and `falling`: the receiver's (the host tests
+                                             build them with VDIP_PLANNED=1; the dig2analog-ultra never sets planned) */
+#endif
 
 void vdip_init(vdip_t *d)
 {
@@ -30,7 +36,17 @@ MEASURED void vdip_ms(vdip_t *d, uint32_t now, uint32_t now_s, uint32_t sum2, ui
         return;
     }
     ref = d->ref_q12 >> 12;
-    d->ref_q12 += x - ref;                               /* running mean, 1/4096 per ms */
+#if VDIP_PLANNED
+    if (!d->planned && d->in_dip != 2u)                  /* (round 11, A4) held while a power-off notice holds and
+                                                            through its cut: a slow decay (big port caps) is a dip
+                                                            against the level before it */
+#endif
+    {
+        d->ref_q12 += x - ref;                           /* running mean, 1/4096 per ms */
+    }
+#if VDIP_PLANNED
+    d->falling = (uint8_t)(x * 100u < ref * VDIP_FALL_PCT);
+#endif
     if (x * 100u < ref * (d->in_dip ? VDIP_LEAVE_PCT : VDIP_ENTER_PCT)) {
         d->zi1 = d->zi2 = 0xFFFFu;                       /* (the impedance: no settled window around a dip) */
         d->zok = 0;

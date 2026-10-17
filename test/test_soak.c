@@ -1746,11 +1746,12 @@ static void sc_minmax(void)
 #include "test_r7.c"                             /* (0.6.9, review round 7: r7ack ...) */
 #include "test_r8.c"                             /* (0.6.10: r8evtype) */
 #include "test_r9b.c"                            /* (0.6.10, review round 9 phase B: r9b) */
+#include "test_r11.c"                            /* (round 11: r11confirm) */
 static int r6_scenarios(const char *sc, int argc, char **argv)
 {
     return r6f_scenario(sc) || r6g_scenario(sc) || r6c_scenario(sc) || r6s_scenario(sc, argc, argv) ||
            r6o_scenario(sc) || r7_scenario(sc, argc, argv) || r8_scenario(sc, argc, argv) ||
-           r9b_scenario(sc, argc, argv);
+           r9b_scenario(sc, argc, argv) || r11_scenario(sc, argc, argv);
 }
 
 #if MON_EXTRA

@@ -455,11 +455,14 @@ static void sc_r7pages(void)
     cmd_set(0, 32768, 0, 0);
     run_ms(3000);
 
-    /* IDENTITY: the new features */
-    pg = rc_ask(ULTRA_PAGE_IDENTITY, 0, 0, &o);
+    /* IDENTITY: the new features (0.2.7: part 1) */
+    {
+        static const uint8_t part1[1] = { ULTRA_ID_PART_FEATURES };
+        pg = rc_ask(ULTRA_PAGE_IDENTITY, part1, 1, &o);
+    }
     k = ULTRA_FEAT_LIFETIME | ULTRA_FEAT_DIAG | ULTRA_FEAT_RETRY | ULTRA_FEAT_LOSS_SCENE;
-    CHECK(pg == ULTRA_PAGE_IDENTITY && (ultra_get32(q + ULTRA_ID_FEATURES) & k) == k, "r7pages: IDENTITY's features "
-          "(%08X)", ultra_get32(q + ULTRA_ID_FEATURES));
+    CHECK(pg == ULTRA_PAGE_IDENTITY && (ultra_get32(q + ULTRA_IDF_FEATURES) & k) == k, "r7pages: IDENTITY's features "
+          "(%08X)", ultra_get32(q + ULTRA_IDF_FEATURES));
 
     /* LIFETIME: the record as it is now (set to known values) */
     en.lt.on_s = 36000000u + 100u;                       /* 10,000 h */
@@ -885,7 +888,7 @@ static void sc_r7upd(uint8_t fb)
     printf("soak r7upd %u: an update session's SAME / NACK on D9 only (feedback %u)\n", fb, fb);
     boot(0, 0, 0);
     upd.info.bl_version = 2;                             /* as if behind a bootloader, this version's descriptor valid */
-    upd.info.hw_id = 0x21;
+    upd.info.hw_id = BOARD_HW_ID;                        /* (round 11, B2: its own; another keeps it dark) */
     upd.info.hw_rev = 3;
     upd.info.desc_ok = 1;
     upd.info.version = 0x00000609u;
@@ -897,9 +900,9 @@ static void sc_r7upd(uint8_t fb)
     }
     run_ms(5000);
     CHECK(ultra_on && eff.feedback_ch == fb && out_now[0] != 0u, "r7upd: lit, feedback %u (%u)", fb, eff.feedback_ch);
-    r7u_session(fb, "same version", 0x21, 0x51, 1, UPD_APP_SHOW_SAME, 1200u);
-    r7u_session(fb, "same version, END missed", 0x21, 0x52, 0, UPD_APP_SHOW_SAME, 1200u);
-    r7u_session(fb, "another hardware", 0x22, 0x53, 1, UPD_APP_SHOW_REJECTED, 2500u);
+    r7u_session(fb, "same version", BOARD_HW_ID, 0x51, 1, UPD_APP_SHOW_SAME, 1200u);
+    r7u_session(fb, "same version, END missed", BOARD_HW_ID, 0x52, 0, UPD_APP_SHOW_SAME, 1200u);
+    r7u_session(fb, "another hardware", BOARD_HW_ID + 0x20u, 0x53, 1, UPD_APP_SHOW_REJECTED, 2500u);
 }
 
 static int r7_scenario(const char *s, int argc, char **argv)

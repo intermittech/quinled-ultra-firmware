@@ -71,6 +71,9 @@ static void sc_r8evtype(void)
  *             notice is forgotten: a later dip counts and writes as after a power-up
  *   copies    the copies at 0, 50 and 100 ms (one SEQ): applied once (the hold and its time from the first)
  *   bright    the notice while lit at 50 %: dark in 0.3 s without a step up, back after 2 s without the cut
+ *   slow      (round 11, A4: O1's R5) lit at 50 %, the notice, the cut's bus falling 0.8 V a second (big port caps):
+ *             the dip is the planned cut's (the reference held from the notice), nothing counted, dark throughout
+ *             (before: the dip came after the notice's 2 s, a real one, and the lights came back meanwhile)
  *   cal       the notice during a calibration test: the test stops at once (supply), nothing stored
  *   pending   the record's next page waits for an erase (bright since power-up, its erase refused at boot): the cut
  *             writes nothing (the notice can't make room)
@@ -98,6 +101,8 @@ static void sc_r8evtype(void)
  *   syncneg   all-0 / all-0xFF arguments: refused; a relay-only POLL with them: nothing merged
  *   g_frame   grace: the host's frames from 0.4 s: dark until then, its state after, the scene never
  *   g_none    grace: no frame: dark for 1.5 s, then the scene fades in
+ *   g_noslot  (round 11, A5) grace: Ultra headers from 0.4 s that carry no slot for it (a receiver beyond the hub's
+ *             board count): they end the grace as signal, the scene never, dark for good (R7, accepted)
  *   g_ws      grace: WS2805 frames from 0.4 s: dark until then, the WS values, the scene never
  *   g_app     (the dig2analog-ultra) the scene at once
  *   app       (the dig2analog-ultra) the notice is ignored: no hold, the identify pattern runs on, nothing written */
@@ -186,6 +191,24 @@ static void sc_r8sb(const char *c)
             mx |= out_now[0] | out_now[4];
         }
         CHECK(mx == 0u, "r8sb %s: dark until the first frame (%u)", c, mx);
+        if (!strcmp(c, "g_noslot")) {                    /* (round 11, A5) frames whose slots end before this board: */
+            uint8_t h[8];                                /* header-only frames (a receiver beyond the hub's count) */
+            uint32_t frames0 = host_frames;
+            for (t = 0, mx = 0; t < 5000u; t++) {
+                if (t % 20u == 0u) {
+                    ultra_build_header(h, host_us(sim_ns + 7000u + 64u * 1250u));
+                    wire_frame(h, 64u, sim_ns + 7000u);
+                }
+                run_ms(1);
+                mx |= out_now[0] | out_now[4];
+            }
+            printf("  5 s of headers without a slot for it: ultra %u, grace %u, signal lost %u, the most out %u, scene "
+                   "shown %u\n", ultra_on, grace, signal_lost, mx, srun.hold);
+            CHECK(ultra_on && !grace && !signal_lost && mx == 0u && host_frames == frames0,
+                  "r8sb g_noslot: the headers end the grace (signal, no scene) and drive nothing: dark for good (R7, "
+                  "accepted: a receiver beyond the hub's count; most %u)", mx);
+            return;
+        }
         if (!strcmp(c, "g_frame")) {
             r8_light(19661u, 0);
         } else {
@@ -274,8 +297,11 @@ static void sc_r8sb(const char *c)
                   "again this power-up: nothing more");
         }
         CHECK(W_LIFE() == w0, "r8sb sync: no write of its own (%u)", W_LIFE() - w0);
-        CHECK(rc_ask(ULTRA_PAGE_IDENTITY, 0, 0, &o) == ULTRA_PAGE_IDENTITY &&
-              (ultra_get32(D(&o) + ULTRA_ID_FEATURES) & ULTRA_FEAT_LIFE_SYNC), "r8sb sync: the feature bit");
+        {
+            static const uint8_t part1[1] = { ULTRA_ID_PART_FEATURES };   /* (0.2.7: IDENTITY part 1) */
+            CHECK(rc_ask(ULTRA_PAGE_IDENTITY, part1, 1, &o) == ULTRA_PAGE_IDENTITY &&
+                  (ultra_get32(D(&o) + ULTRA_IDF_FEATURES) & ULTRA_FEAT_LIFE_SYNC), "r8sb sync: the feature bit");
+        }
 #endif
         return;
     }
@@ -364,8 +390,45 @@ static void sc_r8sb(const char *c)
         CHECK(out_now[0] == 0u && i == 0u && vdip.planned && mx >= 32000u, "r8sb bright: dark within 0.4 s, never up "
               "(%u, %u ups)", out_now[0], i);
         run_ms(2500);
-        CHECK(!vdip.planned && out_now[0] == 32768u, "r8sb bright: no cut: back after 2 s, the notice forgotten (%u)",
-              out_now[0]);
+        CHECK(vdip.planned && out_now[0] == 32768u, "r8sb bright: no cut: back after 2 s (%u; round 11: a dip still "
+              "the cut's for 10 s)", out_now[0]);
+        run_ms(7500);
+        CHECK(!vdip.planned && out_now[0] == 32768u, "r8sb bright: 10 s on, the notice forgotten (%u)", out_now[0]);
+        return;
+    }
+    if (!strcmp(c, "slow")) {                            /* (round 11, A4: O1's R5) big port caps: the cut's bus */
+        uint8_t s[32];                                   /* falls 0.8 V a second, 24 V to 0 in 30 s */
+        uint32_t w1, n0, top = 0, on = 0, cls = 0;
+        r8_light(32768u, 3000u);
+        w1 = W_LIFE();
+        n0 = vdip.count;
+        d0 = en.lt.dips;
+        i = r8_evl_dips();
+        ultra_slot_power_off(s, 0x59);
+        for (t = 0; t < 12000u; t++) {
+            if (t == 0u || t == 50u || t == 100u) {
+                host_send(s);                            /* the copies */
+            }
+            if (t >= 200u) {
+                supply_mv = 24000u - (t - 200u) * 4u / 5u;   /* the cut at 200 ms, then the slow decay */
+                host_on = 0;
+            }
+            run_ms(1);
+            if (t >= 400u) {
+                top = out_now[0] > top ? out_now[0] : top;  /* (after the notice's 0.3 s fade) */
+            }
+            if (!on && vdip.in_dip) {
+                on = t;
+                cls = vdip.in_dip;
+            }
+        }
+        printf("  the slow cut: a dip from %u ms (class %u), now %u; the most out after the fade %u; counted %u, "
+               "lifetime dips %u, events %u, written %u\n", on, cls, vdip.in_dip, top, vdip.count - n0, en.lt.dips - d0,
+               r8_evl_dips() - i, W_LIFE() - w1);
+        CHECK(cls == 2u && vdip.in_dip == 2u && top == 0u && vdip.count == n0 && en.lt.dips == d0 &&
+              r8_evl_dips() == i && !(pwrev_latched(&pw) & ULTRA_PW_EV_SUPPLY_DIP),
+              "r8sb slow: the planned cut's dip all along (class %u), dark throughout (the most %u), nothing counted",
+              cls, top);
         return;
     }
     if (!strcmp(c, "cal")) {
@@ -489,7 +552,7 @@ static void sc_r8sb(const char *c)
                ultra_get16(pg), vdip.n_log, light_why(), why);
         CHECK(ultra_get16(pg) == n0 && vdip.count == n0 && vdip.n_log == 0u && vdip.deep.ref_x == 0u &&
               why != ULTRA_ST_WHY_SUPPLY && light_why() != ULTRA_ST_WHY_SUPPLY, "r8sb %s: SUPPLY / STATUS: no dip", c);
-        run_ms(2200);
+        run_ms(PLAN_CUT_MS);
         printf("  past the notice: planned %u, lifetime dips %u, fault memory %u %%, events %u, latch %02X\n",
                vdip.planned, en.lt.dips - d0, en.lt.dip_pct, r8_evl_dips() - i, pwrev_latched(&pw));
         CHECK(!vdip.planned && en.lt.dips == d0 && en.lt.dip_pct == 0u && r8_evl_dips() == i &&
@@ -518,8 +581,8 @@ static void sc_r8sb(const char *c)
         CHECK(W_LIFE() == w0 && en.lt.dips == d0 && r8_evl_dips() == i && !(pwrev_latched(&pw) & ULTRA_PW_EV_SUPPLY_DIP)
               && en.lt.dip_pct == 0u, "r8sb brief: the dip in the notice's 2 s: nothing counted or written (%u, %u)",
               W_LIFE() - w0, en.lt.dips - d0);
-        run_ms(2000);
-        CHECK(!vdip.planned, "r8sb brief: 2 s on: the notice forgotten");
+        run_ms(PLAN_CUT_MS);
+        CHECK(!vdip.planned, "r8sb brief: 10 s on (round 11; 2 s before): the notice forgotten");
         r8_dip(40u);
         run_ms(100);
         CHECK(W_LIFE() == w0 + 1u && en.lt.dips == d0 + 1u, "r8sb brief: then a dip counts and writes as after a "
