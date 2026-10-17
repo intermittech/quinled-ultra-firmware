@@ -71,7 +71,7 @@ jobs:
           pip install numpy
           python tools/size_gate.py --measure tools/measure_baseline.txt --corpus
 
-      - name: Build (bootloader, app twice: reproducible, images, factory hex)
+      - name: "Build (bootloader, app twice, reproducible, images, factory hex)"
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           BUILD_ID="$(git rev-parse --short=12 HEAD)" bash tools/build_release.sh "$VERSION" dist
