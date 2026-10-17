@@ -159,14 +159,14 @@ void hw_records_window(uint32_t open);
  * turnaround or burst check failed), RC_DIR_FORWARD forward again (a burst still running is cut, the line released) */
 enum { RC_DIR_FORWARD = 0, RC_DIR_ANSWER = 1, RC_DIR_QUIET = 2 };
 void     rc_hw_dir(uint32_t mode);
-/* poll ISR: the line HIGH (USART3 idles high on PB10), after RC_PREAMBLE_CYC DIN read back: LOW = another driver on
- * the segment (1: aborted, the line released); else a 0xFF (core/rc.h RC_LEAD_BYTES) and the n bytes at brr by
- * interrupt, the line released after them
+/* poll ISR: the line HIGH (the answer UART idles high on its TX pin: PB10 by default, board.h ANSWER_UART), after
+ * RC_PREAMBLE_CYC DIN read back: LOW = another driver on the segment (1: aborted, the line released); else a 0xFF
+ * (core/rc.h RC_LEAD_BYTES) and the n bytes at brr by interrupt, the line released after them
  * (n 0: the turnaround check, the line released at once) */
 uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr);
 #if BOARD == BOARD_DP_UD
 /* (BOARD 3: one transceiver, DE + /RE tied on PB14, RO high-Z while DE is high: nothing to read back). rc_hw_dir:
- * RC_DIR_ANSWER = BLANK_N LOW (PA1), then DE high (the line HIGH: USART3 idles high on PB10); FORWARD / QUIET = a
+ * RC_DIR_ANSWER = BLANK_N LOW (PA1), then DE high (the line HIGH: the answer UART idles high); FORWARD / QUIET = a
  * burst still running cut, DE low (BLANK_N stays: the window logic raises it, hw_dline.h dl_hw_blank). rc_hw_send:
  * after RC_PREAMBLE_CYC of HIGH a 0xFF and the n bytes by interrupt, DE low at the last stop bit (TC); returns 0 (no
  * check). rc_hw_busy: the burst still runs (DE high) */

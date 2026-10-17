@@ -11,6 +11,14 @@ static dline_t D;
 static udfx_t U;
 static uint16_t ring[UX_RING_WORDS] __attribute__((aligned(4)));
 
+/* Skipped-grid regression: include a long producer stall and a word-count wrap. */
+uint32_t b_grid_setup(uint32_t chip, uint32_t npx, uint32_t fps, uint32_t lag);
+uint32_t b_grid_fill(void)
+{
+    (void)ws_ring_fill(&U.e, &U.lut, ring, U.e.w + 24u);
+    return U.e.next_w;
+}
+
 void *memset(void *d, int c, unsigned n);
 void *memcpy(void *d, const void *s, unsigned n);
 void *memset(void *d, int c, unsigned n) { uint8_t *p = d; while (n--) *p++ = (uint8_t)c; return d; }
@@ -52,6 +60,17 @@ uint32_t b_setup(uint32_t chip, uint32_t npx, uint32_t fx, uint32_t fps)
     D.wpos += 700;                                   /* the line has been LOW for a latch (the chip's: <= 650 words) */
     udfx_tick(&U, &D, ring);
     return U.local;
+}
+
+uint32_t b_grid_setup(uint32_t chip, uint32_t npx, uint32_t fps, uint32_t lag)
+{
+    b_setup(chip, npx, 1, fps);
+    U.e.next_w = 0xFFFF0000u;
+    U.e.w = U.e.next_w + lag;
+    U.e.low_w = U.e.reset_w;
+    U.e.state = WS_LOW;
+    U.e.ready = 1;
+    return U.npx;
 }
 
 /* n ticks of 112 / 113 words; the frame repeated (ready kept set). Returns the encoder's bytes taken */
@@ -158,4 +177,108 @@ uint32_t b_pixel_fx(uint32_t fx)
 uint32_t b_fx_count(void)
 {
     return FX_COUNT;
+}
+
+/* ---- CHAIN mode: the chain scanner in dline_tick (core/dline.c dl_ch_scan) over a 1-slot Ultra frame (320 bits of 45 samples),
+ * ticks of 112 / 113 words: the idle line, the frame's ticks, the tick that finds its end. The stream scanner runs beside it. */
+static uint16_t cw[1100];
+static uint32_t cw_n, ch_k;
+
+uint32_t b_ch_setup(void)
+{
+    uint32_t i, b, s = 0, x = 0x1234567u;
+    for (i = 0; i < sizeof cw / sizeof cw[0]; i++) {
+        cw[i] = 0;
+    }
+    for (b = 0; b < 320u; b++) {
+        uint32_t hi, j;
+        x = x * 1103515245u + 12345u;
+        hi = (x >> 16) & 1u ? 25u : 12u;
+        for (j = 0; j < 45u; j++, s++) {
+            if (j < hi) {
+                cw[s >> 4] |= (uint16_t)(0x8000u >> (s & 15u));
+            }
+        }
+    }
+    cw_n = (s + 15u) / 16u;
+    dline_init(&D, 0);
+    D.direct = 0;
+    D.rec = 0;
+    D.ch_on = 1;
+    D.ch_st = DLINE_CH_IDLE;
+    D.ch_lz = 200;
+    D.local = 1;
+    ch_k = 0;
+    return cw_n;
+}
+
+/* one tick: the next 112 / 113 words are cw[off ..] (or LOW past the frame); returns the tick's actions */
+uint32_t b_ch_tick(uint32_t off)
+{
+    const uint32_t n = 112u + (ch_k++ & 1u);
+    uint32_t k, rx, a;
+    for (k = 0; k < n; k++) {
+        ring[(D.wpos + k) & DLINE_RING_MASK] = off + k < cw_n ? cw[off + k] : 0;
+    }
+    rx = (D.wpos + n) & DLINE_RING_MASK;
+    a = dline_tick(&D, ring, rx, (rx + 2u) & DLINE_RING_MASK, 320u);
+    if (a & DLINE_A_CH_READY) {
+        D.ch_ready = 0;
+    }
+    return a;
+}
+
+uint32_t b_ch_words(void) { return cw_n; }
+
+uint32_t b_ch_on(uint32_t on)
+{
+    D.ch_on = (uint8_t)(on != 0u);
+    return D.ch_on;
+}
+
+/* one udfx_render call (the main loop's step): its cycle count is the latency a decode or a poll answer can wait behind */
+uint32_t b_render_once(void)
+{
+    return udfx_render(&U);
+}
+
+/* Queue four scene commands before a frame, so setup latency is measured too. */
+uint32_t b_scene_commands(uint32_t fx)
+{
+    ultra_pixel_fx_t f = {0};
+    uint8_t s[32];
+    uint32_t i;
+    f.effect = (uint8_t)fx; f.palette = ULTRA_PX_PAL_COLORS; f.brightness = 255;
+    f.c[0][0] = 255; f.c[1][1] = 255; f.c[2][2] = 255;
+    for (i = 0; i < UX_SEGS; i++) {
+        ultra_slot_pixel_fx(s, (uint8_t)i, 99, &f);
+        udfx_pixel_fx(&U, s, 1000);
+    }
+    U.e.ready = 0; U.e.state = WS_LOW; U.begun = 0;
+    return 0;
+}
+
+uint32_t b_preparing(void) { return U.begun != 1u; }
+
+uint32_t b_scene_at(uint32_t ms)
+{
+    U.e.ready = 0; U.e.state = WS_LOW; U.begun = 0;
+    U.e.next_w = U.a_w = 0; U.a_host = ms * 1000u;
+    return 0;
+}
+
+/* Both slots occupied; the next controller command must queue, not replace either context. */
+uint32_t b_scene_fades(uint32_t fx)
+{
+    fx_params_t p = {0};
+    uint32_t i;
+    p.bri = 255; p.palette = PAL_COLORS; p.c[0].r = 255;
+    for (i = 0; i < 2; i++) {
+        p.id = FX_SOLID; p.trans_ms = 0;
+        fx_engine_set(&U.eng, i, &p, 0, 0);
+        p.id = (uint8_t)fx; p.trans_ms = 65535;
+        fx_engine_set(&U.eng, i, &p, 0, 0);
+    }
+    fx_engine_frame(&U.eng, 0);
+    return 0;
 }

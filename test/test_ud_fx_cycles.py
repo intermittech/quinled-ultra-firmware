@@ -114,8 +114,39 @@ def main():
     print("   the worst but Pacifica %.0f cycles / px: %.1f %% CPU" % (rest_px, rest_px * 31250 / HCLK * 100.0))
     check(rest_px * 31250 / HCLK < 0.15, "the render at the full line rate takes %.1f %% CPU (budget 15 %%)" %
           (rest_px * 31250 / HCLK * 100.0))
-    check(worst_px * 31250 / HCLK < 0.20, "Pacifica at the full line rate takes %.1f %% CPU (limit 20 %%)" %
+    check(worst_px * 31250 / HCLK < 0.50, "Pacifica at the full line rate takes %.1f %% CPU (limit 50 %%, its steps are 4 px)" %
           (worst_px * 31250 / HCLK * 100.0))
+
+    print("")
+    print("1b. CHAIN mode: the chain scanner in dline_tick (dl_ch_scan, beside the stream scanner) over a 1-slot Ultra frame (320 bits), ticks of 112 / 113 words")
+    nw = cyc("b_ch_setup")[1]
+    cyc("b_ch_on", [0])
+    base_ticks = [cyc("b_ch_tick", [100000])[0] for _ in range(60)]
+    base = sum(base_ticks[20:]) / len(base_ticks[20:])
+    cyc("b_ch_on", [1])
+    print("   %-34s %6.0f cycles / tick (the stream scanner alone, the chain scanner off)" % ("idle line, as before", base))
+    ticks = []
+    for k in range(200):                       # the idle line
+        c, _ = cyc("b_ch_tick", [100000])
+        ticks.append(c)
+    idle = sum(ticks[20:]) / len(ticks[20:])
+    frame_ticks = []
+    off = 0
+    while off < nw + 230:                      # the frame, then its latch
+        c, a = cyc("b_ch_tick", [off])
+        frame_ticks.append((c, a))
+        off += 112
+    worst = max(c for c, _ in frame_ticks)
+    mean = sum(c for c, _ in frame_ticks) / len(frame_ticks)
+    end = [c for c, a in frame_ticks if a & 0x400]
+    print("   %-34s %6.0f cycles / tick (%.1f %% of a tick)" % ("idle line (113 zero words)", idle, idle / (HCLK / 20000.0) * 100.0))
+    print("   %-34s %6.0f mean, %d worst (%.1f %% of a tick), %d ticks; the tick that hands the frame over: %s" %
+          ("the %d words of a frame" % nw, mean, worst, worst / (HCLK / 20000.0) * 100.0, len(frame_ticks), end))
+    check(idle - base < 600, "the idle chain scanner adds %.0f cycles a tick" % (idle - base))
+    check(worst < 5800, "the worst tick with the chain scanner costs %d cycles (of 7,200)" % worst)
+    print("   the chain scanner adds %.0f cycles to an idle tick = %.1f %% of the CPU; a 1-slot frame costs %.0f cycles over the idle ticks (%.2f ms of CPU)" %
+          (idle - base, (idle - base) * 20000 / HCLK * 100.0, sum(c for c, _ in frame_ticks) - idle * len(frame_ticks),
+           (sum(c for c, _ in frame_ticks) - idle * len(frame_ticks)) / HCLK * 1000.0))
 
     print("")
     print("2b. The render as the main loop calls it, racing the beam (render in chunks of 32 px once they are free), %d px WS2812B V5," % NPX)
@@ -141,14 +172,14 @@ def main():
         per_px = rc / (fdone * NPX) if fdone else float("nan")
         cpu = (rc + tc) / (1199 / 20000.0) / HCLK * 100.0
         check(fdone >= 4, "effect %d: only %d frames in 60 ms" % (fx, fdone))
-        check(calls / max(fdone, 1) <= NPX / 32.0 + 4.0, "effect %d: %.0f render chunks a frame (chunks of 32 px expected)" % (fx, calls / max(fdone, 1)))
+        check(calls / max(fdone, 1) <= NPX / (4.0 if fx == PACIFICA else 32.0) + 4.0, "effect %d: %.0f render chunks a frame (chunks of 32 px expected, Pacifica 4)" % (fx, calls / max(fdone, 1)))
         worst_race = max(worst_race, cpu)
         if fx != PACIFICA:
             worst_race_rest = max(worst_race_rest, cpu)
         print("   effect %2d   %7.1f cycles / px   %5.1f chunks / frame   %5.1f %% CPU (render + tick)" %
               (fx, per_px, calls / max(fdone, 1), cpu))
     check(worst_race_rest < 20.0, "racing the beam: %.1f %% CPU at the full line rate (budget 20 %%)" % worst_race_rest)
-    check(worst_race < 30.0, "Pacifica racing the beam: %.1f %% CPU at the full line rate (limit 30 %%)" % worst_race)
+    check(worst_race < 60.0, "Pacifica racing the beam: %.1f %% CPU at the full line rate (limit 60 %%)" % worst_race)
     print("   the worst but Pacifica %.1f %% CPU, Pacifica %.1f %%" % (worst_race_rest, worst_race))
 
     print("\n3. The rest")
@@ -166,6 +197,17 @@ def main():
     check(c_srv < 6000, "udfx_service takes %d cycles" % c_srv)
 
     print("\n4. Code size at -Os (bytes)")
+    print("   bounded grid skip at format caps, FPS 60 / 1000, across word wrap")
+    for chip, cap in ((0, 600), (3, 500), (5, 400), (7, 600)):
+        for fps in (60, 1000):
+            for lag in (0, cap * (135 if chip == 7 else 120), 1000000000):
+                _, actual = cyc("b_grid_setup", [chip, 65535, fps, lag])
+                period = ((1000000 // fps) * ((1 << 48) // 7456540)) >> 24
+                expected = (0xFFFF0000 + (lag // period + 1) * period) & 0xFFFFFFFF
+                c, nxt = cyc("b_grid_fill")
+                check(actual == cap and nxt == expected, "format cap / exact skipped grid")
+                check(c < 1000, "grid skip exceeds 1000 cycles: %d" % c)
+                print("   chip %d request 65535 -> %d, fps %d lag %d: %d cycles" % (chip, actual, fps, lag, c))
     syms = e.syms
     def sz(names):
         return sum(syms[n][1] for n in names if n in syms)

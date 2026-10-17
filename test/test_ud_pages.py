@@ -119,6 +119,9 @@ def offsets(elf):
                     "uds_polls uds_headers uds_tail_err uds_decoded uds_dec_err dl_cap upd_frames "
                     "ux_cfg ux_npx ux_chip chip_bpp ux_seg seg_run seg_p fx_effect fx_bri ux_want_local ux_want_stream "
                     "ux_stored_have ux_save_due ux_seq5 ux_lock ux_a_have ux_a_host ux_local ux_dark ux_save_ms "
+                    "dl_ch_on dl_ch_st dl_ch_end dl_ch_tx dl_ch_win dl_ch_bits dl_ch_hn dl_ch_tn dl_ch_tw dl_ch_arm dl_ch_ready "
+                    "dl_ch_enter dl_ch_hold dl_ch_req uc_mode uc_cfg uc_flags uc_slots uc_frames uc_nonultra uc_longs "
+                    "uc_windows uc_missed uc_markers uc_bits ux_chain ux_wpu24 ux_r_have "
                     "sz_seg sz_life sz_info").split()
             assert len(keys) == len(v) - 2
             return dict(zip(keys, v[1:-1]))
@@ -234,7 +237,8 @@ for rate in range(3):
     check(u(d, H["ULTRA_ID_FW_VERSION"], 4) == FW_WORD, "IDENTITY 0: the firmware word")
     check(d[H["ULTRA_ID_BL_VERSION"]] == 2 and d[H["ULTRA_ID_HW_ID"]] == 3 and d[H["ULTRA_ID_HW_REV"]] == 0,
           "IDENTITY 0: bootloader / hardware id / revision")
-    check(d[19] == 0 and u(d, H["ULTRA_ID_CAPS"], 4) == 0xCD, "IDENTITY 0: capabilities 0x%X" % u(d, 20, 4))
+    check(d[19] == 0 and u(d, H["ULTRA_ID_CAPS"], 4) == 0x1CD and u(d, H["ULTRA_ID_CAPS"], 4) & H["ULTRA_HWCAP_CHAIN"] and
+          not u(d, H["ULTRA_ID_CAPS"], 4) & H["ULTRA_HWCAP_RELAY"], "IDENTITY 0: capabilities 0x%X (CHAIN, no RELAY)" % u(d, 20, 4))
     d, _ = answer(H["ULTRA_PAGE_IDENTITY"], bytes([H["ULTRA_ID_PART_FEATURES"]]), rate)
     check(u(d, H["ULTRA_IDF_FEATURES"], 4) == FEATS and d[4:24] == bytes(20),
           "IDENTITY 1: features 0x%08X (want 0x%08X), words 1-5 zero" % (u(d, 0, 4), FEATS))
@@ -300,13 +304,17 @@ check(e.rd(st + O["st_bits_min"], 4) == 0xFFFFFFFF and e.rd(st + O["st_bits_max"
 
 # PIXEL_FX (0x81, three parts): the state (the effect engine's counts are its own), the effect and palette maps
 d, _ = answer(H["ULTRA_PAGE_HW_FX"], bytes([0]), 0)
-check(u(d, H["ULTRA_PXG_CATALOGUE"], 2) == 1 and d[H["ULTRA_PXG_CHIPS"]] == H["ULTRA_PXC_COUNT"] and
+check(u(d, H["ULTRA_PXG_CATALOGUE"], 2) == 3 and d[H["ULTRA_PXG_CHIPS"]] == H["ULTRA_PXC_COUNT"] and
       d[H["ULTRA_PXG_SEGMENTS"]] == H["ULTRA_PX_SEGMENTS"] and d[H["ULTRA_PXG_MODE"]] == H["ULTRA_PXM_STREAM"] and
       d[H["ULTRA_PXG_EFFECTS"]] >= 1 and d[H["ULTRA_PXG_PALETTES"]] >= 1, "PIXEL_FX 0: catalogue / chips / segments / stream mode")
 for part in (1, 2):
     d, _ = answer(H["ULTRA_PAGE_HW_FX"], bytes([part]), 0)
     check(any(d[:24]), "PIXEL_FX %d: the map has bits" % part)
-answer(H["ULTRA_PAGE_HW_FX"], bytes([3]), 0, expect=H["ULTRA_PAGE_UNSUPPORTED"])
+answer(H["ULTRA_PAGE_HW_FX"], bytes([4]), 0, expect=H["ULTRA_PAGE_UNSUPPORTED"])
+d, _ = answer(H["ULTRA_PAGE_HW_FX"], bytes([H["ULTRA_PXG_PART_LINE"]]), 0)      # part 3: the line (AUTO, deciding, nothing seen yet)
+check(d[H["ULTRA_PXL_CONFIG"]] == 0 and d[H["ULTRA_PXL_MODE"]] == 0 and d[H["ULTRA_PXL_FLAGS"]] == 0 and
+      u(d, H["ULTRA_PXL_FRAMES"], 2) == 0 and u(d, H["ULTRA_PXL_WINDOWS"], 2) == 0 and u(d, H["ULTRA_PXL_ANSWERS"], 2) == 7,
+      "PIXEL_FX 3: the line: AUTO, undecided, nothing counted; answers = dline's %d" % u(d, H["ULTRA_PXL_ANSWERS"], 2))
 
 # the local effects' commands through ud_frame on the compiled firmware: CONFIG 129-139, PIXEL_FX, the anchor
 ux = A("ux")
@@ -315,8 +323,8 @@ cfg = bytearray()
 for cid, val in ((129, 3), (131, 40), (138, 5), (140, 9), (132, 0), (0, 0), (130, 0), (139, 50), (133, 150)):
     cfg += bytes([cid]) + val.to_bytes(2, "big")
 r, _ = run(frame(H["ULTRA_CONFIG"], bytes(cfg), 9, 0))
-vals = [e.rd(ux + O["ux_cfg"] + 2 * k, 2) for k in range(11)]
-check(r == 0 and vals == [3, 0, 40, 0, 150, 0, 0, 0, 0, 5, 50], "CONFIG 129-139 through ud_frame: %s" % vals)
+vals = [e.rd(ux + O["ux_cfg"] + 2 * k, 2) for k in range(13)]
+check(r == 0 and vals == [3, 0, 40, 0, 150, 0, 0, 0, 0, 5, 50, 0, 0], "CONFIG 129-141 through ud_frame (140 = 9 refused): %s" % vals)
 check(e.rd(ux + O["ux_save_due"], 1) == 1, "CONFIG: the record is due")
 e.call("udfx_service", [ux, A("dl"), 5, 0, 256])
 check(e.rd(ux + O["ux_npx"], 2) == 40 and e.rd(ux + O["ux_chip"] + O["chip_bpp"], 1) == 4, "the chip / pixel count derived")
@@ -326,6 +334,13 @@ fx[H["ULTRA_PX_BRIGHTNESS"] - H["ULTRA_PAYLOAD"]] = 200
 fx[H["ULTRA_PX_FLAGS"] - H["ULTRA_PAYLOAD"]] = H["ULTRA_PXF_STORE"]
 r, _ = run(frame(H["ULTRA_PIXEL_FX"], bytes(fx), 4, 0))
 seg0 = ux + O["ux_seg"]
+check(e.rd(seg0 + O["seg_run"], 1) == 0, "PIXEL_FX waits for a render boundary")
+# This command-only test explicitly advances frame setup; the wire/tick suites
+# exercise the real latch-safe entry and publication.
+e.wr(ux + O["ux_local"], 1, 1)
+for _ in range(10):
+    e.call("udfx_render", [ux])
+e.wr(ux + O["ux_local"], 1, 0)
 check(r == 0 and e.rd(seg0 + O["seg_run"], 1) == 1 and e.rd(seg0 + O["seg_p"] + O["fx_effect"], 1) == 3 and
       e.rd(seg0 + O["seg_p"] + O["fx_bri"], 1) == 200, "PIXEL_FX through ud_frame: the effect runs")
 check(e.rd(ux + O["ux_want_local"], 1) == 0 and e.rd(ux + O["ux_stored_have"], 1) == 1 and e.rd(ux + O["ux_seq5"] + 4, 1) == 4,
@@ -338,6 +353,7 @@ r, _ = run(frame(H["ULTRA_PIXEL_FX"], bytes(fx), 4, 0))   # the same SEQ: ignore
 check(e.rd(seg0 + O["seg_p"] + O["fx_effect"], 1) == 3, "PIXEL_FX: the same SEQ applied again")
 fx[0] = 0
 r, _ = run(frame(H["ULTRA_PIXEL_FX"], bytes(fx), 5, 0))   # effect 0 + STORE: back to the stream, the stored effect cleared
+e.call("udfx_service", [ux, A("dl"), 7, 0, 256])       # already STREAM: consume cancellation without a render
 check(e.rd(seg0 + O["seg_run"], 1) == 0 and e.rd(ux + O["ux_want_stream"], 1) == 1 and e.rd(ux + O["ux_stored_have"], 1) == 0,
       "PIXEL_FX 0 + STORE: stream, cleared")
 r, _ = run(frame(H["ULTRA_PIXEL_FX"], bytes(fx), 6, H["ULTRA_HDR_EXT"]))   # an EXT frame: every slot ignored
@@ -410,6 +426,129 @@ for n, f in ((321, poll(H["ULTRA_PAGE_STATUS"]) + bytes(8)), (328, poll(H["ULTRA
           e.rd(A("upd") + O["upd_frames"], 4) == n0 + 1, "ud_decode: %d bits refused" % n)
 
 
+# ---------------------------------------------------------------------------------------------- CHAIN frames (ud_chain_decode)
+def chain_words(data, phase=5, js=123457):
+    """a chain frame as dline's chain scanner keeps it (core/dline.c dl_ch_scan): the head (the first 752 words, the first one LOW) and
+    the snapshot (every word of the frame, up to the one that ends it, at its own ring position js + i, mod 512)"""
+    s = [0] * phase
+    for byte in data:
+        for k in range(8):
+            hi = 25 if byte & (0x80 >> k) else 12
+            s += [1] * hi + [0] * (45 - hi)
+    s += [0] * (-len(s) % 16)
+    words = [int("".join(map(str, s[k:k + 16])), 2) for k in range(0, len(s), 16)]
+    nz = max(i for i, v in enumerate(words) if v)
+    frame = words[:nz + 1] + [0] * 104
+    head = [0] + frame[:751]
+    snap = [0] * 512
+    for i, v in enumerate(frame):
+        snap[(js + i) & 511] = v
+    return head, snap, len(head), len(frame), js + len(frame)
+
+
+DL = A("dl")
+UC = A("uc")
+
+
+def poll_r(index, r, page, rate, seq):
+    """a POLL for answer index `index` of r, in an RW frame"""
+    return frame(H["ULTRA_POLL"], bytes([index, r, page, rate]), seq, H["ULTRA_HDR_RW"])
+
+chain_n = [0]
+decode_cycles = []
+
+
+def chain_decode(data, bits, end_w, phase=5):
+    head, snap, hn, tn, tw = chain_words(data, phase)
+    cap = DL + O["dl_cap"]
+    e.poke(cap, struct.pack("<%dH" % hn, *head))
+    e.poke(cap + 2 * 752, struct.pack("<512H", *snap))
+    w(DL + O["dl_ch_bits"], 2, bits)
+    w(DL + O["dl_ch_hn"], 2, hn)
+    w(DL + O["dl_ch_tn"], 2, tn - 96)                  # (the header's window ends 8 LOW words after the last pulse: 96 words before the snapshot's end)
+    w(DL + O["dl_ch_tw"], 4, tw - 96)
+    w(DL + O["dl_ch_end"], 4, end_w)
+    w(DL + O["dl_ch_ready"], 1, 1)
+    w(A("dl_ch_ready"), 1, 1)
+    w(A("dl_ch_tick"), 4, 1000 + 20 * 50 * chain_n[0])
+    chain_n[0] += 1
+    e.poke(ANS, bytes(32))
+    e.call("ud_chain_decode", [], max_steps=8_000_000)
+    decode_cycles.append(e.cycles())
+
+
+def ucv(k, n=2):
+    return e.rd(UC + O[k], n)
+
+
+e.call("udfx_init", [ux])
+e.poke(UC, bytes(e.sym("uc")[1]))               # the line mode state zero: AUTO, undecided
+e.poke(DL + O["dl_ch_req"], bytes(1))
+h0 = e.rd(uds + O["uds_headers"], 2)
+d0 = e.rd(uds + O["uds_decoded"], 2)
+t0 = e.rd(uds + O["uds_tail_err"], 2)
+nop = frame(H["ULTRA_NOP"], b"", 1, 0, 10000)
+chain_decode(nop, 320, 120000)
+check(ucv("uc_frames") == 1 and ucv("uc_mode", 1) == 0 and e.rd(DL + O["dl_ch_ready"], 1) == 0 and e.rd(DL + O["dl_ch_arm"], 1) == 0 and
+      e.rd(uds + O["uds_headers"], 2) == h0 + 1 and e.rd(uds + O["uds_decoded"], 2) == d0 + 1,
+      "CHAIN: a NOP frame: counted, undecided after one, the capture released, no answer")
+check(e.rd(DL + O["dl_ch_req"], 1) == 0 and e.rd(ux + O["ux_chain"], 1) == 0, "CHAIN: nothing started by one frame")
+chain_decode(nop, 320, 130000)
+check(ucv("uc_mode", 1) == 2 and e.rd(DL + O["dl_ch_req"], 1) == 5 and e.rd(ux + O["ux_chain"], 1) == 1,
+      "CHAIN: the second Ultra frame decides CHAIN (dline_ch_start enter, the encoder asked for): mode %d req %d" %
+      (ucv("uc_mode", 1), e.rd(DL + O["dl_ch_req"], 1)))
+chain_decode(frame(H["ULTRA_NOP"], b"", 1, 0, 10040), 1000, 140000)
+check(ucv("uc_nonultra") == 1 and e.rd(uds + O["uds_tail_err"], 2) == t0 + 1 and e.rd(DL + O["dl_ch_arm"], 1) == 0 and ucv("uc_mode", 1) == 2,
+      "CHAIN: 1000 bits is no Ultra frame: counted, nothing armed")
+bad = bytearray(nop)
+bad[36] ^= 0x40
+chain_decode(bytes(bad), 320, 150000)
+check(ucv("uc_nonultra") == 2, "CHAIN: a broken header is no Ultra frame")
+
+# a POLL for answer index 1 of 2 at 500 kbaud: the answer's start word and the window's end from t0 and the clock
+w(ux + O["ux_r_have"], 1, 1)                    # the clock's rate is measured (an unmeasured one answers no POLL: below)
+wpu24 = e.rd(ux + O["ux_wpu24"], 4)
+known = e.rd(ux + O["ux_r_have"], 1)
+pitch = 330 * 2 + 130
+end_w = 200000
+chain_decode(poll_r(1, 2, H["ULTRA_PAGE_STATUS"], 1, 0x37), 320, end_w)
+a = e.peek(ANS, 32)
+tx_us = 1000 + pitch * 1 + (0 if known else 10)
+check(e.rd(DL + O["dl_ch_arm"], 1) == 1 and e.rd(DL + O["dl_ch_tx"], 4) == end_w + (tx_us * wpu24 >> 24) and
+      e.rd(DL + O["dl_ch_win"], 4) == end_w + ((1000 + pitch * 2 + 200) * wpu24 >> 24),
+      "CHAIN: a POLL for index 1 of 2: armed, starts at t0 + %d us (word %d), window to t0 + %d us" % (tx_us, e.rd(DL + O["dl_ch_tx"], 4) - end_w,
+                                                                                                    1000 + pitch * 2 + 200))
+check(a[0] == H["ULTRA_RSP_SYNC"] and a[1] == H["ULTRA_PAGE_STATUS"] and a[2] >> 4 == 1 and a[3] == 0x37 and u(a, 4, 2) == 0xBEEF and
+      u(a, 30, 2) == crc16(a[:30]), "CHAIN: the answer built: SYNC / page / index 1 / SEQ / UID16 / CRC")
+check(e.rd(A("ud_brr"), 2) == brr[1] and ucv("uc_windows") == 1, "CHAIN: the divider for 500 kbaud, one window counted")
+# RELAY_ONLY: the window is flagged, nothing armed
+chain_decode(poll_r(H["ULTRA_POLL_RELAY_ONLY"], 1, H["ULTRA_PAGE_STATUS"], 0, 0x38), 320, 210000)
+check(e.rd(DL + O["dl_ch_arm"], 1) == 0 and e.rd(DL + O["dl_ch_win"], 4) == 210000 + ((1000 + 460 * 1 + 200) * wpu24 >> 24) and ucv("uc_windows") == 2,
+      "CHAIN: RELAY_ONLY: a window, no answer")
+# a frame without RW: a CONFIG slot is acted on (CONFIG 140 = 1 forces STREAM), the window stays 0
+chain_decode(frame(H["ULTRA_CONFIG"], bytes([140, 0, 1]), 12, 0, 10100), 320, 220000)
+check(e.rd(ux + O["ux_cfg"] + 2 * 11, 2) == 1 and e.rd(DL + O["dl_ch_win"], 4) == 0, "CHAIN: CONFIG 140 taken from a chain frame")
+# a 3-slot frame: slot 0 acted on, counted as not the last board
+three = frame(H["ULTRA_NOP"], b"", 2, 0, 10200)[:32] + frame(H["ULTRA_NOP"], b"", 3, 0)[:32] + frame(H["ULTRA_NOP"], b"", 4, 0)[:32] + \
+    frame(H["ULTRA_NOP"], b"", 4, 0, 10200)[32:]
+chain_decode(three, 3 * 256 + 64, 230000)
+check(ucv("uc_longs") == 1 and ucv("uc_slots", 1) == 3 and ucv("uc_flags", 1) & H["ULTRA_PXL_F_LONG"], "CHAIN: a 3-slot frame is counted as not the last board")
+# an UPD frame: 384 bits, header only
+d, _ = answer(H["ULTRA_PAGE_HW_FX"], bytes([H["ULTRA_PXG_PART_LINE"]]), 0)
+check(d[H["ULTRA_PXL_MODE"]] == 2 and u(d, H["ULTRA_PXL_FRAMES"], 2) == ucv("uc_frames") and u(d, H["ULTRA_PXL_NONULTRA"], 2) == 2 and
+      u(d, H["ULTRA_PXL_LONG"], 2) == 1 and u(d, H["ULTRA_PXL_WINDOWS"], 2) == 2 and d[H["ULTRA_PXL_FLAGS"]] & H["ULTRA_PXL_F_LONG"] and
+      d[H["ULTRA_PXL_FLAGS"]] & H["ULTRA_PXL_F_NONULTRA"] and u(d, H["ULTRA_PXL_BITS"] , 3) == 832 and d[H["ULTRA_PXL_SLOTS"]] == 3,
+      "CHAIN: page 0x81 part 3 shows it: mode CHAIN, frames %d, non-Ultra 2, long 1, windows 2, bits 832" % u(d, H["ULTRA_PXL_FRAMES"], 2))
+# a POLL before the clock's rate is measured: the window is counted, the answer is not armed (the HSI would shift its start out of the window), a miss is counted
+w(ux + O["ux_r_have"], 1, 0)
+m0 = ucv("uc_missed")
+chain_decode(poll_r(0, 1, H["ULTRA_PAGE_STATUS"], 0, 0x39), 320, 240000)
+check(e.rd(DL + O["dl_ch_arm"], 1) == 0 and ucv("uc_missed") == m0 + 1 and ucv("uc_windows") == 3 and
+      e.rd(DL + O["dl_ch_win"], 4) == 240000 + ((1000 + 460 * 1 + 200) * wpu24 >> 24),
+      "CHAIN: a POLL before the rate is measured: window counted, no answer armed, counted as missed")
+w(ux + O["ux_r_have"], 1, 1)
+
+
 # ---------------------------------------------------------------------------------------------- the status LED
 def led_levels(ms, step=10):
     """led_service for ms, in steps: [(t, level)] at each change of PB15 (GPIOB BSHR: bit 15 on, bit 31 off)"""
@@ -436,11 +575,31 @@ check(ch[:1] == [(10, 0)] and (1010, 1) in ch, "IDENTIFY 5: LED off for 1 s, the
 n_on = sum(1 for _, lv in ch if lv == 1)
 check(n_on >= 3 + 1 + 1 + 2 and ch[-1][1] == 1 and e.rd(A("led_lead"), 2) == 0,
       "IDENTIFY 5: 0.7.1 shown (3 fast, 1, 2, 2 blinks), the LED on again: %d on-edges" % n_on)
+# CHAIN: frames that are no Ultra frame (a pixel stream on a chain board) blink the status LED twice (a fault pattern, at most every 30 s)
+w(A("led_lvl"), 1, 1)
+e.poke(UC, bytes(e.sym("uc")[1]))
+w(UC + O["uc_mode"], 1, 2)
+w(UC + O["uc_nonultra"], 2, 5)
+w(A("wrong_seen"), 2, 0)
+w(A("wrong_s"), 4, 0)
+w(A("up_s"), 4, 100)
+w(A("led_lead"), 2, 0)
+e.call("second_service", [], max_steps=2_000_000)
+check(e.rd(A("led_lead"), 2) == 1000 and e.rd(A("wrong_seen"), 2) == 5, "CHAIN: non-Ultra frames start the LED's fault code (1 s off first)")
+ch = led_levels(9000)
+n_on = sum(1 for _, lv in ch if lv == 1)
+check(ch[:1] == [(10, 0)] and n_on >= 4 and ch[-1][1] == 1, "CHAIN: the 2-blink fault code runs and ends with the LED on: %s" % ch[:8])
+w(UC + O["uc_nonultra"], 2, 6)
+w(A("up_s"), 4, 110)
+e.call("second_service", [], max_steps=2_000_000)
+check(e.rd(A("led_lead"), 2) == 0, "CHAIN: the code is not repeated within 30 s")
 for act, name in ((3, "SAME"), (4, "NACK")):     # UPD_APP_SHOW_SAME / _REJECTED
     e.call("upd_action", [act])
     ch = led_levels(5000)
     check(ch[:2] == [(10, 0), (1010, 1)] and ch[-1][1] == 1 and len(ch) == 4,
           "an update's %s: 1 s off, one flash, on again: %s" % (name, ch))
 
+print("a chain frame decoded in one go by ud_chain_decode (udc_classify: the rising-edge decode of the head and of the snapshot's tail, the CRCs, the slot's action, the answer built; the board spreads the head over the frame): %s cycles = %s us at 144 MHz"
+      % (sorted(decode_cycles)[len(decode_cycles) // 2], sorted(decode_cycles)[len(decode_cycles) // 2] // 144))
 print("ud_pages: %d checks, %d failed" % (checks, fails))
 sys.exit(1 if fails else 0)

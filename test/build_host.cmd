@@ -26,6 +26,9 @@ rem (review round 6, gpt-protocol) the return channel's ISR hand-overs: their ba
 python "%HERE%test_r6_rc_contract.py"
 if %errorlevel% neq 0 exit /b 1
 if not exist "%OUT%" mkdir "%OUT%"
+rem the answer UART's build switch (board.h ANSWER_UART): rc_brr's divider table under each setting
+call "%HERE%build_answer_uart.cmd" "%OUT%"
+if %errorlevel% neq 0 exit /b 1
 rem The target's compact libc loops, renamed against the host libc (all alignments and overlaps).
 cl /nologo /O2 /W4 /Fe:"%OUT%\mem_tests.exe" /Fo:"%OUT%\\" "%HERE%test_mem.c"
 if %errorlevel% neq 0 exit /b 1

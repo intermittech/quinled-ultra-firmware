@@ -82,8 +82,10 @@ for v in $VARIANTS; do
     done
     # the local pixel effects (docs/ultradigital-firmware.md section 11): the record's flash path and the lit / dark rule, and a
     # poll answer while an effect runs (the strip keeps updating), on the compiled firmware, the presets at +-2.2 % HSI, the encoder's and the renderer's cycles in rv32emu
-    for t in test/test_ud_record_flash.py test/test_ud_local_poll.py tools/ud_timing_check.py test/test_ud_fx_cycles.py; do
-      r="$("$PY" "$FW/$t" $([ "$t" = test/test_ud_record_flash.py ] || [ "$t" = test/test_ud_local_poll.py ] && echo "$API_OUT/fw.elf") 2>&1)" ||
+    # the chain line mode (section 12): AUTO deciding CHAIN on a normal Ultra line, the strip, the answer's slot, the pages, on the compiled firmware;
+    # test_ud_chain_budget.py: frames back to back at the hub's 300 us reset with the main loop preempted by the tick (every frame captured, 100 us to spare)
+    for t in test/test_ud_record_flash.py test/test_ud_local_poll.py test/test_ud_publish.py test/test_ud_clock_bounds.py test/test_ud_chain_fw.py test/test_ud_chain_budget.py tools/ud_timing_check.py test/test_ud_fx_cycles.py test/test_ud_scene_steps.py; do
+      r="$("$PY" "$FW/$t" $([ "$t" = test/test_ud_record_flash.py ] || [ "$t" = test/test_ud_local_poll.py ] || [ "$t" = test/test_ud_publish.py ] || [ "$t" = test/test_ud_clock_bounds.py ] || [ "$t" = test/test_ud_chain_fw.py ] || [ "$t" = test/test_ud_chain_budget.py ] && echo "$API_OUT/fw.elf") 2>&1)" ||
         { echo "$r" >&2; echo "error: $name: $t failed" >&2; exit 1; }
       echo "$r" | tail -1
     done
@@ -94,4 +96,51 @@ for v in $VARIANTS; do
   "$PY" "$FW/tools/release/mkfactory.py" --bootloader "$OUT/bootloader-$key.bin" --image "$IMG" \
     --out "${IMG%.bin}-factory.hex"
 done
+
+# The receivers' other answer-UART settings (board.h ANSWER_UART; the DI net keeps a 0 R choice between the pins, so the
+# firmware follows it): 2 = USART2 / PA2 on both receivers (the console's TX off, its text in a RAM ring), 1 = USART1 /
+# PA9 on the Ultra-Digital receiver. Built and tested with every release that builds the receivers, never shipped, so
+# the pivot can't rot: the app image behind the bootloader (it fits the slot), the functions-as-written build with
+# test/test_answer_uart.py (the burst, the dividers, the pins, the interrupt; the LTO build keeps the console ring) and
+# the compiled-code tests of the board (BOARD 3: pages, capture, record flash, local poll; BOARD 2: tools/hal_check.py
+# with this setting's interrupt). Sizes: tools/size_gate.py. ANSWER_UART_MATRIX=0 skips them.
+if [ "${ANSWER_UART_MATRIX:-1}" = 1 ]; then
+  AU_VARIANTS=""
+  if [ "${RX:-0}" = 1 ]; then AU_VARIANTS="$AU_VARIANTS rx-au2|2|2"; fi
+  if [ "${UD:-0}" = 1 ]; then AU_VARIANTS="$AU_VARIANTS ud-au2|3|2 ud-au1|3|1"; fi
+  for v in $AU_VARIANTS; do
+    IFS='|' read -r name board au <<< "$v"
+    flags="-DBOARD=$board -DANSWER_UART=$au"
+    echo "=== $name (answer UART $au on BOARD $board: built and tested, not shipped)"
+    APP_OUT="$OUT/obj/app-$name"
+    OUT="$APP_OUT" PERF=0 EXTRA_CFLAGS="$flags -DUPD_APP=1 -DFW_VERSION=\"$VERSION\"" LDSCRIPT="$FW/vendor/wch/Link_app.ld" \
+      bash "$FW/tools/build_target.sh" | tail -1
+    API_OUT="$OUT/obj/au-api-$name"
+    apiflags="$flags"
+    if [ "$board" = 3 ]; then apiflags="$flags -fno-inline -fno-ipa-cp -fno-ipa-sra"; fi   # (as the ud-api build above)
+    OUT="$API_OUT" LTO=0 PERF=0 EXTRA_CFLAGS="$apiflags" bash "$FW/tools/build_target.sh" > /dev/null
+    r="$("$PY" "$FW/test/test_answer_uart.py" "$API_OUT/fw.elf" "$board" "$au" "$APP_OUT/fw.elf" 2>&1)" ||
+      { echo "$r" >&2; echo "error: $name: test/test_answer_uart.py failed" >&2; exit 1; }
+    echo "$r" | tail -1
+    if [ "$board" = 3 ]; then
+      r="$("$PY" "$FW/test/test_ud_pages.py" "$API_OUT/fw.elf" 2>&1)" ||
+        { echo "$r" >&2; echo "error: $name: test/test_ud_pages.py failed" >&2; exit 1; }
+      echo "$r" | tail -1
+      for c in good length ring; do
+        r="$("$PY" "$FW/test/r14/test_ud_emulated.py" --case "$c" --elf "$API_OUT/fw.elf" 2>&1)" ||
+          { echo "$r" >&2; echo "error: $name: test/r14/test_ud_emulated.py --case $c failed" >&2; exit 1; }
+        echo "$r" | tail -1
+      done
+      for t in test/test_ud_record_flash.py test/test_ud_local_poll.py; do
+        r="$("$PY" "$FW/$t" "$API_OUT/fw.elf" 2>&1)" ||
+          { echo "$r" >&2; echo "error: $name: $t failed" >&2; exit 1; }
+        echo "$r" | tail -1
+      done
+    else
+      r="$(ANSWER_UART=$au "$PY" "$FW/tools/hal_check.py" "$API_OUT/fw.elf" h2 h6 adc flash option_bytes records vectors 2>&1)" ||
+        { echo "$r" >&2; echo "error: $name: tools/hal_check.py failed" >&2; exit 1; }
+      echo "$r" | tail -1
+    fi
+  done
+fi
 echo "release files in $OUT"

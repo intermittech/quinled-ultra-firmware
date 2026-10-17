@@ -153,6 +153,7 @@ def main():
     events = []
     wpos = 0
     ticks = 0
+    isr_cycles = []
     total_words = T_US * S_PER_US // 16
     while wpos < total_words:
         step = 113 if ticks % 2 else 112
@@ -173,9 +174,10 @@ def main():
             if de and de_end is not None and w >= de_end:   # USART3 TC: rc_release + dl_tx_done
                 de = 0
                 de_end = None
-                x = e.start("dl_tx_done")
-                e.run_to(x, set(), max_steps=100000)
-                e.x = main_x
+                if "dl_tx_done" in e.syms:       # (an LTO image has no such symbol: only the tick's cycles are meaningful there)
+                    x = e.start("dl_tx_done")
+                    e.run_to(x, set(), max_steps=100000)
+                    e.x = main_x
         wpos += step
         rx = wpos % 512
         e.mmio[0x40020020] = 512 - rx if rx else 512
@@ -184,6 +186,7 @@ def main():
         e.writes.clear()
         x = e.start("poll_isr")
         e.run_to(x, set(), max_steps=2000000)
+        isr_cycles.append(e.cycles())
         e.x = main_x
         pc, _ = e.run_to(pc, stop, max_steps=5000000)
         main_x = list(e.x)
@@ -241,6 +244,9 @@ def main():
     check(phases and max(phases) - min(phases) < 0.3, f"the local frames are off the 20 ms grid: phases {[round(p, 1) for p in phases]}")
     check(not bn_low, "BLANK_N ended LOW: the strip line is held, the effect frozen")
     check(not any("BLANK_N LOW" in ev for _, ev in events if _ > 40 * 2250), "BLANK_N was pulled LOW during the local effect")
+    srt = sorted(isr_cycles)
+    print(f"the 20 kHz tick on the compiled image (poll_isr, rv32emu cycles): median {srt[len(srt) // 2]}, 99th percentile {srt[len(srt) * 99 // 100]}, worst {srt[-1]} "
+          f"(a tick is 7,200 cycles); mean {sum(isr_cycles) / len(isr_cycles):.0f} = {sum(isr_cycles) / len(isr_cycles) / 72:.1f} % of the CPU")
     print(f"ud local poll: {checks} checks, {fails} failed")
     return 1 if fails else 0
 

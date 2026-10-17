@@ -62,21 +62,23 @@ uint32_t b_render(uint32_t n)                      /* the pixels, in chunks of 3
 }
 
 /* ------------------------------------------------------------------ the packer */
-uint32_t b_pack(uint32_t n, uint32_t bpp)
+uint32_t b_pack(uint32_t n, uint32_t bpp, uint32_t smooth, uint32_t bri)
 {
     static const uint8_t ord[5] = { 1, 0, 2, 3, 4 };
     uint32_t k;
     for (k = 0; k < n; k++) {
         px[k].r = (uint8_t)(k * 7u); px[k].g = (uint8_t)(k * 13u + 40u); px[k].b = (uint8_t)(k * 29u + 3u);
     }
-    C.gamma = fx_gamma28;
+    C.gamma = 1;
+    C.smooth = (uint8_t)smooth;
+    C.phase = 77;
     C.bpp = (uint8_t)bpp;
     for (k = 0; k < 5u; k++) {
         C.ord[k] = ord[k];
     }
     C.white_mode = FX_W_ACCURATE;
     C.white_split = 100;
-    return fx_pack(px, fb, n, 200, &C);
+    return fx_pack(px, fb, n, (uint8_t)bri, &C);
 }
 uint32_t b_limit(uint32_t sum)
 {

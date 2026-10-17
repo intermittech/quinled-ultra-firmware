@@ -57,7 +57,17 @@ enum {                                 /* effect ids: 1-127 official; review-r4/
     FX_PLASMA       = 24,
     FX_NOISE        = 25,
     FX_RUNNING      = 26,
-    FX_LAST         = 26,
+    FX_RIPPLES      = 27,
+    FX_WIPE         = 28,
+    FX_STRIPES      = 29,
+    FX_BULBS        = 30,
+    FX_LAVA_LAMP    = 31,
+    FX_MOSAIC_DRIFT = 32,
+    FX_SILK_WEAVE   = 33,
+    FX_CANOPY_SHADE = 34,
+    FX_OPAL_FACETS  = 35,
+    FX_QUIET_LANDINGS = 36,
+    FX_LAST         = 36,
     FX_COUNT        = FX_LAST + 1
 };
 
@@ -66,7 +76,9 @@ enum {                                 /* palette ids: 0-127 built-in (16 entrie
     PAL_ORANGE_TEAL = 6, PAL_RAINBOW_BANDS = 7, PAL_RETRO_CLOWN = 8, PAL_YELMAG = 9,
     PAL_PARTY = 10, PAL_OCEAN = 11, PAL_FOREST = 12, PAL_LAVA = 13, PAL_HEAT = 14, PAL_CLOUD = 15,
     PAL_SUNSET = 16, PAL_AURORA = 17, PAL_FAIRY = 18, PAL_SUNRISE = 19,
-    PAL_LAST = 19,
+    PAL_CANDLELIGHT = 20, PAL_WARM_WHITE = 21, PAL_DAYLIGHT = 22, PAL_CHRISTMAS = 23, PAL_WINTER = 24,
+    PAL_HALLOWEEN = 25, PAL_AUTUMN = 26, PAL_PASTEL = 27, PAL_EMBERS = 28, PAL_ROSE = 29, PAL_MOONLIGHT = 30,
+    PAL_LAST = 30,
     PAL_COUNT = PAL_LAST + 1,
     PAL_COLORS = 0xFE,                 /* c1 -> c2 -> c3 -> c1 */
     PAL_DEFAULT = 0xFF                 /* the effect's own */
@@ -76,10 +88,10 @@ enum {                                 /* palette ids: 0-127 built-in (16 entrie
 #define FX_F_MIRROR    0x02u
 
 #ifndef FX_MAX_SEG
-#define FX_MAX_SEG     4u              /* segments (PIXEL_FX LIGHT 0-3); a build may set fewer (-DFX_MAX_SEG=2: 352 B less RAM) */
+#define FX_MAX_SEG     4u              /* segments (PIXEL_FX LIGHT 0-3); a build may set fewer */
 #endif
 #ifndef FX_MAX_XFADE
-#define FX_MAX_XFADE   2u              /* effect crossfades running at once (the rest switch hard); 144 B each */
+#define FX_MAX_XFADE   2u              /* effect crossfades running at once (the rest switch hard) */
 #endif
 #define FX_CHUNK       32u             /* the most pixels one fx_engine_render call may be asked for */
 #define FX_FIRE_CELLS  256u            /* Fire keeps at most this many heat cells per segment (longer: each covers several pixels) */
@@ -97,19 +109,17 @@ typedef struct {                       /* = the PIXEL_FX slot's fields (STUDY se
 /* ---------------------------------------------------------------------------------- layer 1: one effect on one run */
 typedef struct {
     uint8_t  id, speed, intensity, palette;
-    uint8_t  custom1, custom2, flags, reserved;
+    uint8_t  custom1, custom2, flags, et_frac;
     rgb_t    c[3];                     /* the CURRENT colours (the engine ramps them) */
+    uint8_t  pal_id;                   /* the palette id the pal[] below was built from */
     uint16_t n, vlen;                  /* pixels in the run, the virtual length (p->vlen, or n) */
     uint32_t vbase;                    /* the virtual position of the run's pixel 0 */
     uint32_t seed;
     uint32_t t;                        /* effect time: ms since the anchor */
     uint32_t t_last;                   /* t of the previous fx_frame */
     uint32_t et;                       /* the speed-integrated time (ms at the nominal rate) the effects use */
-    uint32_t rnd;                      /* per-frame random state (fire) */
-    uint32_t u[5];                     /* per-effect numbers worked out once a frame (fx_frame) */
+    uint32_t u[5];                     /* per-effect numbers worked out once a frame (Fire: [0] elapsed, [1] random state) */
     uint8_t  *state;                   /* fx_state_bytes(id, n) bytes, zeroed by fx_begin; 0 when the effect has none */
-    uint8_t  et_frac;
-    uint8_t  pal_id;                   /* the palette id the pal[] below was built from */
     rgb_t    pal[16];                  /* the active palette */
 } fx_ctx_t;
 
@@ -130,24 +140,28 @@ typedef struct {
     uint16_t start, len;               /* the segment's pixels on the strip */
     uint16_t n_eff;                    /* pixels the effect renders (mirror: half) */
     uint16_t st_off;                   /* offset of its state bytes in the pool */
+    uint8_t  flags, active;            /* fill the gap before the word-aligned clocks */
     uint32_t anchor;                   /* host ms of the effect's t = 0 (kept when a renewal re-sends the same slot) */
     uint32_t tr_t0;                    /* host ms the ramps started */
-    uint32_t tr_inv;                   /* 65536 / trans_ms (0: no ramp running) */
+    uint32_t tr_inv;                   /* 2^24 / trans_ms (0: no ramp running) */
     uint16_t tr_dur;                   /* trans_ms */
     rgb_t    c0[3];                    /* colours at the ramp start */
     uint8_t  bri0, bri;                /* brightness at the ramp start / now */
-    uint8_t  flags, active, started;   /* started: the anchor has been reached (a future anchor holds t at 0 until then) */
+    uint8_t  started;                  /* started: the anchor has been reached (a future anchor holds t at 0 until then) */
     int8_t   xf;                       /* index of the crossfade slot, or -1 */
 } fx_seg_t;
 
 typedef struct {
     fx_ctx_t prev;                     /* the effect fading out */
-    uint32_t t0, inv;                  /* host ms it started, 65536 / duration */
+    uint32_t t0, inv;                  /* host ms it started, 2^24 / duration */
     uint32_t dur;
     uint32_t anchor;                   /* the old effect's anchor */
     uint8_t  started;
     uint8_t  w;                        /* weight of the NEW effect now, 0..255 (255: done) */
-    uint8_t  used;
+    uint8_t  used;                     /* bit 0 live, bit 1 has a queued replacement */
+    uint8_t  w0;                       /* weight at a shortened fade's new origin */
+    fx_params_t next;                  /* latest replacement; used bit 1 says it is queued */
+    uint32_t next_anchor;
 } fx_xfade_t;
 
 typedef struct {
@@ -165,25 +179,41 @@ void fx_engine_init(fx_engine_t *e, uint16_t npx, uint8_t *pool, uint32_t pool_b
  * 32-bit ms runs out, ~every 20 days) changes nothing: the running phase, raw time and picture continue. To restart a
  * time-driven effect (Sunrise / Sunset) send it with any other change (e.g. the seed) or stream (id 0) first.
  * Same effect id: the colours / brightness ramp over trans_ms, speed / intensity / custom change at once (the picture
- * stays continuous). A new effect id (or palette): crossfade over trans_ms (a hard cut when no slot / state is free). */
+ * stays continuous). A new effect id (or palette): crossfade over trans_ms (a hard cut when no slot is free).
+ * Replacing a live crossfade queues the latest target and finishes the running fade within 250 ms, without changing
+ * its current weight. STREAM cancels both. A Fire palette crossfade shares its heat and advances it only once. */
 void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t now_ms, uint32_t anchor_ms);
 void fx_engine_frame(fx_engine_t *e, uint32_t now_ms);   /* once per frame, before its pixels */
+void fx_engine_frame_seg(fx_engine_t *e, uint32_t s, uint32_t now_ms); /* same preparation, one segment per main-loop step */
+uint32_t fx_engine_dequeue(fx_engine_t *e, uint32_t s, uint32_t now_ms); /* promote a finished fade separately from frame prep */
 /* strip pixels [from, to) (to - from <= FX_CHUNK) composited from all segments (black where none), the segments'
  * brightness applied -> out[0 .. to - from) */
 void fx_engine_render(fx_engine_t *e, rgb_t *out, uint32_t from, uint32_t to);
 /* 1 when every segment's brightness is 0 and no ramp is running: the strip is dark (flash writes are allowed) */
 uint32_t fx_engine_dark(const fx_engine_t *e);
+/* 1 when an effect that is running (or fading out) is a heavy one (Pacifica: it never leaves the render loop idle, ~4,500 cycles of set-up per call and ~800 a pixel): the caller renders it in smaller steps, so that a
+ * step ends soon after a frame of a chain line does (measured: a chain line at 300 px needs steps of at most ~8,000 cycles, i.e. 4 px; a digital port ~90,000) */
+uint32_t fx_engine_heavy(const fx_engine_t *e);
 
 /* ---------------------------------------------------------------------------------- layer 3: the packer */
 /* auto-white (the CONFIG 135 / PIXEL_FX numbering): W = min(r,g,b); 1 off, 2 accurate (taken out of RGB), 3 bright (RGB kept); 0 = off too */
 enum { FX_W_NONE = 0, FX_W_OFF = 1, FX_W_ACCURATE = 2, FX_W_BRIGHT = 3 };
+/* the output step (CONFIG 141, "pixel smoothing"): FX_SM_8BIT is the 8-bit path (brightness, gamma 2.8 and auto-white at 8 bits); the other two work at 16 bits
+ * (gamma 2.8 from a 256-entry table, brightness, auto-white) and take the result to the wire's 8 bits: FX_SM_ROUND rounds, FX_SM_DITHER adds an ordered,
+ * stateless threshold (frame x pixel) first, so the average over 256 frames is the 16-bit value exactly */
+enum { FX_SM_8BIT = 0, FX_SM_ROUND = 1, FX_SM_DITHER = 2 };
 typedef struct {
-    const uint8_t *gamma;              /* 256-entry table (fx_gamma28), 0 = none */
+    uint8_t gamma;                     /* 1: gamma 2.8 after the brightness, 0 = none */
     uint8_t bpp;                       /* wire bytes per pixel: 3 RGB, 4 RGBW (WS2814, SK6812), 5 WS2805 */
     uint8_t ord[5];                    /* wire byte k = source channel ord[k]; sources R 0, G 1, B 2, W (WW) 3, CW 4 */
     uint8_t white_mode;                /* FX_W_*: only for bpp 4 / 5 */
     uint8_t white_split;               /* bpp 5: the cool white's (CW, channel 4) share: 0 = all warm (WW, channel 3) ... 255 = all cool */
+    uint8_t smooth;                    /* FX_SM_* */
+    uint8_t phase;                     /* FX_SM_DITHER: the frame's phase, (the frame index on the host grid) x 97 mod 256 (fx_dither_phase) */
+    uint16_t px0;                      /* FX_SM_DITHER: the strip pixel index of in[0] (the caller sets it before each call) */
+    uint8_t dmin;                      /* FX_SM_DITHER: a channel whose wire level (the 16-bit value / 256) is below this is rounded, not dithered (0: all dither) */
 } fx_pack_cfg_t;
+#define fx_dither_phase(frame) ((uint8_t)((frame) * 97u))   /* 97 / 256 ~ 0.379: the golden ratio's fraction, so any run of frames is spread evenly */
 /* rgb -> the wire bytes of n pixels: bri (0-255, the limiter's), gamma, auto-white, order. Returns the sum of the
  * wire bytes written (the current estimate). The order lists for the common chips: GRB {1,0,2}, RGB {0,1,2},
  * SK6812 GRBW {1,0,2,3}, WS2814 RGBW {0,1,2,3} / WRGB {3,0,1,2}, WS2805 RGBWC {0,1,2,3,4} */
@@ -192,6 +222,6 @@ uint32_t fx_pack(const rgb_t *in, uint8_t *wire, uint32_t n, uint8_t bri, const 
  * `bri`) to about `max_sum`. The sum goes with bri^2.8 through the gamma table, so bri is scaled by the 2.8th root of
  * max_sum / sum (a 16-step table; one division per frame). A frame at or under max_sum keeps bri */
 uint8_t  fx_limit_bri(uint8_t bri, uint32_t sum, uint32_t max_sum);
-extern const uint8_t fx_gamma28[256];
+uint32_t fx_gamma(uint32_t v);               /* gamma 2.8 on 0..255: round(255 * (v / 255) ^ 2.8), the 8-bit table of 0.6.12 (the 16-bit table, rounded) */
 
 #endif

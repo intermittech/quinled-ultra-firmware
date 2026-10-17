@@ -22,8 +22,8 @@
 #if BOARD == BOARD_DP_UD
 /* the Ultra-Digital receiver (board.h): the four that steer the strip and the line first (direct, the strip line held
  * LOW, receive, MOSI LOW: the bootloader of hardware id 3 set BLANK_N LOW at reset already; core/dline.c releases it at
- * the first quiet gap, with the mux delayed: polls never show on the strip); PB10 (USART3_TX): rc_hw_init; PA9 stays as
- * reset left it */
+ * the first quiet gap, with the mux delayed: polls never show on the strip); the answer UART's TX pin (PB10 USART3_TX by
+ * default, board.h ANSWER_UART): rc_hw_init; the other candidate (PA9) stays as reset left it */
 static const uint16_t pin_tab[] = {
     PIN(0, 10, PIN_CLR, CFG_OUT_PP),                     /* PA10 MUX_SEL: direct */
     PIN(0, 1, PIN_CLR, CFG_OUT_PP),                      /* PA1 BLANK_N: LOW (blank) until dline's BOOT ends */
@@ -34,10 +34,13 @@ static const uint16_t pin_tab[] = {
     PIN(0, 0, 0, CFG_ANALOG),                            /* PA0 V_B, PA4 the bus, PB0 the bus current */
     PIN(0, 4, 0, CFG_ANALOG),
     PIN(PIN_B, 0, 0, CFG_ANALOG),
-    PIN(0, 2, 0, CFG_AF_PP),                             /* PA2 the console's TX */
+    PIN(0, 2, 0, CFG_AF_PP),                             /* PA2 the console's TX (ANSWER_UART 2: the answer's, DI) */
     PIN(0, 3, PIN_HI, CFG_IN_PULL),                      /* PA3 TP6, the test jig's pad: pull-up */
     PIN(PIN_B, 15, PIN_LO, CFG_OUT_PP),                  /* PB15 the status LED, off */
     PIN(PIN_B, 11, 0, CFG_IN_FLOAT),                     /* PB11 USART3_RX on RO: a spare input (RO drives it) */
+#if ANSWER_UART != 3
+    PIN(PIN_B, 10, PIN_CLR, CFG_IN_PULL),                /* PB10 not the answer's TX (its 0 R open): pull-down */
+#endif
     PIN(0, 8, PIN_CLR, CFG_IN_PULL),                     /* PA8 / PB1 spare: pull-down */
     PIN(PIN_B, 1, PIN_CLR, CFG_IN_PULL),
 };
@@ -47,7 +50,11 @@ static const uint16_t pin_tab[] = {
     PIN(0, 6, 0, CFG_IN_FLOAT),                          /* PA6: DIN */
     PIN(0, 5, 0, CFG_AF_PP),                             /* PA5: SPI1_SCK, internal only (pad not connected) */
     PIN(0, FWD_PIN, PIN_LO, CFG_OUT_PP),                 /* PA1: FWD_EN, the gate closed */
+#if ANSWER_UART == 2
+    PIN(0, 2, PIN_HI, CFG_IN_PULL),                      /* PA2: the answer's TX (hw.c rc_*): high-Z outside a burst */
+#else
     PIN(0, 2, 0, CFG_AF_PP),                             /* PA2 / PA3: the console */
+#endif
     PIN(0, 3, PIN_HI, CFG_IN_PULL),                      /* (0.6.7: pull-up, TP6 = the test jig's pad too) */
     PIN(0, 4, 0, CFG_ANALOG),                            /* PA4: the supply / bus voltage (R36 / R37 / C29) */
     PIN(0, 7, 0, CFG_ANALOG),                            /* PA7: the current sense */
@@ -110,18 +117,22 @@ extern void rc_uart_entry(void);                         /* isr.S */
 
 static void rc_hw_init(void)
 {
+#if ANSWER_UART == 3
     RCC->APB1PCENR |= 1u << 18;                          /* USART3EN */
-    USART3->BRR = 144u;                                  /* 1 Mbaud at PCLK1 144 MHz (rc_brr per burst) */
-    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* (as hw.c rc_release: no TXE / TC interrupt) */
-#if BOARD == BOARD_DP_UD
-    pin_cfg(GPIOB, 10, CFG_AF_PP);                       /* (BOARD 3) DI: USART3 idles HIGH, DE (PB14) gates it */
-#else
-    pin_cfg(GPIOB, 10, CFG_IN_PULL);
+#elif ANSWER_UART == 1
+    RCC->APB2PCENR |= RCC_USART1EN;                      /* (ANSWER_UART 2: USART2's clock is on in hw_init) */
 #endif
-    NVIC_SetPriority(USART3_IRQn, 0x00);
-    PFIC->VTFIDR[1] = USART3_IRQn;
+    RC_USART->BRR = RC_BRR_BASE;                         /* 1 Mbaud (rc_brr per burst) */
+    RC_USART->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;   /* (as hw.c rc_release: no TXE / TC interrupt) */
+#if BOARD == BOARD_DP_UD
+    pin_cfg(RC_TX_GPIO, RC_TX_PIN, CFG_AF_PP);           /* (BOARD 3) DI: the USART idles HIGH, DE (PB14) gates it */
+#else
+    pin_cfg(RC_TX_GPIO, RC_TX_PIN, CFG_IN_PULL);
+#endif
+    NVIC_SetPriority(RC_IRQ, 0x00);
+    PFIC->VTFIDR[1] = RC_IRQ;
     PFIC->VTFADDR[1] = (uint32_t)rc_uart_entry | 1u;
-    NVIC_EnableIRQ(USART3_IRQn);
+    NVIC_EnableIRQ(RC_IRQ);
 }
 #endif
 
@@ -226,6 +237,7 @@ void hw_init(void)
     SysTick->CTLR = (1u << 5) /* INIT */ | (1u << 3) /* STRE */ | (1u << 2) /* HCLK */ | (1u << 1) /* STIE */ | 1u;
     NVIC_EnableIRQ(SysTicK_IRQn);
 
+#if CONSOLE_TX                                           /* (ANSWER_UART 2: USART2 is the answer UART, rc_hw_init) */
     /* debug UART 115200 8N1, TX by DMA (USART2_TX = DMA1 ch7); the full console's RX too (USART2_RX = DMA1 ch6) */
     USART2->BRR = (uint16_t)(144000000u / 115200u);
 #if CONSOLE_FULL
@@ -240,6 +252,7 @@ void hw_init(void)
     USART2->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;   /* (no RE: PA3 is TP6, the test jig's pad, a GPIO input) */
 #endif
     DMA1_Channel7->PADDR = (uint32_t)&USART2->DATAR;
+#endif
 #if BOARD_RETURN
     rc_hw_init();
 #endif
@@ -265,7 +278,8 @@ void hw_init(void)
  *    holds the slow clock with the trip running until the watchdog resets it (144 MHz with the flash busy: unsafe).
  *  - USART2: a byte on the line is finished first (TC); main.c starts a regular write only while nothing is queued
  *    (uart_busy). RX keeps running: bytes received meanwhile (at half the baud: garbage) are dropped, and with them the
- *    line being typed (uart_getc returns -2 once; the rest of that line, up to CR / LF, is dropped too).
+ *    line being typed (uart_getc returns -2 once; the rest of that line, up to CR / LF, is dropped too). ANSWER_UART 2:
+ *    USART2 is the answer UART; the same wait covers it, a burst under way is not started under (FLASH_ERR_UART).
  *  - The gate is closed (the tick does no frame work meanwhile): downstream boards miss a frame or two and hold their
  *    last values. A phase slew pauses (no period stays stretched), the injected ADC sequences too. */
 #define FLASH_KEY1      0x45670123u
@@ -311,14 +325,14 @@ static void flash_clock(uint32_t cfgr, uint32_t slow)
 }
 
 /* the slew and gate interrupts (hw_init enables them with SysTick; nothing else is enabled, and no VTF slot is used;
- * the receiver: also its return channel's USART3, on VTF slot 1) */
+ * the receiver: also its return channel's USART (board.h ANSWER_UART), on VTF slot 1) */
 #if BOARD_DLINE
-/* (BOARD 3) the delay line's SPI fault (hw_dline.c) and the reply's USART3: off meanwhile; the SRAM tick (main_ud.c
- * flash_poll_isr -> dl_ram_tick) keeps the scan, the zeroing and the RX - TX check going, the DMA the ring */
-#define FLASH_IRQ1 ((1u << (SPI1_IRQn - 32)) | (1u << (USART3_IRQn - 32)))
+/* (BOARD 3) the delay line's SPI fault (hw_dline.c) and the reply's USART (the answer UART): off meanwhile; the SRAM tick
+ * (main_ud.c flash_poll_isr -> dl_ram_tick) keeps the scan, the zeroing and the RX - TX check going, the DMA the ring */
+#define FLASH_IRQ1 ((1u << (SPI1_IRQn - 32)) | (1u << (RC_IRQ - 32)))
 #elif BOARD_RETURN
 #define FLASH_IRQ1 ((1u << (TIM2_IRQn - 32)) | (1u << (TIM3_IRQn - 32)) | (1u << (TIM4_IRQn - 32)) | \
-                    (1u << (USART3_IRQn - 32)))
+                    (1u << (RC_IRQ - 32)))
 #else
 #define FLASH_IRQ1 ((1u << (TIM2_IRQn - 32)) | (1u << (TIM3_IRQn - 32)) | (1u << (TIM4_IRQn - 32)))
 #endif

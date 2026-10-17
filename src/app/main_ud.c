@@ -21,6 +21,7 @@
 #include "../core/cpuload.h"
 #include "../core/dline.h"
 #include "../core/ud/udfx.h"
+#include "../core/ud/udchain.h"
 #include "../core/div64.h"
 #include "../core/fwver.h"
 #include "../core/lto.h"
@@ -37,7 +38,7 @@
 #error "main_ud.c is the Ultra-Digital receiver's app: BOARD=3"
 #endif
 #ifndef FW_VERSION
-#define FW_VERSION       "0.6.11"   /* release builds: the release version (one for every board of the tree) */
+#define FW_VERSION       "0.6.12"   /* release builds: the release version (one for every board of the tree) */
 #endif
 #ifndef UPD_APP
 #define UPD_APP 0                  /* 1: linked behind the bootloader (vendor/wch/Link_app.ld, build_release.sh) */
@@ -84,6 +85,12 @@ static ud_stats_t uds;
  * (dl_isr_fault), the main loop (dl_main: decode, answer, dline_arm). */
 static dline_t dl;
 static udfx_t ux;                          /* the local pixel effects (core/ud/udfx.h, docs/ultradigital-firmware.md section 11) */
+static udc_t uc;                           /* the line mode: STREAM / CHAIN / AUTO deciding (core/ud/udchain.h, section 12) */
+static volatile uint8_t dl_ch_ready;       /* DLINE_A_CH_READY not taken by the main loop yet */
+static udc_pre_t ucp;                      /* the slot of the frame in progress, decoded as its words arrive (udc_stream) */
+static volatile uint32_t dl_ch_tick;       /* the tick it came at */
+static volatile uint8_t dl_ev_marker, dl_ev_missed;   /* the tick counts (wrapping), the main loop keeps what it has seen */
+static uint8_t ev_marker_seen, ev_missed_seen;
 typedef char ud_guard_fits[DL_RING_GUARD == WS_GUARD ? 1 : -1];
 static volatile uint8_t dl_ready;          /* FRAME_READY not taken by the main loop yet */
 static volatile uint32_t dl_ready_tick;    /* the tick it came at (the clock rate's local stamp, ~1 tick late) */
@@ -191,6 +198,20 @@ static inline void dl_tick(void)
         BARRIER();
         dl_ready = 1;
     }
+    if (a & DLINE_A_EDGES_ZERO) {
+        dl_hw_edges_zero();                /* CHAIN: the gap before the next frame: its bits are TIM4's count (dline owns TIM4) */
+    }
+    if (a & DLINE_A_CH_READY) {
+        dl_ch_tick = tick_now;
+        BARRIER();
+        dl_ch_ready = 1;
+    }
+    if (a & DLINE_A_CH_MARKER) {
+        dl_ev_marker++;
+    }
+    if (a & DLINE_A_CH_MISSED) {
+        dl_ev_missed++;
+    }
     udfx_tick(&ux, &dl, dl_ring);          /* local pixel effects: the mode switches and the encoder's fill, after the scan */
 }
 
@@ -223,8 +244,17 @@ RAMCODE void dl_ram_tick(void)
 /* the main loop's half: a captured marker frame decoded (ud_decode -> ud_frame: a POLL's answer built into ud_ans with
  * its divider), then dline_arm: 1 = the window may send it */
 static uint32_t ud_decode(const uint16_t *cap, uint32_t words, uint32_t end_tick);
+static void ud_chain_decode(void);
 static inline void dl_main(void)
 {
+    if (dl.ch_st == DLINE_CH_FRAME && dl.ch_cap) {   /* a frame is coming in: its slot is decoded as the words arrive (the header needs the end) */
+        udc_stream(&dl, &ucp);
+    }
+    if (dl_ch_ready) {
+        dl_ch_ready = 0;                   /* (before the decode: it frees the capture before it applies, and the next frame's ready may come while it does) */
+        BARRIER();
+        ud_chain_decode();
+    }
     if (dl_ready) {
         uint32_t ok;
         BARRIER();
@@ -238,7 +268,7 @@ static inline void dl_main(void)
 static inline uint32_t ud_busy(void)
 {
     BARRIER();                             /* (dl.state: the tick's; read fresh) */
-    return !dline_idle(&dl) || dl_ready;
+    return !dline_idle(&dl) || dl_ready || !dline_ch_idle(&dl) || dl_ch_ready;
 }
 static void ud_rc_answer(const uint8_t *poll, uint8_t a[RC_ANSWER_BYTES]);
 static void upd_action(uint32_t a);
@@ -267,6 +297,9 @@ static uint32_t plan_ms;                   /* IDENTIFY 7's notice (vdip.planned)
 static uint16_t rc_uid16;                  /* CRC-16 over the unique id: in every answer */
 static uint16_t ls_res;                    /* the last LIFE_SYNC's: energy_sync's (applied | result << 8) */
 static uint8_t ud_lit;                     /* pixel frames flowed in the last second: the energy's "lit" time */
+static uint16_t wrong_seen;                /* CHAIN: the non-Ultra frames counted when the LED last blinked */
+static uint32_t wrong_s;
+static void led_fault(uint8_t code);
 static uint32_t fps_ring[10];              /* dline's frames at each of the last 10 s */
 static uint8_t fps_i;
 /* the bus current (PB0): the last ms, its ~64 ms average (x 64 in i_acc), and the highest average since the last
@@ -539,6 +572,13 @@ static void second_service(void)
     bcrumb.up_s = up_s;
     ud_lit = (uint8_t)(f != fps_ring[(fps_i + 9u) % 10u] || (ux.local && !ux.dark));
     ux.load = (uint8_t)(pm / 5u > 200u ? 200u : pm / 5u);   /* page 0x81: the CPU load, 0.5 % steps */
+    if (uc.mode == UDC_CHAIN && uc.nonultra != wrong_seen) {   /* CHAIN: frames that are no Ultra frame (a pixel stream): 2 blinks, at most every 30 s */
+        wrong_seen = uc.nonultra;
+        if (up_s - wrong_s >= 30u || wrong_s == 0u) {
+            wrong_s = up_s;
+            led_fault(2);
+        }
+    }
     uds.fps10 = sat16((int32_t)(f - fps_ring[fps_i]));   /* (frames in the last 10 s) */
     fps_ring[fps_i] = f;
     fps_i = (uint8_t)((fps_i + 1u) % 10u);
@@ -560,6 +600,14 @@ static void led_code(ack_kind_t kind)
 {
     if (!led_ack.active && led_lead == 0u) {
         ack_start(&led_ack, kind, 0);
+        led_lead = LED_LEAD_MS;
+    }
+}
+
+static void led_fault(uint8_t code)
+{
+    if (!led_ack.active && led_lead == 0u) {
+        ack_start(&led_ack, ACK_P_FAULT, code);
         led_lead = LED_LEAD_MS;
     }
 }
@@ -689,8 +737,9 @@ static void upd_service(void)
 #define UD_FEATURES   (ULTRA_FEAT_MCU_TEMP | (UPD_APP ? ULTRA_FEAT_FW_UPDATE : 0u) | ULTRA_FEAT_VERSION_BLINK | \
                        ULTRA_FEAT_POWER_EVENTS | ULTRA_FEAT_SUPPLY_DIPS | ULTRA_FEAT_ENERGY | ULTRA_FEAT_LIFETIME | \
                        ULTRA_FEAT_DIAG | ULTRA_FEAT_STANDBY | ULTRA_FEAT_LIFE_SYNC)
-#define UD_HW_CAPS    (ULTRA_HWCAP_RETURN | ULTRA_HWCAP_VBUS | ULTRA_HWCAP_CURRENT | ULTRA_HWCAP_PIXEL | ULTRA_HWCAP_PIXEL_FX)
-typedef char ud_caps_cd[UD_HW_CAPS == 0x00CDu ? 1 : -1];
+#define UD_HW_CAPS    (ULTRA_HWCAP_RETURN | ULTRA_HWCAP_VBUS | ULTRA_HWCAP_CURRENT | ULTRA_HWCAP_PIXEL | ULTRA_HWCAP_PIXEL_FX | \
+                       ULTRA_HWCAP_CHAIN)
+typedef char ud_caps_cd[UD_HW_CAPS == 0x01CDu ? 1 : -1];
 #define UD_PAGE_PIXEL ULTRA_PAGE_HW        /* 0x80 */
 /* PIXEL DATA (24 bytes; docs/ultradigital-firmware.md section 8.5) */
 #define UD_PX_FPS10    0u                  /* u16: frames per second x 10 (the last 10 s) */
@@ -863,7 +912,7 @@ uint8_t ud_rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
         static const uint8_t fl[11] = { 2, 3, 3, 3, 3, 2, 2, 1, 1, 2, 2 };
         j = (dl.wpos - dl.edge_w) / DLINE_W_PER_MS;       /* ms since the line's last edge */
         v[0] = uds.fps10;
-        v[1] = dl.st.bits_last;
+        v[1] = uc.mode == UDC_CHAIN ? uc.bits : dl.st.bits_last;   /* (CHAIN: TIM4 is zeroed in every gap; the stream scanner's differences are off) */
         v[2] = dl.st.bits_min;                           /* (0xFFFFFFFF: none, sent as 0xFFFFFF) */
         v[3] = dl.st.bits_max;
         v[4] = dl.st.frames;
@@ -877,8 +926,10 @@ uint8_t ud_rc_page(uint8_t page, const uint8_t *arg, uint8_t *d)
         dline_minmax_restart(&dl);                       /* (since the last answer) */
         break;
     }
-    case ULTRA_PAGE_HW_FX:                               /* the local pixel effects (core/ud/udfx.c udfx_page) */
-        if (udfx_page(&ux, arg[0], d) != 0) {
+    case ULTRA_PAGE_HW_FX:                               /* the local pixel effects (core/ud/udfx.c udfx_page), part 3: the line */
+        if (arg[0] == ULTRA_PXG_PART_LINE) {
+            udc_page(&uc, dl.st.answered, (uint32_t)(ux.local && !ux.dark), ms_now, d);
+        } else if (udfx_page(&ux, arg[0], d) != 0) {
             return ULTRA_PAGE_UNSUPPORTED;
         }
         break;
@@ -927,6 +978,25 @@ static void ud_clock(uint32_t host_us, uint32_t end_tick)
     clk_tick = end_tick;
 }
 
+/* a CRC-good slot that is no POLL: IDENTIFY 5 / 7, a local pixel effect, CONFIG 129-140 (stream and chain frames alike) */
+static void ud_slot(const uint8_t *f, uint32_t host)
+{
+    if (f[0] == ULTRA_IDENTIFY && (f[1] >> 4) == ULTRA_LIGHT_BOARD) {
+        if (f[ULTRA_PAYLOAD] == ULTRA_IDENT_POWER_OFF) {
+            ud_power_off_notice();         /* (repeated slots: the same notice again, the cut's window from the last) */
+        } else if (f[ULTRA_PAYLOAD] == ULTRA_IDENT_VERSION) {
+            led_version();                 /* the status LED (its copies: one pattern) */
+        }
+    } else if (f[0] == ULTRA_PIXEL_FX) {
+        udfx_pixel_fx(&ux, f, host);       /* a local pixel effect (applied once per SEQ) */
+    } else if (f[0] == ULTRA_CONFIG && (f[1] >> 4) == ULTRA_LIGHT_BOARD) {
+        uint32_t j;
+        for (j = 0; j < 9u; j++) {         /* CONFIG 129-140 are this board's; the others are for the light boards */
+            (void)udfx_config(&ux, f[ULTRA_PAYLOAD + 3u * j], ultra_get16(f + ULTRA_PAYLOAD + 3u * j + 1u));
+        }
+    }
+}
+
 /* a decoded marker frame, f = its bytes (nbits: 320 = one slot + the header, the only Ultra length a single-receiver
  * port uses; 384 = an UPD frame), end_tick = the tick of its last edge. Like frame_rx's Ultra path without the lock
  * (the marker says "for you", the CRCs the rest): the header (MAGIC, VERSION, CRC-8) or nothing; the clock; UPD frames to
@@ -965,20 +1035,7 @@ static uint32_t ud_frame(const uint8_t *f, uint32_t nbits, uint32_t end_tick)
         ud_brr = rc_brr(rate_q16, f[RC_P_RATE]);
         return 1;
     }
-    if (f[0] == ULTRA_IDENTIFY && (f[1] >> 4) == ULTRA_LIGHT_BOARD) {
-        if (f[ULTRA_PAYLOAD] == ULTRA_IDENT_POWER_OFF) {
-            ud_power_off_notice();         /* (repeated slots: the same notice again, the cut's window from the last) */
-        } else if (f[ULTRA_PAYLOAD] == ULTRA_IDENT_VERSION) {
-            led_version();                 /* the status LED (its copies: one pattern) */
-        }
-    } else if (f[0] == ULTRA_PIXEL_FX) {
-        udfx_pixel_fx(&ux, f, host);       /* a local pixel effect (applied once per SEQ) */
-    } else if (f[0] == ULTRA_CONFIG && (f[1] >> 4) == ULTRA_LIGHT_BOARD) {
-        uint32_t j;
-        for (j = 0; j < 9u; j++) {         /* CONFIG 129-139 are this board's; the others are for the light boards */
-            (void)udfx_config(&ux, f[ULTRA_PAYLOAD + 3u * j], ultra_get16(f + ULTRA_PAYLOAD + 3u * j + 1u));
-        }
-    }
+    ud_slot(f, host);
     return 0;
 }
 
@@ -999,6 +1056,90 @@ static uint32_t ud_decode(const uint16_t *cap, uint32_t words, uint32_t end_tick
     return 0;
 }
 
+
+/* ------------------------------------------------------------------------------- CHAIN frames (the main loop)
+ * A plain Ultra frame on a normal Ultra line (dline's chain scanner captured it raw: head = the slot, tail = the header). Like frame_rx's
+ * Ultra path: the header (MAGIC, VERSION, CRC-8) and the frame's length decide that it is one, the clock follows its TIME, a CRC-good slot
+ * is this board's own (the first 256 bits it saw): an RW frame's POLL schedules the answer at its Ultra window slot (t0 + 1000 us + index
+ * x pitch: no release, no marker), the other slot types act as in ud_frame. UPD frames (384 bits) only feed the update's frame-end notice. */
+static void ud_line_apply(uint32_t act)
+{
+    if (act == UDC_A_CHAIN) {
+        dline_ch_start(&dl, 1);            /* BLANK_N still held (BOOT, AUTO deciding): the ring zeroed, the mux switched, the encoder next; else at a latch */
+        udfx_chain(&ux, 1);
+    } else if (act == UDC_A_STREAM) {
+        dline_ch_stop(&dl);
+        dline_ch_hold(&dl, 0);             /* (the stream scanner's BOOT recovery goes on) */
+        udfx_chain(&ux, 0);
+    } else if (act == UDC_A_QUIET) {
+        dline_ch_hold(&dl, 0);             /* silence for 2 s: no evidence. The strip is let go (the power-on effect may start), the chain
+                                              scanner and the mode stay: two Ultra frames still decide CHAIN, a marker or non-Ultra frames STREAM */
+    }
+}
+
+static void ud_chain_decode(void)
+{
+    udc_rx_t rx;
+    uint32_t answer = 0, tx_w = 0, win_w = 0, act;
+    const uint32_t end_w = dl.ch_end, ready_tick = dl_ch_tick;   /* (the frame's: the capture is freed inside, a later frame overwrites them) */
+    (void)udc_classify(&dl, &rx, &ucp);    /* (frees the capture once the slot and the header are out: the next frame may be captured) */
+    act = udc_frame(&uc, &rx, ms_now);
+    if (rx.cls == UDC_C_NONULTRA) {
+        uds.tail_err++;
+    } else {
+        uds.headers++;
+        upd_app_frame_end(&upd, 1u, rx.flags, ms_now);
+        if (!(rx.flags & ULTRA_HDR_UPD)) {
+            ud_clock(rx.host, ready_tick);
+            udfx_anchor(&ux, rx.host, end_w);
+            if (rx.cls == UDC_C_SLOT && !(rx.flags & ULTRA_HDR_EXT)) {
+                uds.decoded++;
+                if (!(rx.flags & ULTRA_HDR_RW)) {
+                    ud_slot(rx.slot, rx.host);
+                } else if (rc_poll_parse(rx.slot) == 0) {
+                    uc.windows++;
+                    uds.polls++;
+                    udc_window(rx.slot, end_w, ux.wpu24, &tx_w, &win_w);
+                    if (rx.slot[RC_P_INDEX] != ULTRA_POLL_RELAY_ONLY) {
+                        if (ux.r_have) {   /* (an unmeasured HSI would put the start outside the window: missed, the hub asks again) */
+                            ud_rc_answer(rx.slot, ud_ans);
+                            ud_brr = rc_brr(rate_q16, rx.slot[RC_P_RATE]);
+                            answer = 1;
+                        } else {
+                            uc.answers_missed++;
+                        }
+                    }
+                }
+            } else if (rx.cls == UDC_C_HDR && !(rx.flags & ULTRA_HDR_EXT)) {
+                uds.dec_err++;             /* (a right header and length, a slot that is none: a DARK slot of the preamble is no error) */
+            }
+        }
+    }
+    if (win_w == 0u && (rx.flags & ULTRA_HDR_RW)) {
+        win_w = end_w + DLINE_CH_WIN_W;    /* the window is some other board's: as long as the longest one */
+    }
+    BARRIER();                             /* the answer complete before the window may send it */
+    dline_ch_done(&dl, (int)answer, tx_w, win_w);
+    ud_line_apply(act);
+}
+
+/* once a ms: the line mode's clock (AUTO's limits, a new CONFIG 140), the tick's events */
+static void ud_line_service(void)
+{
+    const uint32_t active = dl.st.frames + dl.st.marks + dl.st.long_high;   /* (only a change counts) */
+    uint8_t n;
+    n = dl_ev_marker;
+    if (n != ev_marker_seen) {
+        ev_marker_seen++;
+        ud_line_apply(udc_marker(&uc));
+    }
+    n = dl_ev_missed;
+    if (n != ev_missed_seen) {
+        ev_missed_seen++;
+        uc.answers_missed++;
+    }
+    ud_line_apply(udc_service(&uc, udfx_line_cfg(&ux), ms_now, active));
+}
 
 /* ------------------------------------------------------------------------------- the console (USART2 TX, PA2)
  * Output only (as the release console): the banner, a line of live values every second, a status line every minute
@@ -1121,10 +1262,19 @@ int main(void)
     if (ufx_found && udfx_rec_valid(ufx_rec)) {
         udfx_load(&ux, ufx_rec);
     }
+    udc_init(&uc, udfx_line_cfg(&ux), ms_now);   /* CONFIG 140 from the record: AUTO (0) unless forced */
     if (!upd_app_wrong_hw(&upd.info, BOARD_HW_ID)) {
         dl_hw_start();                     /* the delay line runs (the mux direct, BLANK_N LOW): dline's BOOT switches
                                               both at the first quiet gap */
         dline_init(&dl, dl_hw_rx_pos());
+        if (uc.mode == UDC_CHAIN) {        /* forced CHAIN: the ring zeroed and the mux switched at the first tick, no waiting for a frame */
+            dline_ch_start(&dl, 1);
+            udfx_chain(&ux, 1);
+        } else if (uc.mode == UDC_UNDECIDED) {   /* AUTO: the strip held (BOOT's release waits) until two Ultra frames or the markers say */
+            dline_ch_hold(&dl, 1);
+            dline_ch_start(&dl, 0);
+            udfx_chain(&ux, 2);
+        }
         BARRIER();
         dl_on = 1;
     }                                      /* else (another board's bootloader: an SWD mis-flash) the pins stay as
@@ -1173,6 +1323,7 @@ int main(void)
             vsense_service();
             upd_service();
             udfx_service(&ux, &dl, ms_now, i_avg > 0 ? (uint32_t)i_avg : 0u, ux_vk());
+            ud_line_service();
             if (vdip.planned && ms_now - plan_ms >= PLAN_CUT_MS) {
                 vdip.planned = 0;          /* still powered: the notice forgotten */
             }

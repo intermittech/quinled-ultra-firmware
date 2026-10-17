@@ -97,6 +97,40 @@
 #define BOARD_RETURN     0
 #endif
 
+/* the answer UART (the receivers' build switch, -DANSWER_UART=n): which USART and TX pin carry the return channel. The
+ * datasheet lists only two USARTs for the QFN20 F8U6, so the hardware keeps a 0 R choice for the DI net and the
+ * firmware follows it (docs/ultradigital-firmware.md, "Answer UART"):
+ *   3 (default)  USART3 TX on PB10, PCLK1 144 MHz: BOARD 2 and 3
+ *   2            USART2 TX on PA2, PCLK1 144 MHz: BOARD 2 and 3. USART2 is the console's: its TX is off in this build
+ *                (CONSOLE_TX 0): the console's text goes to a RAM ring (hal/hw.c con_ring) the test jig reads over SWD
+ *   1            USART1 TX on PA9, PCLK2 72 MHz: BOARD 3 only (PA9 is BOARD 2's PWM R)
+ * RC_IRQN: the USART's interrupt number; RC_BRR_BASE: its BRR for 1 Mbaud (PCLK / 1 Mbaud; rc_brr scales it per rate) */
+#ifndef ANSWER_UART
+#define ANSWER_UART      3
+#endif
+#if !BOARD_RETURN
+#if ANSWER_UART != 3
+#error "ANSWER_UART: only the receivers (BOARD 2, 3) answer"
+#endif
+#define RC_BRR_BASE      144u       /* (rc.c's rc_brr is built for every board; no board 1 code calls it) */
+#elif ANSWER_UART == 3
+#define RC_IRQN          55         /* USART3_IRQn */
+#define RC_BRR_BASE      144u
+#elif ANSWER_UART == 2
+#define RC_IRQN          54         /* USART2_IRQn */
+#define RC_BRR_BASE      144u
+#elif ANSWER_UART == 1 && BOARD == BOARD_DP_UD
+#define RC_IRQN          53         /* USART1_IRQn */
+#define RC_BRR_BASE      72u
+#else
+#error "ANSWER_UART: 3 (USART3 / PB10), 2 (USART2 / PA2), or on BOARD 3 only 1 (USART1 / PA9)"
+#endif
+#if ANSWER_UART == 2
+#define CONSOLE_TX       0          /* PA2 carries the answers: no console TX (hal/hw.c) */
+#else
+#define CONSOLE_TX       1
+#endif
+
 /* board current sense (core/isense.h): soldered fuse + 2 mohm shunt + TPA158A3 (gain 100) -> 1 k / 47 nF -> PA7 */
 #if BOARD == BOARD_DP_RX
 /* (0.6.9, the power-domain contract) the Diff-Power ultra receiver's sense sits on the ~55 V bus, before its buck

@@ -2,59 +2,131 @@
  * Copyright (C) 2026 QuinLED */
 /* The packer (fx.h): rgb -> the wire bytes of the chip. Brightness, gamma 2.8, auto-white, colour order, the channel sum. */
 #include "fx_int.h"
+#include "ultra_protocol.h"                   /* ULTRA_PXS_AUTO_MIN_LEVEL: the packer's rounding of dim channels in the AUTO dither is compiled in only when it is not 0 */
 
-uint32_t fx_pack(const rgb_t *in, uint8_t *wire, uint32_t n, uint8_t bri, const fx_pack_cfg_t *cfg)
+/* gamma 2.8: one 256-entry table at 16 bits, 65280 * (v / 255) ^ 2.8 (65280 = 255 * 256: a wire level is 256 units, so no clamp is needed after the rounding; an
+ * interpolated table of 65 costs 35 cycles a pixel more). The 8-bit gamma is the same table rounded: (value + 128) >> 8 = round(255 * (v / 255) ^ 2.8), the table 0.6.12 had
+ * (the generator moves the one entry, v = 131, whose double rounding would miss it by a 16-bit step) */
+extern const uint16_t fx_gamma16[256];
+
+FX_AI uint32_t gamma16(uint32_t v)
 {
-    const uint8_t *g = cfg->gamma, *ord = cfg->ord;
-    const uint32_t bpp = cfg->bpp, mode = cfg->white_mode, split = cfg->white_split, full = bri == 255u;
-    uint32_t i, sum = 0;
-    for (i = 0; i < n; i++, wire += bpp) {
-        uint8_t src[5];
-        uint32_t r = in[i].r, gr = in[i].g, b = in[i].b;
-        if (!full) {
-            r = fx_scale8(r, bri);
-            gr = fx_scale8(gr, bri);
-            b = fx_scale8(b, bri);
+    return fx_gamma16[v];
+}
+
+FX_AI uint32_t gamma_ai(uint32_t v)
+{
+    return (fx_gamma16[v] + 128u) >> 8;
+}
+
+uint32_t fx_gamma(uint32_t v)
+{
+    return gamma_ai(v);
+}
+
+uint32_t fx_gamma16_of(uint32_t v)
+{
+    return gamma16(v);
+}
+
+/* the packer, 8 and 16 bits in one loop (the 8-bit path shifts its bytes up by 8 and adds no threshold, which is the same bytes as before). 16 bits: gamma, then the limiter's brightness (as gamma of it: (c * b) ^ 2.8 = c ^ 2.8 * b ^ 2.8), then auto-white, all at 16 bits; the wire
+ * byte is (value + threshold) >> 8: 128 rounds, the dither's 0..255 (ordered by frame and pixel, 85 apart for the red, green and blue sources; the whites take
+ * the red's and green's) makes the average over the pattern's 256 frames exact (the value never passes 65280, so the byte never passes 255) */
+static uint32_t pack_all(const rgb_t *in, uint8_t *wire, uint32_t n, uint8_t bri, const fx_pack_cfg_t *cfg)
+{
+    const uint8_t *ord = cfg->ord;
+    const uint32_t g = cfg->gamma, bpp = cfg->bpp, mode = cfg->white_mode, split = cfg->white_split, full = bri == 255u;
+    const uint32_t m8 = cfg->smooth == FX_SM_8BIT, dm = cfg->smooth == FX_SM_DITHER ? 255u : 0u, rb = m8 ? 0u : 128u & ~dm;       /* threshold = (phase term & dm) | rb */
+    const uint32_t gb = g ? gamma16(bri) : bri * 256u, mb = gb + (gb >> 8);               /* x 65536 / 65280 */
+    const uint32_t white = bpp >= 4u && (mode == FX_W_ACCURATE || mode == FX_W_BRIGHT);
+#if ULTRA_PXS_AUTO_MIN_LEVEL > 0u
+    const uint32_t mv = (uint32_t)cfg->dmin << 8;
+#endif
+    uint32_t i, sum = 0, d0 = cfg->phase + (uint32_t)cfg->px0 * 53u;
+    for (i = 0; i < n; i++, wire += bpp, d0 += 53u) {
+        uint8_t t[5];
+        uint32_t r, gr, b, w3 = 0, w4 = 0;
+        const uint32_t t0 = (d0 & dm) | rb, t1 = ((d0 + 85u) & dm) | rb, t2 = ((d0 + 170u) & dm) | rb;
+        if (m8) {                                                      /* the 8-bit path: brightness, then gamma, at 8 bits (<< 8: the rest of the loop is common) */
+            r = in[i].r;
+            gr = in[i].g;
+            b = in[i].b;
+            if (!full) {
+                r = fx_scale8(r, bri);
+                gr = fx_scale8(gr, bri);
+                b = fx_scale8(b, bri);
+            }
+            if (g != 0u) {
+                r = gamma_ai(r);
+                gr = gamma_ai(gr);
+                b = gamma_ai(b);
+            }
+            r <<= 8;
+            gr <<= 8;
+            b <<= 8;
+        } else {
+            if (g != 0u) {
+                r = gamma16(in[i].r);
+                gr = gamma16(in[i].g);
+                b = gamma16(in[i].b);
+            } else {
+                r = in[i].r * 256u;
+                gr = in[i].g * 256u;
+                b = in[i].b * 256u;
+            }
+            if (!full) {
+                r = (r * mb + 32768u) >> 16;
+                gr = (gr * mb + 32768u) >> 16;
+                b = (b * mb + 32768u) >> 16;
+            }
         }
-        if (g != 0) {
-            r = g[r];
-            gr = g[gr];
-            b = g[b];
-        }
-        src[3] = 0;
-        src[4] = 0;
-        if (bpp >= 4u && (mode == FX_W_ACCURATE || mode == FX_W_BRIGHT)) {
+        if (white) {
             uint32_t w = r < gr ? r : gr;
             w = w < b ? w : b;
-            if (mode == FX_W_ACCURATE) {                  /* accurate: the white's share comes out of RGB */
+            if (mode == FX_W_ACCURATE) {
                 r -= w;
                 gr -= w;
                 b -= w;
             }
-            if (bpp == 5u) {                              /* WS2805: the white split warm / cool */
-                src[3] = fx_scale8(w, 255u - split);
-                src[4] = fx_scale8(w, split);
+            if (bpp == 5u) {
+                w3 = (w * (256u - split)) >> 8;
+                w4 = (w * (split + 1u)) >> 8;
             } else {
-                src[3] = (uint8_t)w;
+                w3 = w;
             }
         }
-        src[0] = (uint8_t)r;
-        src[1] = (uint8_t)gr;
-        src[2] = (uint8_t)b;
-        wire[0] = src[ord[0]];
-        wire[1] = src[ord[1]];
-        wire[2] = src[ord[2]];
-        sum += (uint32_t)wire[0] + wire[1] + wire[2];
+#if ULTRA_PXS_AUTO_MIN_LEVEL > 0u
+        t[0] = (uint8_t)((r + (r < mv ? 128u : t0)) >> 8);
+        t[1] = (uint8_t)((gr + (gr < mv ? 128u : t1)) >> 8);
+        t[2] = (uint8_t)((b + (b < mv ? 128u : t2)) >> 8);
+        t[3] = (uint8_t)((w3 + (w3 < mv ? 128u : t0)) >> 8);
+        t[4] = (uint8_t)((w4 + (w4 < mv ? 128u : t1)) >> 8);
+#else
+        t[0] = (uint8_t)((r + t0) >> 8);
+        t[1] = (uint8_t)((gr + t1) >> 8);
+        t[2] = (uint8_t)((b + t2) >> 8);
+        t[3] = (uint8_t)((w3 + t0) >> 8);
+        t[4] = (uint8_t)((w4 + t1) >> 8);
+#endif
+        wire[0] = t[ord[0]];
+        wire[1] = t[ord[1]];
+        wire[2] = t[ord[2]];
+        sum += (uint32_t)t[0] + t[1] + t[2];
         if (bpp >= 4u) {
-            wire[3] = src[ord[3]];
-            sum += wire[3];
+            wire[3] = t[ord[3]];
+            sum += t[3];
             if (bpp == 5u) {
-                wire[4] = src[ord[4]];
-                sum += wire[4];
+                wire[4] = t[ord[4]];
+                sum += t[4];
             }
         }
     }
     return sum;
+}
+
+uint32_t fx_pack(const rgb_t *in, uint8_t *wire, uint32_t n, uint8_t bri, const fx_pack_cfg_t *cfg)
+{
+    return pack_all(in, wire, n, bri, cfg);
 }
 
 /* 255 * (k / 16) ^ (1 / 2.8), k = 0 .. 16 */

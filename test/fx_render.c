@@ -182,14 +182,14 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc >= 3 && strcmp(mode, "pal") == 0) {
-        extern const rgb_t fx_pals[PAL_COUNT][16];
+        extern rgb_t fx_pal_entry(uint32_t id, uint32_t k);
         const uint32_t W = 512, bar = 20, H = PAL_COUNT * (bar + 4);
         uint8_t *img = calloc((size_t)W * H * 3u, 1);
         uint32_t k, x, y;
         for (k = 0; k < PAL_COUNT; k++) {
             for (x = 0; x < W; x++) {
                 const uint32_t idx = x * 256u / W, pos = idx * 3855u >> 8, e = pos >> 8, f = pos & 255u;
-                const rgb_t a = fx_pals[k][e], c = fx_pals[k][e + 1u > 15u ? 15u : e + 1u];
+                const rgb_t a = fx_pal_entry(k, e), c = fx_pal_entry(k, e + 1u > 15u ? 15u : e + 1u);
                 for (y = 0; y < bar; y++) {
                     uint8_t *q = img + (((size_t)(k * (bar + 4) + y)) * W + x) * 3u;
                     q[0] = (uint8_t)(a.r + ((int)c.r - a.r) * (int)f / 256);

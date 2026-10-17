@@ -106,6 +106,9 @@ DLINE_RAMCODE static uint32_t dl_fault(dline_t *d, uint32_t ram)
     d->sync = 0;
     d->pend_k = 0;
     d->base_ok = 0;
+    d->ch_st = DLINE_CH_IDLE;            /* (CHAIN: the frame in progress is lost, an armed answer is dropped) */
+    d->ch_lz = 0;
+    d->ch_arm = 0;
     dl_sat8(&d->st.faults);
     return a | dl_blank(d);
 }
@@ -159,6 +162,13 @@ DLINE_RAMCODE static uint32_t dl_frame_end(dline_t *d)
     dl_sat8(&d->st.cap_drops);
     return 0;
 }
+
+/* the chain scanner's FRAME path takes two words at a time (j even; DLINE_WORDS_ONLY: never, the word path is the reference) */
+#ifdef DLINE_WORDS_ONLY
+#define DL_PAIR(j)    0
+#else
+#define DL_PAIR(j)    (((j) & 1u) == 0u)
+#endif
 
 /* the ring's 4-word block at word j (a multiple of 4) */
 #define DL_Q(j)       (pr + (((j) & DL_M) >> 1))
@@ -360,7 +370,7 @@ DLINE_RAMCODE static uint32_t dl_scan(dline_t *d, uint16_t *ring, uint32_t w, ui
                        starting at an even word for 32-bit copies (then this word, zeroed, comes first) */
                     d->state = DLINE_FRAME;
                     d->fall_w = j - 1u;
-                    d->cap_own = (uint8_t)!d->cap_ready;
+                    d->cap_own = (uint8_t)(!d->cap_ready && !d->ch_ready && d->ch_st != DLINE_CH_FRAME);
                     d->cap_ok = d->cap_own;
                     if (d->cap_own) {
                         d->cap_w0 = j & ~1u;
@@ -672,18 +682,21 @@ DLINE_RAMCODE static uint32_t dl_scan(dline_t *d, uint16_t *ring, uint32_t w, ui
             run = w - d->zs;
             if (run >= DLINE_W_QUIET) {
                 if (d->rec) {                    /* BOOT / after a fault: delayed and BLANK_N off together (the
-                                                    ring's last 512 words and the line are LOW) */
-                    if (d->direct) {
-                        a |= DLINE_A_MUX_DELAYED;
+                                                    ring's last 512 words and the line are LOW); AUTO still deciding
+                                                    (ch_hold): neither */
+                    if (!d->ch_hold) {
+                        if (d->direct) {
+                            a |= DLINE_A_MUX_DELAYED;
+                        }
+                        d->direct = 0;
+                        d->rec = 0;
                     }
-                    d->direct = 0;
-                    d->rec = 0;
                 } else if (d->direct) {          /* DIRECT-PASS: the direct path is visible: the live check */
                     d->undo = (uint8_t)(1u | d->bl << 2);
                     d->direct = 0;
                     a |= DLINE_A_MUX_DELAYED | DLINE_A_LIVE_CHECK;
                 }
-            } else if (d->rec && d->direct && run >= DLINE_W_GAP && w - d->rec_w >= DLINE_W_FALLBACK) {
+            } else if (d->rec && !d->ch_hold && d->direct && run >= DLINE_W_GAP && w - d->rec_w >= DLINE_W_FALLBACK) {
                 d->undo = (uint8_t)(3u | d->bl << 2);   /* no quiet run for 50 ms while direct (BOOT; never after
                                                            delayed): BLANK_N off in this latch gap */
                 d->rec = 0;
@@ -743,9 +756,236 @@ void dline_init(dline_t *d, uint32_t rx_pos)
     d->st.bits_min = 0xFFFFFFFFu;
 }
 
+/* A long HIGH inside a captured frame: the host's release after an RW frame (see DLINE_CH_REL_GAP). Looks back in the snapshot from the HIGH run (o all-ones words,
+ * the last at j - 1): an optional partial word (the rise), the LOW words, the last pulse's word m1b. If it is a frame end the frame is handed over like a LOW run's:
+ * t0 = m1b, the window of the header ends 2 LOW words after it (the release's rise must not be in it). Returns DLINE_A_CH_READY or 0 */
+static uint32_t dl_ch_rel_end(dline_t *d, const uint16_t *snap, uint32_t hn, uint32_t j, uint32_t o, uint32_t edges)
+{
+    uint32_t p = j - o - 1u, z = 0, m1b, we;
+    if (snap[p & DL_M] != 0u) {
+        p--;                                     /* (the word of the rise) */
+    }
+    while (z < DLINE_W_LATCH && snap[(p - z) & DL_M] == 0u) {
+        z++;
+    }
+    m1b = p - z;
+    if (z < DLINE_CH_REL_GAP || z >= DLINE_W_LATCH || (int32_t)(m1b - d->ch_js) < (int32_t)DLINE_CH_REL_MIN) {
+        return 0;                                /* (the release HIGH itself starting a "frame": the LOW before it is the last frame's) */
+    }
+    we = m1b + 3u;
+    d->ch_end = m1b;
+    d->ch_bits = (uint16_t)edges;
+    d->ch_hn = (uint16_t)hn;
+    d->ch_tn = (uint16_t)(we - d->ch_js > 0xFFFFu ? 0xFFFFu : we - d->ch_js);
+    d->ch_tw = we;
+    d->ch_ready = 1;
+    return DLINE_A_CH_READY;
+}
+
+/* CHAIN: the frame scanner (header of dline.h). The words [cpos, w) once, raw: before the encoder replaces them and before the
+ * stream scanner reads them. IDLE: LOW words are counted (a latch is DLINE_W_LATCH of them: the gap before a frame); the first HIGH
+ * sample after a latch starts a frame, a HIGH sample before one is garbage. FRAME: every word is copied to the head (the first
+ * DLINE_CH_HEAD) and to the snapshot (its own ring position), two at a time where it can (the exact rules of the word path, which
+ * is the reference: DLINE_WORDS_ONLY); a LOW run of DLINE_W_LATCH ends it (the frame bits = TIM4, zeroed in the gap before; t0 =
+ * the last word with a HIGH sample; the snapshot ends with the word that ended it). DLINE_W_LONG all-HIGH words in a row are no
+ * Ultra frame (a marker HIGH, a released line): HIGH waits for the end of the run; a run that ends within DLINE_W_MARK_MAX words
+ * after the window is a marker. DLINE_A_EDGES_ZERO each time the gap becomes a latch. */
+static uint32_t dl_ch_scan(dline_t *d, uint16_t *ring, uint32_t w, uint32_t edges)
+{
+    dl_pair_t *const pr = (dl_pair_t *)(void *)ring;
+    uint16_t *const head = d->cap, *const snap = d->cap + DLINE_CH_HEAD;
+    uint32_t j = d->cpos, a = 0, v;
+    if (d->ch_skip || w - j > DLINE_W_LATE) {   /* ticks fell behind (an interrupt storm) or the SRAM tick ran (a flash operation, however
+                                                   short: it has no chain scan, the encoder went on replacing the words): they are the encoder's */
+        d->ch_skip = 0;
+        d->ch_st = DLINE_CH_IDLE;
+        d->ch_lz = 0;
+        j = w;
+    }
+    while (j != w) {
+        uint32_t lz = d->ch_lz;
+        if (d->ch_st == DLINE_CH_IDLE) {
+            const uint32_t lz0 = lz;
+            for (;;) {
+                if (DL_BLOCK(j)) {
+                    dl_pair_t *q = DL_Q(j);
+                    const uint32_t k = dl_skip_low(q, q + 2u * dl_blocks(j, w));
+                    j += k;
+                    lz += k;
+                }
+                if (j == w || ring[j & DL_M] != 0u) {
+                    break;
+                }
+                j++;
+                lz++;
+            }
+            if (lz > 0xFFFFu) {
+                lz = 0xFFFFu;
+            }
+            if (lz0 < DLINE_W_LATCH && lz >= DLINE_W_LATCH) {
+                a |= DLINE_A_EDGES_ZERO;     /* the gap is a latch: TIM4 starts the next frame at 0 */
+            }
+            d->ch_lz = (uint16_t)lz;
+            if (j == w) {
+                break;
+            }
+            if (lz < DLINE_W_LATCH) {        /* a HIGH sample before a latch: the middle of something else */
+                d->ch_lz = 0;
+                j++;
+                continue;
+            }
+            d->ch_st = DLINE_CH_FRAME;       /* a frame starts at word j */
+            d->ch_cap = (uint8_t)(!d->ch_ready && !d->cap_ready && (d->state == DLINE_PASS || d->state == DLINE_HOLD));
+            if (d->ch_cap) {                 /* (no capture: the last frame is still being decoded, its head and snapshot stay) */
+                d->ch_hn = 1;
+                head[0] = 0;                 /* (ws_decode needs a LOW start) */
+                d->ch_cjs = j;
+            }
+            d->ch_js = j;
+            d->ch_m1 = j;
+            d->ch_o = 0;
+            d->ch_lz = 0;                    /* (an armed answer stays: the release HIGH after an RW frame starts a "frame" too; it is judged by its word) */
+            lz = 0;
+        }
+        if (d->ch_st == DLINE_CH_FRAME) {
+            uint32_t hn = d->ch_hn, m1 = d->ch_m1, o = d->ch_o;
+            const uint32_t cap = d->ch_cap;     /* (hn is written back only with it) */
+            while (j != w) {
+                if (DL_PAIR(j) && w - j >= 2u && o <= 5u && lz + 2u < DLINE_W_LATCH) {
+                    /* two words at a time: a pair that can neither end the frame nor start a long HIGH is copied whole and classified as its
+                       two words would be one after the other */
+                    const uint32_t x = pr[(j & DL_M) >> 1];
+                    if (cap) {
+                        ((dl_pair_t *)(void *)snap)[(j & DL_M) >> 1] = x;
+                        if (hn + 2u <= DLINE_CH_HEAD) {
+                            head[hn] = (uint16_t)x;
+                            head[hn + 1u] = (uint16_t)(x >> 16);
+                            hn += 2u;
+                        } else if (hn < DLINE_CH_HEAD) {
+                            head[hn++] = (uint16_t)x;
+                        }
+                    }
+                    if (x == 0u) {
+                        lz += 2u;
+                        o = 0;
+                    } else if (x == 0xFFFFFFFFu) {
+                        lz = 0;
+                        o += 2u;
+                        m1 = j + 1u;
+                    } else {
+                        const uint32_t hi = x >> 16;
+                        lz = hi == 0u ? 1u : 0u;
+                        o = hi == DL_ONES ? 1u : 0u;
+                        m1 = hi != 0u ? j + 1u : j;
+                    }
+                    j += 2u;
+                    continue;
+                }
+                v = ring[j & DL_M];
+                if (cap) {
+                    snap[j & DL_M] = (uint16_t)v;
+                    if (hn < DLINE_CH_HEAD) {
+                        head[hn++] = (uint16_t)v;
+                    }
+                }
+                j++;
+                if (v == 0u) {
+                    o = 0;
+                    if (++lz >= DLINE_W_LATCH) {         /* LOW 46 us: the frame end */
+                        d->ch_st = DLINE_CH_IDLE;
+                        a |= DLINE_A_EDGES_ZERO;
+                        if (cap) {
+                            const uint32_t n = j - DLINE_CH_TAIL_CUT - d->ch_js;   /* (the header's window ends 8 LOW words after the last pulse) */
+                            d->ch_end = m1;
+                            d->ch_bits = (uint16_t)edges;
+                            d->ch_hn = (uint16_t)hn;
+                            d->ch_tn = (uint16_t)(n > 0xFFFFu ? 0xFFFFu : n);
+                            d->ch_tw = j - DLINE_CH_TAIL_CUT;
+                            d->ch_ready = 1;
+                            a |= DLINE_A_CH_READY;
+                        } else {
+                            dl_sat8(&d->st.cap_drops);
+                        }
+                        break;
+                    }
+                } else {
+                    lz = 0;
+                    m1 = j - 1u;
+                    if (v == DL_ONES) {
+                        if (++o >= DLINE_W_LONG) {       /* a long HIGH: no Ultra frame, or the release after an RW frame whose last pulse it follows */
+                            d->ch_st = DLINE_CH_HIGH;
+                            lz = o;
+                            if (cap) {
+                                a |= dl_ch_rel_end(d, snap, hn, j, o, edges);
+                            }
+                            break;
+                        }
+                    } else {
+                        o = 0;
+                    }
+                }
+            }
+            if (d->ch_st == DLINE_CH_FRAME) {
+                if (cap) {
+                    d->ch_hn = (uint16_t)hn;
+                }
+                d->ch_m1 = m1;
+                d->ch_o = (uint8_t)o;
+            }
+            d->ch_lz = (uint16_t)lz;
+        } else if (d->ch_st == DLINE_CH_HIGH) {
+            while (j != w) {
+                v = ring[j & DL_M];
+                j++;
+                if (v == DL_ONES) {
+                    if (lz < 0xFFFFu) {
+                        lz++;
+                    }
+                    continue;
+                }
+                if (lz <= DLINE_W_MARK_MAX && (d->ch_win == 0u || (int32_t)(j - d->ch_win) >= 0)) {
+                    a |= DLINE_A_CH_MARKER;      /* HIGH 3.6 .. 60 us that ends: a marker (a pixel-line hub) */
+                    d->ch_win = 0;
+                }
+                d->ch_st = DLINE_CH_IDLE;
+                lz = v == 0u ? 1u : 0u;
+                break;
+            }
+            d->ch_lz = (uint16_t)lz;
+        }
+    }
+    d->cpos = j;
+    return a;
+}
+
 uint32_t dline_tick(dline_t *d, uint16_t *ring, uint32_t rx_pos, uint32_t tx_pos, uint32_t edges)
 {
-    uint32_t w = d->wpos + ((rx_pos - d->wpos) & DL_M), a;
+    uint32_t w = d->wpos + ((rx_pos - d->wpos) & DL_M), a = 0;
+
+    if (d->ch_req != 0u) {                       /* the main loop CHAIN request */
+        const uint32_t r = d->ch_req;
+        d->ch_req = 0;
+        if (r & 2u) {
+            d->ch_on = 0;
+            d->ch_st = DLINE_CH_IDLE;
+            d->ch_arm = 0;
+            d->ch_enter = 0;
+        } else {
+            if (!d->ch_on) {
+                d->ch_on = 1;
+                d->cpos = w;
+                d->ch_st = DLINE_CH_IDLE;
+                d->ch_lz = 0;
+                d->ch_arm = 0;
+            }
+            if ((r & 4u) && d->rec) {
+                d->ch_enter = 1;
+            }
+        }
+    }
+    if (d->ch_on && d->restart == 0u) {
+        a = dl_ch_scan(d, ring, w, edges);       /* (before the stream scanner: it zeroes in some states) */
+    }
 
     if (d->tx_flag) {                            /* DE low: its word (a burst-done after this tick's RX read waits) */
         uint32_t back = (w - d->tx_raw) & DL_M;
@@ -761,7 +1001,36 @@ uint32_t dline_tick(dline_t *d, uint16_t *ring, uint32_t rx_pos, uint32_t tx_pos
         d->txdone = 1;                           /* (no burst-done: DE is low by now) */
         d->txend_w = w;
     }
-    a = dl_tick(d, ring, rx_pos, tx_pos, edges, 1u);
+    a |= dl_tick(d, ring, rx_pos, tx_pos, edges, 1u);
+    /* CHAIN: the ring zeroed and the mux switched while BLANK_N is held (BOOT, or AUTO decided): udfx_tick takes the ring */
+    if (d->ch_enter == 1u && d->restart == 0u) {
+        uint32_t i;
+        for (i = 0; i < DLINE_RING_WORDS; i++) {
+            ring[i] = 0;
+        }
+        if (d->direct) {
+            a |= DLINE_A_MUX_DELAYED;
+            d->direct = 0;
+        }
+        d->ch_hold = 0;
+        d->ch_enter = 2;
+    }
+    /* CHAIN: this board answer starts at its word (t0 + the slot time), not at a release: the first tick at or after it, no
+     * later than DLINE_W_CH_LATE words; the stream scanner takes the burst from there as in a window (BURST, RETAKE) */
+    if (d->ch_on && d->ch_arm && (int32_t)(w - d->ch_tx) >= 0) {
+        d->ch_arm = 0;
+        if (w - d->ch_tx <= DLINE_W_CH_LATE && d->restart == 0u && (d->state == DLINE_PASS || d->state == DLINE_HOLD)) {
+            d->state = DLINE_BURST;
+            d->hi = 1;
+            d->txdone = 0;
+            d->send_w = w;
+            d->blank = 1;
+            d->st.answered++;
+            a |= DLINE_A_SEND | dl_blank(d);
+        } else {
+            a |= DLINE_A_CH_MISSED;
+        }
+    }
     /* the answer: armed for this window, the line released >= 20 us (and still: the scan ends in the release's HIGH),
      * t_end + 900 us not passed, the mux delayed (direct, BLANK_N alone can't hide the fail-safe HIGH after it) */
     if (d->state == DLINE_REPLY && d->cur_seq != 0u && !d->direct && d->run >= DLINE_W_RELEASED &&
@@ -779,6 +1048,7 @@ uint32_t dline_tick(dline_t *d, uint16_t *ring, uint32_t rx_pos, uint32_t tx_pos
 
 DLINE_RAMCODE uint32_t dline_ram_tick(dline_t *d, uint16_t *ring, uint32_t rx_pos, uint32_t tx_pos, uint32_t edges)
 {
+    d->ch_skip = d->ch_on;                       /* (the chain scanner does not run here: it starts again at the newest word) */
     return dl_tick(d, ring, rx_pos, tx_pos, edges, 0u);
 }
 
@@ -812,6 +1082,9 @@ void dline_restart(dline_t *d, uint32_t rx_pos)
 {
     uint32_t w = dl_sync(d, rx_pos);             /* (the restart moved RX: positions from here on) */
     d->zpos = d->zs = d->os = d->lzs = d->edge_w = d->rec_w = w;
+    d->cpos = w;
+    d->ch_st = DLINE_CH_IDLE;
+    d->ch_lz = 0;
     d->last_rx = 0xFFFFFFFFu;
     d->stall = 0;
     d->tx_flag = 0;
@@ -822,4 +1095,28 @@ void dline_minmax_restart(dline_t *d)
 {
     d->st.bits_min = 0xFFFFFFFFu;
     d->st.bits_max = 0;
+}
+
+void dline_ch_start(dline_t *d, int enter)
+{
+    d->ch_req = (uint8_t)(enter ? 5u : 1u);
+}
+
+void dline_ch_stop(dline_t *d)
+{
+    d->ch_req = 2;
+}
+
+void dline_ch_done(dline_t *d, int answer, uint32_t tx_w, uint32_t win_w)
+{
+    d->ch_win = win_w;
+    d->ch_tx = tx_w;
+    DL_BARRIER();
+    d->ch_arm = (uint8_t)(answer != 0);
+}
+
+void dline_ch_free(dline_t *d)
+{
+    DL_BARRIER();                                /* the capture's reads done before it is released */
+    d->ch_ready = 0;
 }

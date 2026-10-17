@@ -11,7 +11,8 @@ Palette sources, licences (NOTICE.md lists them):
   FastLED  16-entry palettes (colorpalettes.cpp) and Pacifica's (examples/Pacifica), MIT
   cpt-city Retro Clown: gradient bhw1_01 by Blackheartedwolf (2011), CC BY 3.0, resampled
   WLED     April Night, C9 New, Orange & Teal: by Aircoookie, added while WLED was MIT-licensed (colour stops only)
-  own      Aurora, Sunset, Fairy, Sunrise, and look-alikes for Analogous, Hult, Magred, Yelmag (named after the WLED /
+  own      Aurora, Sunset, Fairy, Sunrise, Candlelight, Warm White, Daylight, Christmas, Winter, Halloween, Autumn, Pastel,
+           Embers, Rose, Moonlight, and look-alikes for Analogous, Hult, Magred, Yelmag (named after the WLED /
            cpt-city palettes, whose stops are NOT used: their licences do not allow it)
   Both (not used): the names follow WLED's palette list, which Quindor chose.
 Each palette is 16 entries, entry k at 0..255 position k * 17, linear in RGB between the source stops."""
@@ -131,6 +132,32 @@ PALETTES = [
     (19, "Sunrise", resample([(0, (0, 0, 0)), (40, (30, 2, 4)), (90, (110, 10, 6)), (140, (215, 48, 6)),
                               (180, (255, 110, 18)), (215, (255, 175, 70)), (240, (255, 225, 160)),
                               (255, (255, 250, 235))]), OWN + " (Sunrise / Sunset: a warm sky from dark to day)", False),
+    # round 15 (ud-fx-more): ambient, seasonal and warm/cool white palettes, all our own (colour temperatures from the
+    # black-body approximation, stops chosen by eye)
+    (20, "Candlelight", resample([(0, (60, 12, 0)), (70, (180, 60, 5)), (140, (255, 140, 30)), (200, (255, 190, 90)),
+                                  (255, (255, 225, 160))]), OWN + " (candle flame, amber to warm white)", False),
+    (21, "Warm White", resample([(0, (255, 147, 41)), (85, (255, 169, 87)), (170, (255, 190, 120)),
+                                 (255, (255, 147, 41))]), OWN + " (warm whites, about 1900 K - 3000 K; on RGBW strips the white LED carries little of them: auto-white takes min(r, g, b), and a warm white has almost no blue)", True),
+    (22, "Daylight", resample([(0, (255, 169, 87)), (64, (255, 209, 163)), (128, (255, 249, 253)), (192, (255, 209, 163)),
+                               (255, (255, 169, 87))]), OWN + " (whites from 2700 K to 6500 K, colour temperatures from the common black-body RGB table; the cool end puts ~30 % of its light on the white LED of RGBW strips)", True),
+    (23, "Christmas", resample([(0, (220, 0, 0)), (30, (220, 0, 0)), (64, (0, 160, 20)), (94, (0, 160, 20)),
+                                (128, (255, 170, 90)), (158, (255, 170, 90)), (192, (255, 110, 0)), (222, (255, 110, 0)),
+                                (255, (220, 0, 0))]), OWN + " (red, green, warm white, gold)", True),
+    (24, "Winter", resample([(0, (70, 130, 255)), (60, (170, 215, 255)), (120, (240, 248, 255)), (180, (130, 200, 235)),
+                             (255, (70, 130, 255))]), OWN + " (ice blue and white)", True),
+    (25, "Halloween", resample([(0, (255, 90, 0)), (64, (120, 0, 170)), (128, (10, 0, 18)), (192, (70, 200, 0)),
+                                (255, (255, 90, 0))]), OWN + " (orange, purple, green)", True),
+    (26, "Autumn", resample([(0, (110, 10, 0)), (60, (200, 50, 0)), (120, (255, 130, 10)), (180, (220, 170, 20)),
+                             (220, (150, 60, 5)), (255, (110, 10, 0))]), OWN + " (leaves: rust, orange, gold)", True),
+    (27, "Pastel", resample([(0, (255, 170, 190)), (50, (255, 210, 170)), (100, (250, 250, 180)), (150, (180, 240, 200)),
+                             (200, (170, 200, 250)), (235, (210, 180, 245)), (255, (255, 170, 190))]),
+     OWN + " (soft pink, peach, lemon, mint, sky, lilac)", True),
+    (28, "Embers", resample([(0, (0, 0, 0)), (60, (70, 6, 0)), (120, (190, 40, 0)), (180, (255, 100, 5)),
+                             (230, (255, 170, 40)), (255, (255, 210, 110))]), OWN + " (glowing coals)", False),
+    (29, "Rose", resample([(0, (90, 0, 40)), (70, (200, 20, 90)), (130, (255, 70, 130)), (190, (255, 150, 170)),
+                           (255, (90, 0, 40))]), OWN + " (deep rose to blush)", True),
+    (30, "Moonlight", resample([(0, (8, 12, 40)), (80, (40, 60, 130)), (150, (150, 170, 225)), (210, (225, 232, 250)),
+                                (255, (8, 12, 40))]), OWN + " (night blue to silver)", True),
 ]
 PACIFICA = [
     hexpal([0x000507, 0x000409, 0x00030B, 0x00030D, 0x000210, 0x000212, 0x000114, 0x000117, 0x000019, 0x00001C,
@@ -203,17 +230,40 @@ EFFECTS = [
      (128, 128, 13, W, (0, 0, 0), (0, 0, 0), 0, 0), 0, "own"),
     (26, "Running", "Waves of colour 1 on colour 2 run along the strip.", "Speed", "Wavelength", False,
      ["Colour 1", "Colour 2"], None, None, (128, 128, 255, (255, 120, 0), (0, 0, 30), (0, 0, 0), 0, 0), 0, "own"),
+    (27, "Ripples", "Raindrops on a pond: soft rings spread out and fade.", "Speed", "Ripple size", True, [None, "Background"],
+     "Rain (how many of the drops fall; 0: none)", None, (128, 128, 255, W, (0, 0, 0), (0, 0, 0), 200, 0), 0, "own"),
+    (28, "Wipe", "One colour wipes over the other along the strip, then back.", "Speed", "Hold (0: none, 255: three quarters of the cycle)", True,
+     ["Colour 1", "Colour 2"], "Colours (0-127: Colour 1 and 2 alternate, 128-255: a new palette colour each wipe)", None,
+     (128, 64, 255, (255, 0, 0), (0, 150, 0), (0, 0, 0), 0, 0), 0, "own"),
+    (29, "Stripes", "Hard stripes of colour 1 and colour 2 move along the strip (candy cane).", "Speed (0: still)",
+     "Stripe size (higher: finer)", False, ["Colour 1", "Colour 2"], "Share of Colour 1 (128: half)", None,
+     (128, 190, 255, (255, 0, 0), W, (0, 0, 0), 128, 0), 0, "own"),
+    (30, "Bulbs", "A string of coloured bulbs; the colours hop along it.", "Shift speed (0: still)",
+     "Spacing (higher: closer bulbs)", True, [None, "Unlit"], "Bulb size (share of the spacing, 128: half)",
+     "Colour step (64: a quarter of the palette)", (40, 200, 255, W, (0, 0, 0), (0, 0, 0), 128, 64), 0, "own"),
+    (31, "Lava Lamp", "Big soft blobs of palette colour drift and merge.", "Speed", "Blob size", True, [None, "Background"],
+     None, None, (128, 200, 255, W, (0, 0, 0), (0, 0, 0), 0, 0), 0, "own"),
+    (32, "Mosaic Drift", "Fixed adjoining tiles that slowly melt from one colour to the next.", "Colour change speed",
+     "Tile size (higher: smaller tiles)", True, [], "Whiten (mixes neutral white in; 0: none)", None,
+     (128, 180, 1, W, (0, 0, 0), (0, 0, 0), 90, 0), 0, "own"),
+    (33, "Silk Weave", "Two broad ribbons of light slide through each other and turn pearly where they cross.", "Speed",
+     "Ribbon spacing (higher: closer)", False, ["Ribbon 1", "Ribbon 2", "Ground"], "White at the crossings", None,
+     (128, 100, 255, (255, 150, 110), (110, 160, 255), (20, 12, 14), 130, 0), 0, "own"),
+    (34, "Canopy Shade", "A pale wash with soft leaf-like shadows that breathe and lean a little.", "Sway speed", "Shadow depth",
+     False, ["Wash", "Shadow"], "Leaf spacing (higher: closer)", None, (100, 180, 255, (255, 236, 200), (40, 70, 30), (0, 0, 0), 150, 0),
+     0, "own"),
+    (35, "Opal Facets", "Fixed glass-like facets in palette colours; a pearly reflection rolls across each one.", "Reflection speed",
+     "Facet width (higher: narrower)", True, [], "Reflection strength", None, (110, 170, 255, W, (0, 0, 0), (0, 0, 0), 190, 0), 0, "own"),
+    (36, "Quiet Landings", "One to three soft pearls rise and fall in arcs and touch down without a trail.", "Bounce pace",
+     "Height (share of the strip)", True, [None, "Ground"], "Pearls (0-85: one, 86-170: two, 171-255: three)", None,
+     (128, 160, 255, W, (0, 0, 0), (0, 0, 0), 128, 0), 0, "own"),
 ]
 EFFECT_PAL_DEFAULT = {5: 10, 6: 10, 8: 0, 9: 3, 10: 10, 13: 17, 14: 10, 15: 0, 16: 14, 19: 19, 20: 19, 21: 0, 23: 18,
-                      24: 10, 25: 13}
+                      24: 10, 25: 13, 27: 24, 28: 23, 30: 3, 31: 16, 32: 1, 35: 27, 36: 24}
 
 
 def q16():
     return [int(round(32767 * math.sin(math.pi / 2 * k / 64))) for k in range(65)] + [32767]
-
-
-def gamma():
-    return [int(round(255 * (k / 255) ** 2.8)) for k in range(256)]
 
 
 def cpal(name, p):
@@ -224,25 +274,59 @@ def cpal(name, p):
     return L
 
 
+def q565(c):
+    """the nearest RGB565 value of (r, g, b) 0..255 (the decoder replicates the top bits: 31 -> 255, 63 -> 255)"""
+    def best(v, bits):
+        top = (1 << bits) - 1
+        def ex(q):
+            return (q << (8 - bits)) | (q >> (2 * bits - 8))
+        return min(range(top + 1), key=lambda q: (abs(ex(q) - v), q))
+    return (best(c[0], 5) << 11) | (best(c[1], 6) << 5) | best(c[2], 5)
+
+
+def un565(v):
+    r, g, b = v >> 11, (v >> 5) & 63, v & 31
+    return ((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2))
+
+
+def cpal565(name, p):
+    L = ["    { /* %s */" % name]
+    for k in range(0, 16, 8):
+        L.append("        " + " ".join("0x%04X," % q565(c) for c in p[k:k + 8]))
+    L.append("    },")
+    return L
+
+
+def pal_error(p):
+    """the largest channel error (0..255) of the 565 palette against the source entries"""
+    return max(abs(a - b) for c in p for a, b in zip(un565(q565(c)), c))
+
+
 def write_tables():
     for pid, (i, name, p, origin, cyc) in enumerate(PALETTES):
         assert i == pid and len(p) == 16, name
     L = ["/* generated by tools/gen_fx_tables.py: don't edit */", '#include "fx_int.h"', "",
-         "const uint16_t fx_qsin16[66] = {" + ", ".join(map(str, q16())) + "};", "",
-         "/* 65536 / (the quarter table's step k -> k + 1): fx_asin16's interpolation */",
-         "const uint16_t fx_asin_recip[64] = {" + ", ".join(str(65536 // (q16()[k + 1] - q16()[k])) for k in range(64)) + "};", "",
-         "const uint8_t fx_gamma28[256] = {"]
-    g = gamma()
+         "const uint16_t fx_qsin16[66] = {" + ", ".join(map(str, q16())) + "};", ""]
+    g16 = []
+    for j in range(256):
+        g = int(round(65280 * (j / 255) ** 2.8))
+        want = int(round(255 * (j / 255) ** 2.8))          # the 8-bit table of 0.6.12: (g + 128) >> 8 must be it at every level
+        g = min(max(g, want * 256 - 128), want * 256 + 127)
+        g16.append(g)
+    L += ["/* gamma 2.8 at 16 bits: round(65280 * (v / 255) ^ 2.8), 65280 = 255 * 256, moved by a step where (value + 128) >> 8 would miss round(255 * (v / 255) ^ 2.8) (fx_pack.c) */",
+          "const uint16_t fx_gamma16[256] = {"]
     for k in range(0, 256, 16):
-        L.append("    " + ", ".join("%3d" % v for v in g[k:k + 16]) + ",")
-    L += ["};", "", "const rgb_t fx_pals[PAL_COUNT][16] = {"]
+        L.append("    " + ", ".join("%5d" % x for x in g16[k:k + 16]) + ",")
+    L += ["};", ""]
+    L += ["/* the palettes' 16 entries as RGB565 (fx_unpack565 in fx_int.h): the largest channel error against the source stops is %d of 255 */" %
+          max(pal_error(p) for i, n, p, o, c in PALETTES), "const uint16_t fx_pals565[PAL_COUNT][16] = {"]
     for i, name, p, origin, cyc in PALETTES:
-        L += cpal(name, p)
+        L += cpal565(name, p)
     L += ["};", "", "const rgb_t fx_pal_pacifica[3][16] = {"]
     for k, p in enumerate(PACIFICA):
         L += cpal("pacifica %d" % (k + 1), p)
     L += ["};", "", "const uint8_t fx_pal_default_tab[FX_COUNT] = {"]
-    d = [EFFECT_PAL_DEFAULT.get(i, 0) for i in range(27)]
+    d = [EFFECT_PAL_DEFAULT.get(i, 0) for i in range(len(EFFECTS) + 1)]
     L.append("    " + ", ".join(map(str, d)) + ",")
     L.append("};")
     with open(os.path.join(SRC, "fx_tables.c"), "w", newline="\n") as f:
@@ -264,7 +348,7 @@ def write_catalogue(copies):
                             palette=pal, custom1=c1, custom2=c2,
                             defaults=d, state_bytes_per_pixel=st, origin=origin))
     pals = [dict(id=i, name=n, origin=o, cyclic=c) for i, n, p, o, c in PALETTES]
-    cat = dict(catalogue_version=1,
+    cat = dict(catalogue_version=3,
                note="ids are never reused; 1-127 official, 128-255 custom. palette 254 = colour 1 -> 2 -> 3, 255 = the "
                     "effect's own default. colors = how many of c1..c3 the effect uses, color_slots = their labels by position (null: that slot is unused); speed / intensity / palette: true when used; the "
                     "labels say what they do; custom1 / custom2: null or a label. A retired id would stay with retired: true.",

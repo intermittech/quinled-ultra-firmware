@@ -132,10 +132,10 @@ HW_ID="$(printf '#include "board.h"\nFW_HW_ID=BOARD_HW_ID\n' | "$GCC" $CFLAGS -E
 if [ -z "$HW_ID" ]; then echo "error: board.h's BOARD_HW_ID didn't resolve" >&2; exit 1; fi
 if [ "$UD" = 1 ]; then
   # BOARD=3: its app, the hal with the delay line, and only the core files it uses (dline.c once it is there).
-  # calstore / scene / store: flashrec.c's record table names their descriptors (the lifetime record is BOARD 3's
-  # only store; ~280 B of their checks stay linked); scene.c also holds the write budgets (energy.c)
+  # flashrec.c keeps only BOARD 3's lifetime/local-effect record descriptors. Unused calibration/settings functions
+  # are discarded at link time; scene.c also holds the write budgets (energy.c).
   SRC="$FW/src/app/main_ud.c $FW/src/hal/hw.c $FW/src/hal/hw_cold.c $FW/src/hal/hw_dline.c $FW/src/hal/mem.c"
-  for f in ack calstore config div64 energy flashrec fwver mcutemp pagepair pwrev rc scene store upd_app vdip vsense ws_decode ud/wsenc ud/udfx; do
+  for f in ack calstore config div64 energy flashrec fwver mcutemp pagepair pwrev rc scene store upd_app vdip vsense ws_decode ud/wsenc ud/udfx ud/udchain; do
     SRC="$SRC $FW/src/core/$f.c"
   done
   if [ -f "$FW/src/core/dline.c" ]; then SRC="$SRC $FW/src/core/dline.c"; fi

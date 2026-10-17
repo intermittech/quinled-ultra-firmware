@@ -34,9 +34,11 @@ static const pp_desc_t set_pp = { UX_REC_BYTES, 2u, 4u, 0u, ufx_valid };   /* (R
 #else
 static const pp_desc_t set_pp = { STORE_SLOT_BYTES, STORE_SLOTS, 4u, 0u, store_valid };
 #endif
+#if BOARD != BOARD_DP_UD
 static const pp_desc_t cal_pp = { CAL_REC_BYTES, CAL_RECS, 4u, 0u, cal_valid };
 #if MON_EXTRA
 static const pp_desc_t hist_pp = { CALHIST_REC_BYTES, CALHIST_RECS, 4u, 0u, calhist_valid };
+#endif
 #endif
 
 static const rec_t recs[REC_COUNT] = {
@@ -45,6 +47,7 @@ static const rec_t recs[REC_COUNT] = {
     /* settings: an A/B pair (0.6.4; 0.6.3 erased its one page when full, and a power cut right after that erase lost
      * the stored settings), 8 records of 32 bytes per page, the same records as before (page A is 0.6.3's page) */
     [REC_SET] = { &set_pp, { SETTINGS_ADDR, SETTINGS_B_ADDR } },
+#if BOARD != BOARD_DP_UD
     /* current calibration: an A/B pair (0.6.4), 4 records of 64 bytes per page (page A is 0.6.3's page) */
     [REC_CAL] = { &cal_pp, { CAL_PAGE_ADDR, CAL_B_ADDR } },
     /* power-on scene log: an A/B pair (0.6.4, core/scene.h scene_pp; 0.6.3: a ring that erased the page it entered),
@@ -54,13 +57,14 @@ static const rec_t recs[REC_COUNT] = {
     /* the calibration history (core/calhist.h, M2, 0.6.6): an A/B pair, 4 records of 64 bytes per page */
     [REC_CALHIST] = { &hist_pp, { CALHIST_ADDR, CALHIST_B_ADDR } },
 #endif
+#endif
 };
 static pp_pos_t rec_pos[REC_COUNT];
 #if BOARD != BOARD_DP_UD
 static uint32_t set_seq;
-#endif
 static uint32_t cal_seq;
 static uint16_t cal_cnt, scene_seq;
+#endif
 
 /* a pair's page p (0 / 1), and an entry's address */
 static uint32_t rec_page(uint32_t i, uint32_t p)
@@ -171,6 +175,7 @@ MEASURED uint32_t settings_store(const settings_t *s, const store_ext_t *ext)
 }
 #endif
 
+#if BOARD != BOARD_DP_UD
 /* ---- current calibration */
 MEASURED int cal_load(isense_cal_t *c, uint16_t *count)
 {
@@ -222,6 +227,7 @@ MEASURED uint32_t scene_store(const scene_t *sc)
     scene_log_pack(sc, ++scene_seq, (scene_rec_t *)core_scratch);
     return rec_program(REC_SCENE, at, core_scratch);
 }
+#endif
 
 /* ---- the lifetime record (core/energy.h): its write never erases (FLASH_NONE while its erase is due) */
 MEASURED uint32_t life_load(life_rec_t *r)
@@ -248,7 +254,7 @@ uint32_t life_room(void)
     return pp_free(&life_pp, &rec_pos[REC_LIFE]);
 }
 
-#if MON_EXTRA
+#if MON_EXTRA && BOARD != BOARD_DP_UD
 /* ---- the calibration history (M2, 0.6.6): programmed from *h itself, as the lifetime record */
 MEASURED uint32_t calhist_load(calhist_t *h)
 {
@@ -373,6 +379,10 @@ uint32_t hw_flash_half(uint32_t addr, uint16_t v)
 
 uint32_t flash_rejected(void)
 {
+#if BOARD == BOARD_DP_UD
+    return rec_pos[REC_SET].bad | (uint32_t)rec_pos[REC_LIFE].bad << 18;
+#else
     return rec_pos[REC_SET].bad | (uint32_t)rec_pos[REC_CAL].bad << 6 | (uint32_t)rec_pos[REC_SCENE].bad << 12 |
            (uint32_t)rec_pos[REC_LIFE].bad << 18;
+#endif
 }

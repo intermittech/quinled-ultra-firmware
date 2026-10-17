@@ -33,28 +33,28 @@ static uint32_t lat(uint32_t xi, uint32_t yi)
 
 void fx_nz1_begin(fx_nz1_t *z, uint32_t y8)
 {
-    z->y = y8 >> 8;
+    z->y = (y8 >> 8) & 0x3FFFFu;                          /* (the lattice row, mod 2^18: the callers' times wrap at 2^32 ms, a multiple, so no row jumps) */
     z->v = (uint8_t)fx_smooth8(y8 & 255u);
     z->ok = 0;
 }
 
 static uint32_t nz_col(const fx_nz1_t *z, uint32_t xi)   /* the lattice column at xi, blended in y */
 {
-    const int32_t p = (int32_t)lat(xi, z->y), q = (int32_t)lat(xi, z->y + 1u);
+    const int32_t p = (int32_t)lat(xi, z->y), q = (int32_t)lat(xi, (z->y + 1u) & 0x3FFFFu);
     return (uint32_t)(p + (((q - p) * (int32_t)z->v) >> 8));
 }
 
 uint8_t fx_nz1(fx_nz1_t *z, uint32_t x8)
 {
-    const uint32_t xi = x8 >> 8, f = fx_smooth8(x8 & 255u);
+    const uint32_t xi = (x8 >> 8) & 0x3FFFFu, f = fx_smooth8(x8 & 255u);      /* (columns mod 2^18, like the rows) */
     int32_t a, b;
     if (!z->ok || z->xi != xi) {
-        if (z->ok && z->xi + 1u == xi) {
+        if (z->ok && ((z->xi + 1u) & 0x3FFFFu) == xi) {
             z->a = z->b;                                 /* (walking up: the right column becomes the left one) */
         } else {
             z->a = nz_col(z, xi);
         }
-        z->b = nz_col(z, xi + 1u);
+        z->b = nz_col(z, (xi + 1u) & 0x3FFFFu);
         z->xi = xi;
         z->ok = 1;
     }
@@ -64,6 +64,7 @@ uint8_t fx_nz1(fx_nz1_t *z, uint32_t x8)
 }
 
 /* ------------------------------------------------------------------------------- palettes, colour */
+
 rgb_t fx_pal_at(const rgb_t *pal, uint32_t idx16)
 {
     const uint32_t e = (idx16 >> 12) & 15u, f = (idx16 >> 4) & 255u;
@@ -113,7 +114,7 @@ int32_t fx_asin16(int32_t s)
             hi = mid;
         }
     }
-    a = lo * 256u + (((m - fx_qsin16[lo]) * fx_asin_recip[lo]) >> 8);
+    a = lo * 256u + ((m - fx_qsin16[lo]) * 256u) / (fx_qsin16[lo + 1u] - fx_qsin16[lo]);
     return s < 0 ? -(int32_t)a : (int32_t)a;
 }
 

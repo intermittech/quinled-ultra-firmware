@@ -19,7 +19,9 @@ static double r14_release;
 
 int main(void)
 {
-    static const double releases[] = {0, 150, 500, 899, 919, 970, 1000, 1200, 3000};
+    /* 2 .. 150: the protocol's window for the host's release (ULTRA_RW_RELEASE_MIN_US 60 .. ULTRA_RW_RELEASE_US 150; the ESPHome hub aims at 80, its early
+     * version let go after 2): the receiver's schedule is keyed to the frame's last falling edge and does not care where in that window the pair floats HIGH */
+    static const double releases[] = {0, 2, 5, 20, 40, 60, 80, 100, 150, 500, 899, 919, 970, 1000, 1200, 3000};
     static rcs_t c;
     const uint8_t idx[2] = {0, 1};
     unsigned rate, rel, trial, windows = 0, good = 0, quiet = 0;

@@ -52,17 +52,28 @@ EFFECTS = [
     (24, "Plasma", ["fx_plasma"]),
     (25, "Noise", ["fx_noise", "prep_noise"]),
     (26, "Running", ["fx_running", "prep_running"]),
+    (27, "Ripples", ["fx_ripples"]),
+    (28, "Wipe", ["fx_wipe", "prep_wipe"]),
+    (29, "Stripes", ["fx_stripes", "prep_stripes", "window_cov", "period16"]),
+    (30, "Bulbs", ["fx_bulbs", "prep_bulbs"]),
+    (31, "Lava Lamp", ["fx_lava", "prep_lava"]),
+    (32, "Mosaic Drift", ["fx_mosaic", "mosaic_tile", "prep_cells", "cell_step"]),
+    (33, "Silk Weave", ["fx_silk", "prep_silk"]),
+    (34, "Canopy Shade", ["fx_canopy"]),
+    (35, "Opal Facets", ["fx_opal"]),
+    (36, "Quiet Landings", ["fx_landings"]),
 ]
-SHARED = {6: "(Colorwaves and Pride share fx_pride / prep_pride)", 7: "(with Colorwaves)", 20: "(with Sunrise)",
+SHARED = {30: "(with Stripes: window_cov, period16)", 6: "(Colorwaves and Pride share fx_pride / prep_pride)", 7: "(with Colorwaves)", 20: "(with Sunrise)",
           23: "(with Colortwinkles: twinkle())"}
 ENGINE = ["fx_engine_init", "fx_engine_set", "fx_engine_frame", "fx_engine_render", "fx_engine_dark", "seg_params",
-          "drop_xfade", "begin_effect", "ramp256", "lerp256", "eff_index", "render_segment", "state_off"]
+          "drop_xfade", "begin_effect", "ramp256", "lerp256", "eff_index", "render_segment", "state_off",
+          "fx_engine_frame_seg", "fx_engine_dequeue", "ramp_frame", "xfade_weight"]
 CORE_FNS = ["fx_begin", "fx_frame", "fx_render", "fx_set_colors", "fx_set_speed", "fx_state_bytes", "fx_default_palette",
             "build_palette", "fx_rate256", "fx_defs"]
 MATH = ["fx_sin16", "fx_sin8", "fx_nz1", "fx_nz1_begin", "nz_col", "lat", "fx_pal_at", "fx_pal_lin", "fx_hue", "fx_sat",
-        "fx_blend", "fx_scale_rgb"]
-PACK = ["fx_pack", "fx_limit_bri", "root28"]
-TABLES = ["fx_qsin16", "fx_gamma28", "fx_pals", "fx_pal_pacifica", "fx_pal_default_tab"]
+        "fx_blend", "fx_scale_rgb", "xorshift"]
+PACK = ["fx_pack", "fx_limit_bri", "root28", "fx_gamma", "gamma_ai"]
+TABLES = ["fx_qsin16", "fx_pals565", "fx_pal_pacifica", "fx_pal_default_tab"]
 
 
 def tool(name):
@@ -157,9 +168,11 @@ def main():
     p("   mean of the %d effects: %.1f cycles/px, worst effect %.1f" % (len(allm), sum(allm) / len(allm), max(allm)))
     p("")
     p("2. Packer (gamma + bri + order + auto-white), cycles per pixel")
-    for bpp, nm in ((3, "RGB (WS2812B)"), (4, "RGBW (SK6812 / WS2814)"), (5, "5 ch (WS2805)")):
-        c, _ = call("b_pack", [n, bpp])
-        p("   %-24s %6.1f   (%.1f %% CPU at the line rate for that chip)" % (nm, c / n, c / n * {3: 31250, 4: 23400, 5: 18750}[bpp] / 144e6 * 100))
+    for bri in (255, 200):
+        for sm, snm in ((0, "8-bit path (CONFIG 141 = 3)"), (1, "16-bit, rounded"), (2, "16-bit, dithered")):
+            for bpp, nm in ((3, "RGB (WS2812B)"), (4, "RGBW (SK6812 / WS2814)"), (5, "5 ch (WS2805)")):
+                c, _ = call("b_pack", [n, bpp, sm, bri])
+                p("   %-24s %-28s bri %3d %6.1f   (%.1f %% CPU at the line rate for that chip)" % (nm, snm, bri, c / n, c / n * {3: 31250, 4: 23400, 5: 18750}[bpp] / 144e6 * 100))
     c, _ = call("b_limit", [3000000])
     p("   fx_limit_bri (once a frame): %d cycles" % c)
     p("")

@@ -25,4 +25,6 @@ if %errorlevel% neq 0 exit /b 1
 "%OUT%\udfx_tests.exe" %2 %3 %4 > "%OUT%\udfx_out.txt"
 set RC=%errorlevel%
 type "%OUT%\udfx_out.txt"
-exit /b %RC%
+if %RC% neq 0 exit /b %RC%
+if "%~2"=="" call "%HERE%build_ud_scene.cmd" "%OUT%\scene"
+exit /b %errorlevel%

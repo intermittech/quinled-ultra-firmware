@@ -86,10 +86,34 @@
 #define DLINE_W_LATE       500u        /* the scan this far behind RX: the words are (nearly) out of the TX: lost */
 #define DLINE_EDGE_MASK    0xFFFFu     /* TIM4's width */
 
+/* CHAIN line mode (docs/ultradigital-firmware.md section 12): the line carries plain Ultra frames (N slots + the header trailer, no
+ * markers, no pixels) and the board's encoder owns every ring word, so the raw frame is copied by a second scanner (dl_ch_scan) in
+ * the 20 kHz tick, before the encoder replaces the words and before the stream scanner (which keeps running: markers, windows) looks
+ * at them. The capture buffer is shared (the modes are exclusive per frame): the HEAD (the first words: the slot, 256 bits =
+ * 720 words, 736 with the HSI 2.2 % fast) and the SNAPSHOT of the ring (every word of the frame, copied to its own ring position
+ * and no further than the frame end: the frame's last 512 words, the header 64 bits = 184 words among them, the frame end's LOW
+ * run after it). The decode reads the header in the snapshot, in place (dline_ch_tail); the head is free once the slot is out. */
+#define DLINE_CH_HEAD      752u
+#define DLINE_CH_TAIL      512u        /* the snapshot: the ring's size (indexed by the ring position) */
+#define DLINE_CH_TAIL_USED 216u        /* the words of it the decode takes: the header (184, 188 with the HSI 2.2 % fast) and a margin; they end at ch_tw: 8 LOW words
+                                          after the last pulse when the LOW run ended the frame (DLINE_CH_TAIL_CUT before the snapshot's end), 2 when a release did */
+#define DLINE_CH_TAIL_CUT  (DLINE_W_LATCH - 8u)
+/* A long HIGH after a captured frame's last pulse also ends it: the host releases the line after an RW frame and the pair floats HIGH (the GM3088's fail-safe),
+ * within ULTRA_RW_RELEASE_MIN_US .. ULTRA_RW_RELEASE_US after the last edge. The release comes before the LOW run of a latch (46 us) when the host holds LOW
+ * less than that; a frame is then whole at its last pulse followed by >= DLINE_CH_REL_GAP LOW words (>= 1.4 us: more than any LOW inside a frame) and a long
+ * HIGH, and at least DLINE_CH_REL_MIN words long (a valid frame is 900) */
+#define DLINE_CH_REL_GAP   3u
+#define DLINE_CH_REL_MIN   800u
+#define DLINE_W_CH_LATE    180u        /* an armed answer is sent at most this many words (80 us = ULTRA_RW_LATE_US) after its start word */
+#define DLINE_CH_WIN_W     (2250u * 25u)   /* a window after an RW frame lasts at most 24.2 ms (16 slots at 250 kbaud) */
+
 /* states */
 enum {
     DLINE_PASS = 0, DLINE_MARK, DLINE_HOLD, DLINE_FRAME, DLINE_END, DLINE_REPLY, DLINE_BURST, DLINE_RETAKE
 };
+
+enum { DLINE_CH_IDLE = 0, DLINE_CH_FRAME, DLINE_CH_HIGH };
+typedef char dline_ch_fits[(DLINE_CH_HEAD + DLINE_CH_TAIL <= DLINE_CAP_WORDS && DLINE_CH_TAIL_USED <= DLINE_CH_HEAD) ? 1 : -1];
 
 /* actions (bits) for the glue, from dline_tick / dline_ram_tick / dline_fault. Order: BLANK_ON first, then the mux,
  * then BLANK_OFF; SEND after BLANK_ON */
@@ -102,6 +126,12 @@ enum {
 #define DLINE_A_SEND        0x20u      /* DE high and the armed answer's burst now (BLANK_ON comes with it) */
 #define DLINE_A_WINDOW_END  0x40u      /* back to PASS (a flash write may follow: dline_idle) */
 #define DLINE_A_RESTART     0x80u      /* a fault: zero and restart the ring (the mux as it is), then dline_restart */
+#define DLINE_A_EDGES_ZERO  0x200u     /* CHAIN: the line is in a gap (LOW >= a latch): the glue zeroes TIM4 (dl_hw_edges_zero): the
+                                          next frame's bits are TIM4's count. dline is TIM4's only writer (a gate in a later phase
+                                          re-arms from here too) */
+#define DLINE_A_CH_READY    0x400u     /* CHAIN: a frame is captured (ch_*): the main loop decodes it, then dline_ch_arm / _release */
+#define DLINE_A_CH_MARKER   0x800u     /* CHAIN: a marker (a HIGH of 3.6-60 us that ends) outside a window: a pixel-line hub is talking */
+#define DLINE_A_CH_MISSED   0x1000u    /* CHAIN: an armed answer's start word passed (a late tick, a flash operation) */
 #define DLINE_A_LIVE_CHECK  0x100u     /* apply this call's MUX / BLANK_OFF only if PA6 is LOW and TIM4 still reads the
                                           edges passed in, TIM4 read >= ~0.1 us after PA6 (its input filter's delay: a
                                           whole pulse just before could be in neither); no edge since: the visible
@@ -174,6 +204,29 @@ typedef struct {
     uint32_t cap_w0;                   /* the ring word of cap[0] (even: 32-bit copies; the word after the marker's
                                           falling-edge word, or that word itself, zeroed) */
     uint16_t cap[DLINE_CAP_WORDS];     /* the capture of the last marker frame (4-byte aligned: after cap_w0) */
+    /* ---- CHAIN (dl_ch_scan; ch_on 0: none of it runs; after the capture: the offsets of everything above stay as they were) */
+    uint32_t cpos;                     /* the next word the chain scanner looks at */
+    uint32_t ch_end;                   /* the handed-over frame's last edge (t0): the ring word */
+    uint32_t ch_tx;                    /* the armed answer: the word it starts at */
+    uint32_t ch_win;                   /* the window's end (no marker is counted before it) */
+    uint32_t ch_m1;                    /* FRAME: the last word with a HIGH sample */
+    uint16_t ch_hn;                    /* head words kept */
+    uint16_t ch_tn;                    /* the frame's words in the snapshot, the last DLINE_CH_TAIL of them valid (saturating) */
+    uint32_t ch_tw;                    /* the snapshot's end: the ring word just past the frame's last word copied */
+    uint32_t ch_js;                    /* FRAME: the frame's first word */
+    uint32_t ch_cjs;                   /* ... of the frame that is in the capture (the main loop's tag for the slot it decoded early) */
+    uint16_t ch_bits;                  /* the handed-over frame's bits: TIM4 */
+    uint16_t ch_lz;                    /* IDLE / FRAME: the LOW run in words; HIGH: the HIGH run (saturating) */
+    uint8_t  ch_on;                    /* the chain scanner runs */
+    uint8_t  ch_st;                    /* DLINE_CH_* */
+    uint8_t  ch_o;                     /* FRAME: all-HIGH words in a row */
+    uint8_t  ch_cap;                   /* FRAME: the words go to the capture */
+    uint8_t  ch_enter;                 /* 1: zero the ring and switch the mux at the next tick (BLANK_N held); 2: done, udfx_tick takes it */
+    uint8_t  ch_hold;                  /* AUTO deciding: the stream scanner's BOOT recovery releases neither BLANK_N nor the mux */
+    uint8_t  ch_skip;                  /* the SRAM tick ran (a flash operation): the scanner starts again at the newest word */
+    volatile uint8_t ch_req;           /* main loop -> tick: 1 start, 2 stop (|4: enter) */
+    volatile uint8_t ch_ready;         /* DLINE_A_CH_READY given, until dline_ch_release */
+    volatile uint8_t ch_arm;           /* dline_ch_arm: an answer waits for ch_tx */
 } dline_t;
 
 /* SRAM placement of the flash operation's tick and what it calls (the host: nothing) */
@@ -218,6 +271,41 @@ DLINE_INLINE void dline_refused(dline_t *d)
 }
 /* the page sent min / max: start again */
 void     dline_minmax_restart(dline_t *d);
+
+/* ---- CHAIN (main loop side; the tick takes the requests) */
+/* start the chain scanner at the next tick; enter: BOOT's wait is over (dline_ch_hold ends too): at the next tick the ring is zeroed and
+ * the mux switched while BLANK_N is still held; udfx_tick starts the encoder (d->ch_enter == 2) and BLANK_N follows */
+void     dline_ch_start(dline_t *d, int enter);
+void     dline_ch_stop(dline_t *d);
+/* AUTO deciding (1): the stream scanner's BOOT recovery releases neither BLANK_N nor the mux until 0 */
+DLINE_INLINE void dline_ch_hold(dline_t *d, int on) { d->ch_hold = (uint8_t)(on != 0); }
+/* CH_READY: the capture is no longer needed (the slot and the header are decoded): the next frame may be captured. Call it as early as
+ * the raw words are out, before the rest of the work: a hub at its 300 us reset starts the next frame 300 us after this one ends */
+void     dline_ch_free(dline_t *d);
+/* after CH_READY and the work: this board's answer starts at word tx_w (answer = 1) and the window ends at win_w (0: no RW frame).
+ * Every CH_READY needs one call (and one dline_ch_free) */
+void     dline_ch_done(dline_t *d, int answer, uint32_t tx_w, uint32_t win_w);
+/* the capture of the frame handed over: the head (words, the first LOW) and the contiguous window of the last tail words */
+DLINE_INLINE const uint16_t *dline_ch_head(const dline_t *d, uint32_t *words)
+{
+    *words = d->ch_hn;
+    return d->cap;
+}
+/* the frame's last words (the header at their end), in time order, in the snapshot ring: ring[(start + k) & (DLINE_CH_TAIL - 1)], k < *words
+ * (<= DLINE_CH_TAIL_USED). The next frame's capture overwrites the ring from its first word on, and so these words: read the header BEFORE dline_ch_free
+ * (a capture starts at the earliest when the capture is free; after an RW frame the released line's HIGH starts one 150 us after the frame) */
+DLINE_INLINE const uint16_t *dline_ch_tail(const dline_t *d, uint32_t *start, uint32_t *words)
+{
+    const uint32_t n = d->ch_tn < DLINE_CH_TAIL_USED ? d->ch_tn : DLINE_CH_TAIL_USED;
+    *start = (d->ch_tw - n) & (DLINE_CH_TAIL - 1u);
+    *words = n;
+    return d->cap + DLINE_CH_HEAD;
+}
+/* no flash operation while a chain frame is being captured, decoded, or an answer waits for its word */
+DLINE_INLINE int dline_ch_idle(const dline_t *d)
+{
+    return !d->ch_on || (d->ch_st == DLINE_CH_IDLE && !d->ch_ready && !d->ch_arm);
+}
 /* no window open and no capture pending: a flash operation may start (it must stay off a window) */
 DLINE_INLINE int dline_idle(const dline_t *d) { return d->state == DLINE_PASS && !d->cap_ready; }
 /* the incoming line has been LOW for this many words through the newest (0: not in PASS, or not LOW now): a latch is

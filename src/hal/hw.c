@@ -602,11 +602,12 @@ void led_set(uint8_t on)
 
 #if BOARD_RETURN
 /* ------------------------------------------------------------------------------------------- return channel */
-/* USART3 TX only (RE 0: its RX pin PB11 is PWM_B), 8N1, by interrupt: every DMA channel is taken (USART3_TX's, ch2,
- * is the DIN sampler's). Its entry: VTF slot 1 (0.6.5's unified trap_entry dispatches only SysTick and TIM2-4;
- * slot 0 is flash_op's), priority 0x00, so it preempts the poll tick (a byte every 10 us at 1 Mbaud; a late one only
- * stretches the stop bit). PB10 is driven only during a burst; otherwise an input with its weak pull-down, and the relay node
- * follows the output transceiver's RO (1 k against the 100 R from PB10). BENCH: the node's levels, DIN's read-back. */
+/* The answer UART (board.h ANSWER_UART; RC_USART, RC_TX_GPIO / RC_TX_PIN in hw_priv.h): USART3 on PB10 by default. TX only
+ * (RE 0: USART3's RX pin PB11 is PWM_B), 8N1, by interrupt: every DMA channel is taken (USART3_TX's, ch2, is the DIN
+ * sampler's). Its entry: VTF slot 1 (0.6.5's unified trap_entry dispatches only SysTick and TIM2-4; slot 0 is flash_op's),
+ * priority 0x00, so it preempts the poll tick (a byte every 10 us at 1 Mbaud; a late one only stretches the stop bit). The
+ * TX pin is driven only during a burst; otherwise an input with its weak pull-up, and the relay node follows the output
+ * transceiver's RO (1 k against the 100 R from the pin). BENCH: the node's levels, DIN's read-back. */
 static const uint8_t *rc_next;
 static uint32_t rc_left;
 typedef char rc_one_lead_byte[RC_LEAD_BYTES == 1u ? 1 : -1];   /* (rc_hw_send writes one 0xFF) */
@@ -614,11 +615,11 @@ typedef char rc_one_lead_byte[RC_LEAD_BYTES == 1u ? 1 : -1];   /* (rc_hw_send wr
 #if BOARD == BOARD_DP_UD
 /* (BOARD 3, the Ultra-Digital receiver: docs/ultradigital-firmware.md section 4) one transceiver, DE + /RE tied on PB14:
  * while DE is high RO is high-Z (PA6 reads LOW through its 22 k), so there is no read-back; the "turnaround check" is the
- * hub's release, which the window logic saw (PA6 HIGH) before it turns around. PB10 is USART3_TX in AF push-pull from
- * boot (hw_cold.c rc_hw_init): it idles HIGH, and the line follows it only while DE is high. */
+ * hub's release, which the window logic saw (PA6 HIGH) before it turns around. The TX pin (PB10 USART3_TX by default) is in
+ * AF push-pull from boot (hw_cold.c rc_hw_init): it idles HIGH, and the line follows it only while DE is high. */
 static void rc_release(void)
 {
-    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* no TXE / TC interrupt: a burst still running is cut */
+    RC_USART->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;   /* no TXE / TC interrupt: a burst still running is cut */
     GPIOB->BCR = 1u << 14;                               /* DE low: the hub's line again (RO drives PA6) */
 }
 
@@ -643,7 +644,7 @@ void rc_hw_answer_local(void)
 uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
 {
     uint32_t t = POLL_CNT(), d;
-    USART3->BRR = brr;
+    RC_USART->BRR = brr;
     do {                                                 /* the line HIGH RC_PREAMBLE_CYC (DE high since rc_hw_dir) */
         d = POLL_CNT() - t;
         if ((int32_t)d < 0) {
@@ -657,21 +658,21 @@ uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
     rc_next = b;
     rc_left = n;
     BARRIER();                                           /* the cursor published before its interrupt */
-    USART3->STATR = (uint16_t)~USART_STATR_TC;
-    USART3->DATAR = 0xFFu;                               /* RC_LEAD_BYTES (core/rc.h): the hub's UART in step */
-    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
+    RC_USART->STATR = (uint16_t)~USART_STATR_TC;
+    RC_USART->DATAR = 0xFFu;                             /* RC_LEAD_BYTES (core/rc.h): the hub's UART in step */
+    RC_USART->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
     return 0;
 }
 
 uint32_t rc_hw_busy(void)
 {
-    return (USART3->CTLR1 & (USART_CTLR1_TXEIE | USART_CTLR1_TCIE)) != 0u;   /* (TC: rc_uart_isr -> rc_release) */
+    return (RC_USART->CTLR1 & (USART_CTLR1_TXEIE | USART_CTLR1_TCIE)) != 0u;   /* (TC: rc_uart_isr -> rc_release) */
 }
 #else
 static void rc_release(void)
 {
-    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;     /* no TXE / TC interrupt */
-    pin_cfg(GPIOB, 10, CFG_IN_PULL);
+    RC_USART->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE;   /* no TXE / TC interrupt */
+    pin_cfg(RC_TX_GPIO, RC_TX_PIN, CFG_IN_PULL);
 }
 
 void rc_hw_dir(uint32_t mode)
@@ -690,8 +691,8 @@ void rc_hw_dir(uint32_t mode)
 uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
 {
     uint32_t t = (uint32_t)SysTick->CNT, low;            /* (early in the tick: no reload during the wait) */
-    USART3->BRR = brr;
-    pin_cfg(GPIOB, 10, CFG_AF_PP);                       /* the line HIGH: the USART idles high */
+    RC_USART->BRR = brr;
+    pin_cfg(RC_TX_GPIO, RC_TX_PIN, CFG_AF_PP);           /* the line HIGH: the USART idles high */
     while ((uint32_t)SysTick->CNT - t < RC_PREAMBLE_CYC) {
     }
     low = (GPIOA->INDR & (1u << 6)) == 0u;               /* DIN (the input RO) LOW: another driver on the segment */
@@ -702,25 +703,25 @@ uint32_t rc_hw_send(const uint8_t *b, uint32_t n, uint16_t brr)
     rc_next = b;
     rc_left = n;
     BARRIER();                                           /* (r6) the cursor published before its interrupt */
-    USART3->STATR = (uint16_t)~USART_STATR_TC;
-    USART3->DATAR = 0xFFu;                               /* RC_LEAD_BYTES (core/rc.h): the hub's UART in step */
-    USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
+    RC_USART->STATR = (uint16_t)~USART_STATR_TC;
+    RC_USART->DATAR = 0xFFu;                             /* RC_LEAD_BYTES (core/rc.h): the hub's UART in step */
+    RC_USART->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TXEIE;
     return 0;
 }
 #endif
 
-void rc_uart_isr(void);                                /* USART3, entered via isr.S (VTF, HPE + mret) */
+void rc_uart_isr(void);                                /* the answer UART's, entered via isr.S (VTF, HPE + mret) */
 void rc_uart_isr(void)
 {
     BARRIER();                                           /* acquire the cursor published by the poll ISR */
-    if (USART3->CTLR1 & USART_CTLR1_TXEIE) {
+    if (RC_USART->CTLR1 & USART_CTLR1_TXEIE) {
         if (rc_left != 0u) {
             rc_left--;
-            USART3->DATAR = *rc_next++;
+            RC_USART->DATAR = *rc_next++;
             return;
         }
-        USART3->STATR = (uint16_t)~USART_STATR_TC;       /* the last byte is in the shift register: its stop bit */
-        USART3->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TCIE;
+        RC_USART->STATR = (uint16_t)~USART_STATR_TC;     /* the last byte is in the shift register: its stop bit */
+        RC_USART->CTLR1 = USART_CTLR1_TE | USART_CTLR1_UE | USART_CTLR1_TCIE;
         return;
     }
     rc_release();                                        /* TC: the line back to the relay node (LOW idle) */
@@ -767,6 +768,40 @@ void watchdog_kick(void)
  * CONSOLE_FULL 0) only sends: two buffers of 256 (each part it writes fits both: main.c waits for CLI_PART_ROOM), no
  * RX (DMA1 ch6 free; PA3 / TP6 the test jig's pad alone). CONSOLE_FULL 1: RX by DMA1 ch6 circular into uart_rx,
  * two buffers of 512. */
+#if !CONSOLE_TX
+/* ANSWER_UART 2 (board.h): PA2 carries the answers, so the console has no TX and USART2 belongs to the return channel.
+ * The text the console would send goes into a RAM ring instead (con_ring, written at con_ring_w, a free-running count):
+ * the test jig reads both over SWD (wlink dump at their addresses in the ELF's map) in place of TP5's serial line, and
+ * the main loop's gates (uart_room: the whole ring, every part fits) and the flash policy (uart_busy: never) see a
+ * console that is always ready. The bench console (CONSOLE_FULL) needs USART2's TX and RX: not with this switch. */
+#if CONSOLE_FULL
+#error "ANSWER_UART 2 has no console TX: CONSOLE_FULL needs USART2 on PA2 / PA3"
+#endif
+#define CON_RING 512u                                    /* = CLI_PART_ROOM: any one part fits whole */
+volatile uint8_t con_ring[CON_RING];                     /* (volatile: nothing in the firmware reads them, and LTO would drop */
+volatile uint32_t con_ring_w;                            /* the stores of a write-only global: the debugger's is the read) */
+
+uint32_t uart_room(void)
+{
+    return CON_RING;
+}
+
+uint32_t uart_busy(void)
+{
+    return 0u;
+}
+
+void uart_kick(void)
+{
+}
+
+void uart_write(const char *s)
+{
+    while (*s) {
+        con_ring[con_ring_w++ & (CON_RING - 1u)] = (uint8_t)*s++;
+    }
+}
+#else
 #if CONSOLE_FULL
 #define UART_TX_SIZE 512u
 uint8_t uart_rx[UART_RX_SIZE];                           /* (hw_priv.h: hw_init starts the RX DMA into it) */
@@ -857,6 +892,7 @@ void uart_write(const char *s)
         uart_tx[uart_tx_fill][uart_tx_len++] = (uint8_t)*s++;
     }
 }
+#endif
 
 /* (0.6.5) the record reads at boot (main.c, before hw_init: no timer, DMA, UART or SysTick runs on the clocks yet).
  * Upper layout: HCLK / 2, so the flash clock (HCLK / 2 with SCKMOD 0, its reset value, which nothing here changes) is

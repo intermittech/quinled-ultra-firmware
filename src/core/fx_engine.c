@@ -5,6 +5,16 @@
  * chunk of the strip. Time is host ms (wrapping uint32): an effect's own time is host time minus its anchor. */
 #include "fx_int.h"
 
+#define FX_FINISH_MS 250u
+static uint32_t ramp256(uint32_t elapsed, uint32_t dur, uint32_t inv);
+static uint8_t lerp256(uint32_t a, uint32_t b, uint32_t w);
+static void ramp_frame(fx_seg_t *sg, uint32_t now);
+
+static uint32_t xfade_weight(const fx_xfade_t *xf, uint32_t now)
+{
+    return now - xf->t0 >= xf->dur ? 256u : xf->w0 + (((now - xf->t0) * xf->inv) >> 16);
+}
+
 /* the effect's time (host ms since its anchor): a future anchor holds it at 0 until it is reached; after that it is plain modular
  * arithmetic, so an effect that has run past 2^31 ms (24.8 days) keeps going (fx_frame turns it into a saturating raw time) */
 static uint32_t eff_time(uint32_t now, uint32_t anchor, uint8_t *started)
@@ -18,13 +28,11 @@ static uint32_t eff_time(uint32_t now, uint32_t anchor, uint8_t *started)
     return now - anchor;
 }
 
-static uint32_t state_off(const fx_engine_t *e, uint32_t s)   /* each segment reserves the state of its length, in index order */
+static uint32_t state_off(const fx_engine_t *e, uint32_t s)
 {
-    uint32_t k, off = 0;
-    for (k = 0; k < s; k++) {
-        off += fx_state_bytes(FX_FIRE, e->seg[k].len);        /* (the most any effect needs) */
-    }
-    return off;
+    /* Fixed slots: another segment may be configured later or resized while this
+     * Fire (including a fading-out Fire) still owns its heat cells. */
+    return s * fx_state_bytes(FX_FIRE, e->npx);
 }
 
 void fx_engine_init(fx_engine_t *e, uint16_t npx, uint8_t *pool, uint32_t pool_bytes)
@@ -66,13 +74,20 @@ static void begin_effect(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint3
     fx_params_t q;
     const uint32_t need = fx_state_bytes(p->id, sg->n_eff);
     uint8_t *st = 0;
+    const fx_ctx_t *prev = sg->xf >= 0 ? &e->xf[sg->xf].prev : 0;
+    const uint32_t share = prev && prev->id == FX_FIRE && p->id == FX_FIRE;
     seg_params(sg, p, s, &q);
     if (need != 0u && sg->st_off + need <= e->pool_bytes) {
         st = e->pool + sg->st_off;
     }
-    fx_begin(&sg->cur, &q, sg->n_eff, st);
+    fx_begin(&sg->cur, &q, sg->n_eff, share ? 0 : st);
     sg->started = 0;
     fx_frame(&sg->cur, eff_time(now, sg->anchor, &sg->started));
+    if (share) {
+        sg->cur.state = prev->state;                     /* Fire palette changes blend over one live heat field */
+        sg->cur.u[0] = prev->u[0];
+        if (sg->cur.seed == prev->seed) sg->cur.u[1] = prev->u[1];
+    }
 }
 
 void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t now, uint32_t anchor)
@@ -102,6 +117,35 @@ void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t no
                 sg->tvstart == p->vstart && sg->tvlen == p->vlen;
     same = geom_same && sg->cur.id == id &&
            (p->palette == PAL_DEFAULT ? fx_default_palette((uint8_t)id) : p->palette) == sg->cur.pal_id;
+    if (sg->xf >= 0 && (!same || (e->xf[sg->xf].used & 2u))) {
+        fx_xfade_t *xf = &e->xf[sg->xf];
+        /* Keep both live contexts. Later arrivals replace only the target, never
+         * extend the first replacement's finish deadline. */
+        xf->next = *p;
+        xf->next_anchor = anchor;
+        /* A newly received target cannot start before this call. An expired
+         * fade may still be attached until the next frame preparation. */
+        if (now - xf->t0 >= xf->dur) xf->t0 = now - xf->dur;
+        else if (!(xf->used & 2u) && xf->dur - (now - xf->t0) > FX_FINISH_MS) {
+            const uint32_t w = xfade_weight(xf, now);
+            xf->w0 = (uint8_t)w;
+            xf->t0 = now;
+            xf->dur = FX_FINISH_MS;
+            xf->inv = ((256u - w) << 16) / FX_FINISH_MS;
+            if (sg->tr_inv) {
+                ramp_frame(sg, now);
+                for (k = 0; k < 3u; k++) {
+                    sg->c0[k] = sg->cur.c[k];
+                }
+                sg->bri0 = sg->bri;
+                sg->tr_t0 = now;
+                sg->tr_dur = FX_FINISH_MS;
+                sg->tr_inv = 16777216u / FX_FINISH_MS;
+            }
+        }
+        xf->used |= 2u;
+        return;
+    }
     if (!sg->active) {
         sg->bri = 0;                                         /* switched on: from dark (ramping up if asked) */
     }
@@ -130,8 +174,7 @@ void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t no
         }
     } else {
         int xi = -1;
-        if (geom_same && p->trans_ms != 0u && sg->bri != 0u &&
-            !(fx_state_bytes((uint8_t)id, n_eff) != 0u && fx_state_bytes(sg->cur.id, sg->n_eff) != 0u)) {
+        if (geom_same && p->trans_ms != 0u && sg->bri != 0u) {
             drop_xfade(e, sg);
             for (k = 0; k < FX_MAX_XFADE; k++) {
                 if (!e->xf[k].used) {
@@ -147,8 +190,9 @@ void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t no
             xf->started = sg->started;
             xf->t0 = now;
             xf->dur = p->trans_ms;
-            xf->inv = 65536u / p->trans_ms;
+            xf->inv = 16777216u / p->trans_ms;
             xf->w = 0;
+            xf->w0 = 0;
             xf->used = 1;
             sg->xf = (int8_t)xi;
         } else {
@@ -169,7 +213,7 @@ void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t no
     sg->tbri = p->bri;
     sg->tvstart = p->vstart;
     sg->tvlen = p->vlen;
-    if (sg->bri == 0u) {                                     /* dark: nothing shows, so the new colours need no ramp */
+    if (same && sg->bri == 0u) {                             /* a new effect already has these colours from fx_begin */
         fx_set_colors(&sg->cur, p->c);
     }
     if (p->trans_ms != 0u) {                                 /* ramp the colours and the brightness from where they are */
@@ -179,11 +223,11 @@ void fx_engine_set(fx_engine_t *e, uint32_t s, const fx_params_t *p, uint32_t no
         sg->bri0 = sg->bri;
         sg->tr_t0 = now;
         sg->tr_dur = p->trans_ms;
-        sg->tr_inv = 65536u / p->trans_ms;
+        sg->tr_inv = 16777216u / p->trans_ms;
     } else {
         sg->tr_inv = 0;
         sg->bri = p->bri;
-        fx_set_colors(&sg->cur, p->c);
+        if (same) fx_set_colors(&sg->cur, p->c);
     }
 }
 
@@ -193,7 +237,9 @@ static uint32_t ramp256(uint32_t elapsed, uint32_t dur, uint32_t inv)
     if (elapsed >= dur) {
         return 256u;
     }
-    w = (elapsed * inv) >> 8;
+    /* elapsed < dur <= 65535: the product stays below 2^24. Q24 keeps even
+     * a 65-second transition within one weight step of its linear ramp. */
+    w = (elapsed * inv) >> 16;
     return w > 256u ? 256u : w;
 }
 
@@ -202,41 +248,71 @@ static uint8_t lerp256(uint32_t a, uint32_t b, uint32_t w)   /* w 0..256 */
     return (uint8_t)((int32_t)a + (((int32_t)b - (int32_t)a) * (int32_t)w >> 8));
 }
 
-void fx_engine_frame(fx_engine_t *e, uint32_t now)
+static void ramp_frame(fx_seg_t *sg, uint32_t now)
 {
-    uint32_t s, k;
+    uint32_t k;
+    if (sg->tr_inv != 0u) {
+        const uint32_t w = ramp256(now - sg->tr_t0, sg->tr_dur, sg->tr_inv);
+        rgb_t c[3];
+        for (k = 0; k < 3u; k++) {
+            c[k].r = lerp256(sg->c0[k].r, sg->tc[k].r, w);
+            c[k].g = lerp256(sg->c0[k].g, sg->tc[k].g, w);
+            c[k].b = lerp256(sg->c0[k].b, sg->tc[k].b, w);
+        }
+        sg->bri = lerp256(sg->bri0, sg->tbri, w);
+        fx_set_colors(&sg->cur, c);
+        if (w >= 256u) {
+            sg->tr_inv = 0;
+            sg->bri = sg->tbri;
+        }
+    }
+}
+
+uint32_t fx_engine_dequeue(fx_engine_t *e, uint32_t s, uint32_t now)
+{
+    fx_seg_t *sg = &e->seg[s];
+    if (sg->xf >= 0) {
+        fx_xfade_t *xf = &e->xf[sg->xf];
+        if ((xf->used & 2u) && now - xf->t0 >= xf->dur) {
+            const uint32_t at = xf->t0 + xf->dur, anchor = xf->next_anchor;
+            ramp_frame(sg, at);
+            drop_xfade(e, sg);                          /* releases any fading-out Fire before fx_begin clears heat */
+            fx_engine_set(e, s, &xf->next, at, anchor);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void fx_engine_frame_seg(fx_engine_t *e, uint32_t s, uint32_t now)
+{
+    (void)fx_engine_dequeue(e, s, now);
     e->now = now;
-    for (s = 0; s < FX_MAX_SEG; s++) {
-        fx_seg_t *sg = &e->seg[s];
-        if (!sg->active) {
-            continue;
-        }
-        if (sg->tr_inv != 0u) {
-            const uint32_t w = ramp256(now - sg->tr_t0, sg->tr_dur, sg->tr_inv);
-            rgb_t c[3];
-            for (k = 0; k < 3u; k++) {
-                c[k].r = lerp256(sg->c0[k].r, sg->tc[k].r, w);
-                c[k].g = lerp256(sg->c0[k].g, sg->tc[k].g, w);
-                c[k].b = lerp256(sg->c0[k].b, sg->tc[k].b, w);
-            }
-            sg->bri = lerp256(sg->bri0, sg->tbri, w);
-            fx_set_colors(&sg->cur, c);
-            if (w >= 256u) {
-                sg->tr_inv = 0;
-                sg->bri = sg->tbri;
-            }
-        }
-        fx_frame(&sg->cur, eff_time(now, sg->anchor, &sg->started));
-        if (sg->xf >= 0) {
-            fx_xfade_t *xf = &e->xf[sg->xf];
-            const uint32_t w = ramp256(now - xf->t0, xf->dur, xf->inv);
-            if (w >= 256u) {
-                drop_xfade(e, sg);
-            } else {
-                xf->w = (uint8_t)(w > 255u ? 255u : w);
+    fx_seg_t *sg = &e->seg[s];
+    if (!sg->active) {
+        return;
+    }
+    ramp_frame(sg, now);
+    fx_frame(&sg->cur, eff_time(now, sg->anchor, &sg->started));
+    if (sg->xf >= 0) {
+        fx_xfade_t *xf = &e->xf[sg->xf];
+        const uint32_t w = xfade_weight(xf, now);
+        if (w >= 256u) {
+            drop_xfade(e, sg);
+        } else {
+            xf->w = (uint8_t)(w > 255u ? 255u : w);
+            if (!xf->prev.state || xf->prev.state != sg->cur.state) {
                 fx_frame(&xf->prev, eff_time(now, xf->anchor, &xf->started));
             }
         }
+    }
+}
+
+void fx_engine_frame(fx_engine_t *e, uint32_t now)
+{
+    uint32_t s;
+    for (s = 0; s < FX_MAX_SEG; s++) {
+        fx_engine_frame_seg(e, s, now);
     }
 }
 
@@ -250,6 +326,17 @@ uint32_t fx_engine_dark(const fx_engine_t *e)
         }
     }
     return 1;
+}
+
+uint32_t fx_engine_heavy(const fx_engine_t *e)
+{
+    uint32_t s;
+    for (s = 0; s < FX_MAX_SEG; s++) {
+        if (e->seg[s].active && (e->seg[s].cur.id == FX_PACIFICA || (e->seg[s].xf >= 0 && e->xf[e->seg[s].xf].prev.id == FX_PACIFICA))) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* effect pixels [e0, e1) of the segment into dst[0 .. e1 - e0) (the crossfade: the old effect blended under), reversed

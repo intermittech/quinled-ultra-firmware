@@ -31,7 +31,7 @@ checks = [
     ('src/app/main.c', 'rc_tick', barrier + r'\s*rc_state\s*=\s*RC_IDLE', 'window release'),
     ('src/app/main.c', 'rc_arm', barrier + r'\s*rc_state\s*=\s*RC_ARMED', 'window publish'),
     ('src/hal/hw.c', 'rc_hw_send', r'rc_left\s*=[^;]+;\s*' + barrier +
-     r'[\s\S]*?USART3->CTLR1\s*=[^;]*TXEIE', 'UART cursor publish'),
+     r'[\s\S]*?(?:RC_USART|USART3)->CTLR1\s*=[^;]*TXEIE', 'UART cursor publish'),
     ('src/hal/hw.c', 'rc_uart_isr', r'^\s*' + barrier, 'UART cursor acquire'),
 ]
 failed = 0

@@ -43,10 +43,12 @@ typedef struct {
 
 typedef struct {
     union {
-        uint16_t h[2][16][4];         /* exact: bit b started at phase p: its words; [0] is ORed into the partial word */
+        struct {
+            uint16_t h[2][16][4];     /* exact: bit b started at phase p: its words; [0] is ORed into the partial word */
+            uint8_t adv[16];          /* exact: words completed by the pattern part: (p + s1) >> 4 */
+        } exact;                     /* neither exact table is used by the fast encoder */
         uint32_t nib[16][6];          /* fast (s = 48: 3 whole words a bit): a nibble's 12 words, 32-bit pairs */
     } t;
-    uint8_t  adv[16];                 /* exact: words completed by the pattern part: (p + s1) >> 4 */
     uint8_t  s1;                      /* exact: the pattern part (min(s, 48)) */
     uint8_t  tail;                    /* exact: the LOW tail after it (s - s1: 0 at 800 kHz) */
     uint8_t  fast;                    /* s == 48: the nibble table; frames start at an even word (32-bit stores) */

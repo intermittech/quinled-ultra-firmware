@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  * Copyright (C) 2026 QuinLED */
-/* The effects (fx.h): fx_begin / fx_frame / fx_render and the 26 effects of the catalogue. Integer only.
+/* The effects (fx.h): fx_begin / fx_frame / fx_render and the 36 effects of the catalogue. Integer only.
  *
  * Every effect is a closed-form function of (parameters, effect time, pixel index): fx_render(from, to) in any order
  * and chunking gives the same pixels. What changes once a frame is worked out in fx_frame's per-effect prep (the
@@ -215,7 +215,7 @@ static void twinkle(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b, uint32_t soft
     const rgb_t bg = x->c[1];
     for (; a < b; a++) {
         const uint32_t h = fx_hashf(VP(x, a), x->seed), mult = 8u + ((h >> 16) & 15u);
-        const uint32_t clock = ((et * mult) >> 3) + (h & 0xFFFFu), cy = clock >> sh, ph = (clock & ((1u << sh) - 1u)) >> (sh - 8u);
+        const uint32_t clock = ((et * mult) >> 3) + (h & 0xFFFFu), cy = (clock >> sh) & (0x1FFFFFFFu >> sh), ph = (clock & ((1u << sh) - 1u)) >> (sh - 8u);
         const uint32_t g = fx_hashf(VP(x, a) ^ x->seed, cy);
         uint32_t bri = 0;
         if ((g & 255u) < thr) {
@@ -244,8 +244,8 @@ static FX_NOINL void fx_fairy(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b) { t
 static uint32_t flick(uint32_t e, uint32_t salt)
 {
     const uint32_t s1 = e >> 6, f1 = fx_smooth8((e & 63u) << 2), s2 = e >> 8, f2 = fx_smooth8(e & 255u);
-    const uint32_t a = fx_hashf(s1, salt) & 255u, b = fx_hashf(s1 + 1u, salt) & 255u;
-    const uint32_t c = fx_hashf(s2, salt + 77u) & 255u, d = fx_hashf(s2 + 1u, salt + 77u) & 255u;
+    const uint32_t a = fx_hashf(s1, salt) & 255u, b = fx_hashf((s1 + 1u) & 0x3FFFFFFu, salt) & 255u;     /* (the cell index wraps with e at 2^32) */
+    const uint32_t c = fx_hashf(s2, salt + 77u) & 255u, d = fx_hashf((s2 + 1u) & 0xFFFFFFu, salt + 77u) & 255u;
     const uint32_t fast = fx_lerp8(a, b, f1), slow = fx_lerp8(c, d, f2);
     return (fast * 3u + slow) >> 2;
 }
@@ -365,26 +365,29 @@ static FX_NOINL void fx_flow(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
  * effect time. speed = the pace, intensity = sparking, custom1 = cooling. The heat goes through the palette (Heat). */
 static uint32_t fire_cells(const fx_ctx_t *x) { return x->n < FX_FIRE_CELLS ? x->n : FX_FIRE_CELLS; }
 
+static uint32_t xorshift(uint32_t r)
+{
+    r ^= r << 13;
+    r ^= r >> 17;
+    return r ^ (r << 5);
+}
+
 static FX_NOINL void fire_step(fx_ctx_t *x)
 {
     uint8_t *h = x->state;
     const uint32_t n = fire_cells(x), cool = ((uint32_t)x->custom1 * 10u) / n + 2u;
     uint32_t k;
     for (k = 0; k < n; k++) {
-        x->rnd ^= x->rnd << 13;
-        x->rnd ^= x->rnd >> 17;
-        x->rnd ^= x->rnd << 5;
-        h[k] = fx_qsub8(h[k], ((x->rnd & 255u) * cool) >> 8);
+        x->u[1] = xorshift(x->u[1]);
+        h[k] = fx_qsub8(h[k], ((x->u[1] & 255u) * cool) >> 8);
     }
     for (k = n - 1u; k >= 2u; k--) {
         h[k] = (uint8_t)(((uint32_t)h[k - 1u] + h[k - 2u] + h[k - 2u]) * 85u >> 8);
     }
-    x->rnd ^= x->rnd << 13;
-    x->rnd ^= x->rnd >> 17;
-    x->rnd ^= x->rnd << 5;
-    if ((x->rnd & 255u) < x->intensity) {
-        k = ((x->rnd >> 8) & 255u) * 7u >> 8;
-        h[k] = fx_qadd8(h[k], 160u + ((((x->rnd >> 16) & 255u) * 95u) >> 8));
+    x->u[1] = xorshift(x->u[1]);
+    if ((x->u[1] & 255u) < x->intensity) {
+        k = ((x->u[1] >> 8) & 255u) * 7u >> 8;
+        h[k] = fx_qadd8(h[k], 160u + ((((x->u[1] >> 16) & 255u) * 95u) >> 8));
     }
 }
 
@@ -410,11 +413,7 @@ static FX_NOINL void fx_fire(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
         U_FILL(x, a, b, o, x->c[0]);
         return;
     }
-    if (m == x->n) {
-        for (; a < b; a++) {
-            fx_put(o + a, fx_pal_lin(x->pal, h[a]));
-        }
-    } else {                                                 /* more pixels than cells: interpolate between the cells */
+    {                                                        /* more pixels than cells: interpolate between the cells (as many as pixels: a zero fraction) */
         const uint32_t cpp = (m << 16) / x->n;               /* cells per pixel, 16.16 */
         for (; a < b; a++) {
             const uint32_t pos = a * cpp, c = pos >> 16, nx = c + 1u < m ? c + 1u : c;
@@ -434,7 +433,7 @@ static FX_NOINL void prep_gradient(fx_ctx_t *x, uint32_t de)
     if (cyc) {
         const uint32_t rep = ((x->intensity - 16u) >> 5) + 1u;
         x->u[0] = (rep * GRAD_PERIOD) / x->vlen;
-        x->u[1] = (x->et * 16u) % GRAD_PERIOD;
+        x->u[1] = ((x->et * 4u) & 0xFFFFu) * 3u;                 /* a turn (c1 -> c2 -> c3 -> c1) in 2^14 ms = 16.4 s at 1x: a power of two, so nothing jumps when et wraps */
     } else {
         x->u[0] = (2u << 16) / (x->vlen > 1u ? x->vlen - 1u : 1u);
         x->u[1] = 0;
@@ -443,22 +442,30 @@ static FX_NOINL void prep_gradient(fx_ctx_t *x, uint32_t de)
 
 static FX_NOINL void fx_gradient(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
 {
-    const uint32_t cyc = x->intensity >= 16u, step = x->u[0];
-    uint32_t g = VP(x, a) * step + x->u[1];
+    const uint32_t cyc = x->intensity >= 16u;
+    const uint32_t step = cyc ? x->u[0] % GRAD_PERIOD : x->u[0];
+    const uint64_t phase = (uint64_t)VP(x, a) * step + x->u[1];
+    uint32_t g;
     if (cyc) {
-        g %= GRAD_PERIOD;
+        /* Short/virtual strips can cross several colour cycles per pixel. Reduce
+         * the step too; the initial product must also survive a large offset. */
+        /* GRAD_PERIOD = 3 * 65536: only the whole-colour index needs modulo 3.
+         * Its upper part fits 32 bits; no 64-bit divide is needed. */
+        g = ((uint32_t)(phase >> 16) % 3u << 16) | ((uint32_t)phase & 0xFFFFu);
+    } else {
+        g = (uint32_t)(phase > (2u << 16) ? (2u << 16) : phase);
     }
     for (; a < b; a++) {
-        const uint32_t s = g >> 16, f = (g >> 8) & 255u;
+        uint32_t s = g >> 16, f = (g >> 8) & 255u, nx = s + 1u;
         if (cyc) {
-            fx_put(o + a, fx_blend(x->c[s], x->c[s == 2u ? 0u : s + 1u], f));
-            g += step;
-            if (g >= GRAD_PERIOD) {
-                g -= GRAD_PERIOD;
-            }
-        } else {
-            fx_put(o + a, s >= 2u ? x->c[2] : fx_blend(x->c[s], x->c[s + 1u], f));
-            g += step;
+            nx = s == 2u ? 0u : nx;
+        } else if (s >= 2u) {                                /* past the end: colour 3 */
+            s = nx = 2u;
+        }
+        fx_put(o + a, fx_blend(x->c[s], x->c[nx], f));
+        g += step;
+        if (cyc && g >= GRAD_PERIOD) {
+            g -= GRAD_PERIOD;
         }
     }
 }
@@ -505,7 +512,7 @@ static void pac_start(const fx_ctx_t *x, pac_layers_t *P, uint32_t base)   /* th
 
 /* one pixel on: the wave angle turns by 250 units (a rotation in Q15: cos 250 = 32758 / 32768, sin 250 = 785 / 32768; it is
  * restarted exactly every PAC_BLOCK pixels) and the colour index grows by the wave's increment */
-FX_INL void pac_step(pac_layers_t *P, uint32_t L)
+FX_AI void pac_step(pac_layers_t *P, uint32_t L)
 {
     const int32_t s = P->sn[L], c = P->cn[L];
     P->sn[L] = (s * 32758 + c * 785) >> 15;
@@ -555,7 +562,7 @@ static FX_NOINL void fx_pacifica(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
                 uint32_t sidx;
                 pac_step(&P, L);
                 sidx = ((uint32_t)(fx_sin16_i(P.ci[L]) + 32768) * 240u) >> 16;         /* 0..239 */
-                c = fx_add_sat(c, fx_scale_rgb(fx_pal_at_i(p, sidx << 8), P.br[L]));
+                c = fx_add_sat_ai(c, fx_scale_rgb_ai(fx_pal_at_i(p, sidx << 8), P.br[L]));
             }
             thr = fx_scale8(fx_sin8((wave + 7u * v) & 255u), 20u) + wthr;
             avg = avg3(c);
@@ -700,6 +707,342 @@ static FX_NOINL void fx_running(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
     }
 }
 
+/* ------------------------------------------------------------------------------- round 15: Ripples, Wipe, Stripes, Bulbs, Lava Lamp
+ * All five are our own designs (nothing from WLED or FastLED), pure functions of the effect time like the rest. */
+
+/* The coverage 0..255 of the window [0, duty) on a 16-bit phase circle, seen by pixels `step` turns apart: the window's edges are ramps one
+ * pixel wide centred on the edge, so stripes and bulbs glide over the pixels instead of stepping (mk = (255 << 12) / step). */
+static uint32_t window_cov(uint32_t ph, uint32_t duty, uint32_t mk)
+{
+    int32_t s;
+    ph &= 0xFFFFu;
+    if (duty == 0u) {
+        return 0u;
+    }
+    if (duty >= 65535u) {
+        return 255u;
+    }
+    if (ph < duty) {
+        s = (int32_t)(ph < duty - ph ? ph : duty - ph);
+    } else {
+        const uint32_t d = ph - duty, e = 65536u - ph;
+        s = -(int32_t)(d < e ? d : e);
+    }
+    s = 128 + (((s >> 4) * (int32_t)mk) >> 8);
+    return s < 0 ? 0u : (s > 255 ? 255u : (uint32_t)s);
+}
+
+/* The period 2 px .. 504 px in 1/16 px for a slider position (doubling every 32 steps; 255 is the finest) */
+static uint32_t period16(uint32_t slider)
+{
+    const uint32_t j = 255u - slider;
+    return (32u + (j & 31u)) << (j >> 5);
+}
+
+/* Ripples: raindrops on a pond. Three drop slots, a third of a cycle (1.4 s) apart, each cycle drops a ring (when the slot's roll is under
+ * Rain) at a random place; the ring spreads (Size = how far, 8 .. 72 px), 2.5 px each side wide, and fades with its age. The ring takes a
+ * random palette colour; rings add up where they cross; Colour 2 is the water. */
+#define RIP_T  4096u                                       /* a slot's cycle, ms at 1x (2^12: 2^32 is a multiple, so the cycle index is continuous across the effect time's wrap) */
+#define RIP_W  40u                                         /* the ring's half width, 1/16 px */
+static FX_NOINL void fx_ripples(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    struct { uint32_t c, r; rgb_t col; } dr[3];
+    const uint32_t rmax = 128u + 4u * x->intensity;
+    uint32_t j, nd = 0;
+    for (j = 0; j < 3u; j++) {
+        const uint32_t tt = x->et + j * (RIP_T / 3u), n = tt >> 12, age = tt & (RIP_T - 1u), h = fx_hashf(n * 3u + j, x->seed);
+        if ((h & 255u) < x->custom1) {
+            const uint32_t left = 255u - ((age * 255u) >> 12);      /* 255 .. 1 */
+            dr[nd].c = (((h >> 8) & 0xFFFFu) * x->vlen) >> 12;
+            dr[nd].r = (age * rmax) >> 12;
+            dr[nd].col = fx_scale_rgb(fx_pal_at(x->pal, fx_hash(h) >> 16), (left * left) >> 8);
+            nd++;
+        }
+    }
+    for (; a < b; a++) {
+        const uint32_t v = VP(x, a) << 4;
+        rgb_t c = x->c[1];
+        for (j = 0; j < nd; j++) {
+            const uint32_t d = v > dr[j].c ? v - dr[j].c : dr[j].c - v, e = d > dr[j].r ? d - dr[j].r : dr[j].r - d;
+            if (e < RIP_W) {
+                c = fx_add_sat(c, fx_scale_rgb(dr[j].col, ((RIP_W - e) * 51u) >> 3));          /* (255 at the ring's centre) */
+            }
+        }
+        fx_put(o + a, c);
+    }
+}
+
+/* Wipe: a colour wipes over the strip from pixel 0, then the strip holds, then the next colour does the same. A cycle is 4.096 s at 1x
+ * (a power of two, so the cycle count is continuous when the effect time wraps at 2^32); Hold takes up to three quarters of it
+ * (I * 12 ms), the sweep the rest. Colours: colour 1 and 2 take turns, or (Colours 128 and up) every wipe is a new palette colour (a golden-ratio step round the
+ * palette). The edge is one pixel soft. */
+static FX_NOINL void prep_wipe(fx_ctx_t *x, uint32_t de)
+{
+    const uint32_t sweep = 4096u - x->intensity * 12u, n = x->et >> 12, r = x->et & 4095u;
+    rgb_t f, k;
+    (void)de;
+    if (x->custom1 < 128u) {
+        f = x->c[n & 1u];
+        k = x->c[(n & 1u) ^ 1u];
+    } else {
+        f = fx_pal_at(x->pal, n * 0x9E37u);
+        k = fx_pal_at(x->pal, (n - 1u) * 0x9E37u);
+    }
+    x->u[0] = (r < sweep ? (r << 16) / sweep : 65536u) * x->vlen;     /* the edge: pixels x 65536 */
+    x->u[1] = pack_rgb(f);
+    x->u[2] = pack_rgb(k);
+}
+
+static FX_NOINL void fx_wipe(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    const rgb_t f = unpack_rgb(x->u[1]), k = unpack_rgb(x->u[2]);
+    for (; a < b; a++) {
+        const uint32_t v = VP(x, a), edge = x->u[0] >> 16;
+        /* Compare whole pixels before the fraction: the virtual strip may span
+         * all 65535 pixels, beyond the signed 16.16 coordinate range. */
+        const uint32_t mix = v < edge ? 255u : v > edge ? 0u : (x->u[0] >> 8) & 255u;
+        fx_put(o + a, fx_blend(k, f, mix));
+    }
+}
+
+/* Stripes: colour 1 and colour 2 in hard-edged stripes (period from Size, colour 1 takes Share of it) moving towards the higher pixels at
+ * ~20 px/s at 1x; the edges are one pixel soft. */
+static FX_NOINL void prep_stripes(fx_ctx_t *x, uint32_t de)
+{
+    const uint32_t step = (1u << 20) / period16(x->intensity);
+    (void)de;
+    x->u[0] = step;
+    x->u[1] = (uint32_t)(((uint64_t)x->et * step * 21u) >> 10);
+    x->u[2] = x->custom1 * 257u;
+    x->u[3] = (255u << 12) / step;
+}
+
+static FX_NOINL void fx_stripes(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    for (; a < b; a++) {
+        fx_put(o + a, fx_blend(x->c[1], x->c[0], window_cov(VP(x, a) * x->u[0] - x->u[1], x->u[2], x->u[3])));
+    }
+}
+
+/* Bulbs: a string of lights. One bulb per cell (Spacing), lit for Size of the cell with soft edges, the rest dark (colour 2); bulb n takes
+ * the palette colour (n - shift) * Colour step, and the shift grows by one every 0.68 s at 1x, so the colours hop along the string. */
+static FX_NOINL void prep_bulbs(fx_ctx_t *x, uint32_t de)
+{
+    const uint32_t step = (1u << 20) / period16(x->intensity), duty = x->custom1 * 257u;
+    (void)de;
+    x->u[0] = step;
+    x->u[1] = (255u << 12) / step;
+    x->u[2] = (x->et * 3u) >> 11;
+    x->u[3] = duty;
+    x->u[4] = 32768u - (duty >> 1);
+}
+
+static FX_NOINL void fx_bulbs(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    const uint32_t step = x->u[0], cs = (uint32_t)x->custom2 << 8;
+    for (; a < b; a++) {
+        const uint32_t ph = VP(x, a) * step, cov = window_cov(ph - x->u[4], x->u[3], x->u[1]);
+        rgb_t c = x->c[1];
+        if (cov != 0u) {
+            c = fx_blend(c, fx_pal_at(x->pal, ((ph >> 16) - x->u[2]) * cs), cov);
+        }
+        fx_put(o + a, c);
+    }
+}
+
+/* Lava Lamp: three big soft blobs (radius from Blob size, 9 % .. 40 % of the strip) wander to and fro with their own periods (13, 16 and
+ * 22 s at 1x); each has a palette colour (the palette turns once a minute); blobs add up where they meet, colour 2 is the background. */
+static FX_NOINL void prep_lava(fx_ctx_t *x, uint32_t de)
+{
+    const uint32_t rs = (6000u + x->intensity * 80u) >> 4, sd = x->seed * 0x9E37u;
+    uint32_t c[3], k;
+    (void)de;
+    for (k = 0; k < 3u; k++) {
+        c[k] = (uint32_t)(32768 + ((fx_sin16(x->et * (5u - k) + k * 21845u + sd) * 24000) >> 15));
+    }
+    x->u[0] = c[0] | c[1] << 16;
+    x->u[1] = c[2] | (x->et & 0xFFFFu) << 16;
+    x->u[2] = 0xFFFFFFFFu / x->vlen;
+    x->u[4] = rs | ((255u << 8) / rs) << 16;
+}
+
+static FX_NOINL void fx_lava(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    const uint32_t inv = x->u[2], rs = x->u[4] & 0xFFFFu, kk = x->u[4] >> 16;
+    const uint32_t cc[3] = { x->u[0] & 0xFFFFu, x->u[0] >> 16, x->u[1] & 0xFFFFu };
+    rgb_t col[3];
+    uint32_t k;
+    for (k = 0; k < 3u; k++) {
+        col[k] = fx_pal_at(x->pal, (x->u[1] >> 16) + k * 0x5555u);
+    }
+    for (; a < b; a++) {
+        const uint32_t f = (VP(x, a) * inv) >> 16;
+        rgb_t c = x->c[1];
+        for (k = 0; k < 3u; k++) {
+            const uint32_t d = (f > cc[k] ? f - cc[k] : cc[k] - f) >> 4;
+            if (d < rs) {
+                const uint32_t t = ((rs - d) * kk) >> 8;
+                c = fx_add_sat(c, fx_scale_rgb(col[k], fx_smooth8(t)));
+            }
+        }
+        fx_put(o + a, c);
+    }
+}
+
+/* ------------------------------------------------------------------------------- round 16: Mosaic Drift, Silk Weave, Canopy Shade, Opal Facets, Quiet Landings
+ * Our own designs again (nothing from WLED or FastLED; the names and ideas came from review-r4/ud-fx/gpt-ideas/IDEAS-astra.md). Every time period
+ * is a power of two in ms, so 2^32 is a multiple of it and nothing jumps when the effect time wraps. */
+#define NEUTRAL_WHITE fx_rgb(255, 250, 235)
+
+static uint32_t cell_step(uint32_t slider)                /* turns per pixel (16 bit) of cells 2 .. 504 px wide, doubling every 32 steps */
+{
+    return (1u << 20) / period16(slider);
+}
+
+/* Mosaic Drift: fixed adjoining tiles (Tile size), each melting from one palette colour to the next over 8.2 s at 1x (every tile on its own clock),
+ * eased; Whiten mixes neutral white in. A tile edge is anti-aliased over one pixel. */
+static rgb_t mosaic_tile(const fx_ctx_t *x, uint32_t n)
+{
+    const uint32_t tt = x->et + (fx_hashf(n, x->seed) & 8191u), c = tt >> 13, key = n + x->seed * 0x9E37u, m = 0x7FFFFu;
+    const rgb_t a = fx_pal_at(x->pal, fx_hashf(key, c & m) >> 16), b = fx_pal_at(x->pal, fx_hashf(key, (c + 1u) & m) >> 16);
+    return fx_blend(fx_blend(a, b, fx_smooth8((tt & 8191u) >> 5)), NEUTRAL_WHITE, x->custom1);
+}
+
+static FX_NOINL void prep_cells(fx_ctx_t *x, uint32_t de)
+{
+    const uint32_t step = cell_step(x->id == FX_CANOPY_SHADE ? x->custom1 : x->intensity);
+    (void)de;
+    x->u[0] = step;
+    x->u[1] = (255u << 12) / step;
+}
+
+static FX_NOINL void fx_mosaic(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    const uint32_t step = x->u[0];
+    uint32_t ph = VP(x, a) * step, cur = 0u;
+    rgb_t c0 = fx_rgb(0, 0, 0), c1 = c0;
+    for (; a < b; a++, ph += step) {
+        const uint32_t n = ph >> 16, over = (ph & 0xFFFFu) + step;
+        rgb_t c;
+        if (cur == 0u || n != cur - 1u) {                  /* (cur: the tile held in c0, plus 1) */
+            c0 = (cur != 0u && n == cur) ? c1 : mosaic_tile(x, n);
+            c1 = mosaic_tile(x, n + 1u);
+            cur = n + 1u;
+        }
+        c = c0;
+        if (over > 65536u) {
+            c = fx_blend(c0, c1, fx_u8(((over - 65536u) >> 4) * x->u[1] >> 8));
+        }
+        fx_put(o + a, c);
+    }
+}
+
+/* Opal Facets: fixed facets (Facet width) in palette colours; on each a broad pearly reflection rolls across the face once every 8.2 s (every facet on
+ * its own clock), swelling and receding (a half sine) so it is gone at the facet's edges. Reflection = how white it gets. */
+static FX_NOINL void fx_opal(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    const uint32_t step = x->u[0];
+    uint32_t ph = VP(x, a) * step, cur = 0xFFFFFFFFu, cen = 0, amp = 0;
+    rgb_t col = fx_rgb(0, 0, 0);
+    for (; a < b; a++, ph += step) {
+        const uint32_t n = ph >> 16, f = ph & 0xFFFFu;
+        uint32_t d, r = 0;
+        if (n != cur) {
+            const uint32_t h = fx_hashf(n, x->seed), p = (x->et + (h & 8191u)) & 8191u;
+            col = fx_pal_at(x->pal, h >> 16);
+            cen = p << 3;                                  /* the reflection's centre travels the face */
+            amp = (uint32_t)fx_sin16(p << 2) >> 7;         /* its strength: a half sine over the cycle */
+            amp = (amp * x->custom1) >> 8;
+            cur = n;
+        }
+        d = f > cen ? f - cen : cen - f;
+        if (d < 16384u) {
+            const uint32_t t = fx_smooth8((16384u - d) >> 6);
+            r = (t * amp) >> 8;
+        }
+        fx_put(o + a, fx_blend(col, NEUTRAL_WHITE, r));
+    }
+}
+
+/* Silk Weave: two broad ribbons of soft light slide through each other in opposite directions (Ribbon spacing; the second has 13/16 of the first's
+ * spacing, so the pattern never repeats exactly); colour 1 and 2 are their tints over the dim ground (colour 3); where they cross they turn pearly
+ * (White at crossings). ~16 px/s at 1x. */
+static FX_NOINL void prep_silk(fx_ctx_t *x, uint32_t de)
+{
+    const uint32_t sa = (1u << 20) / period16(x->intensity), sb = (sa * 16u + 6u) / 13u;
+    (void)de;
+    x->u[0] = sa;
+    x->u[1] = sb;
+    x->u[2] = (uint32_t)(((uint64_t)x->et * sa * 17u) >> 10) & 0xFFFFu;
+    x->u[3] = (uint32_t)(((uint64_t)x->et * sb * 17u) >> 10) & 0xFFFFu;
+}
+
+static FX_NOINL void fx_silk(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    for (; a < b; a++) {
+        const uint32_t v = VP(x, a);
+        uint32_t ma = ((uint32_t)(fx_sin16(v * x->u[0] - x->u[2]) + 32768)) >> 8, mb = ((uint32_t)(fx_sin16(v * x->u[1] + x->u[3]) + 32768)) >> 8;
+        const uint32_t cross = (ma * mb >> 8) * x->custom1 >> 8;
+        rgb_t c;
+        ma = ma * ma >> 8;
+        mb = mb * mb >> 8;
+        c = fx_blend(fx_blend(x->c[2], x->c[0], ma), x->c[1], mb);          /* ribbon 2 over ribbon 1 over the ground */
+        fx_put(o + a, fx_blend(c, NEUTRAL_WHITE, cross));
+    }
+}
+
+/* Canopy Shade: a steady pale wash (colour 1) with leaf-like shadows (colour 2) anchored one to a cell (Leaf spacing): each has its own width and
+ * place in the cell, its width breathes (13 s at 1x) and it leans a little (22 s); Depth = how dark. A leaf stays inside its cell. */
+static FX_NOINL void fx_canopy(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    const uint32_t step = x->u[0];
+    uint32_t ph = VP(x, a) * step, cur = 0xFFFFFFFFu, cen = 0, hw = 1, k = 0, dep = 0;
+    for (; a < b; a++, ph += step) {
+        const uint32_t n = ph >> 16, f = ph & 0xFFFFu;
+        uint32_t d, s = 0;
+        if (n != cur) {
+            const uint32_t h = fx_hashf(n, x->seed), w0 = 9000u + (h & 8191u);
+            hw = w0 + (uint32_t)((int32_t)w0 * fx_sin16(x->et * 5u + (h >> 16)) >> 17);                 /* +- a quarter */
+            cen = (uint32_t)(32768 + (int32_t)((h >> 13) & 16383u) - 8192 + (fx_sin16(x->et * 3u + (h >> 4)) * 2000 >> 15));
+            k = 0xFFFFFFFFu / hw;
+            dep = fx_scale8(x->intensity, 150u + ((h >> 24) & 105u));      /* each leaf has its own depth */
+            cur = n;
+        }
+        d = f > cen ? f - cen : cen - f;
+        if (d < hw) {
+            const uint32_t t = ((hw - d) * (k >> 8)) >> 16;
+            s = fx_scale8(fx_smooth8(t > 255u ? 255u : t), dep);
+        }
+        fx_put(o + a, fx_blend(x->c[0], x->c[1], s));
+    }
+}
+
+/* Quiet Landings: one to three soft pearls (Pearls) rise and fall in parabolic arcs and touch down without a trail; arcs last 2.0, 4.1 and 2.0 s at 1x,
+ * each with its own height (up to Height of the strip, a little different every time), in palette colours; colour 2 is the ground. */
+static FX_NOINL void fx_landings(fx_ctx_t *x, rgb_t *o, uint32_t a, uint32_t b)
+{
+    struct { uint32_t p; rgb_t col; } pr[3];
+    const uint32_t cnt = 1u + ((x->custom1 * 3u) >> 8), top = (((x->vlen > 1u ? x->vlen - 1u : 1u) << 4) * (x->intensity + 1u)) >> 8;
+    uint32_t j;
+    for (j = 0; j < cnt; j++) {
+        const uint32_t k = j == 1u ? 12u : 11u, tt = x->et + j * 1553u, u = (tt & ((1u << k) - 1u)) << (16u - k);
+        const uint32_t h = fx_hashf(tt >> k, x->seed + j), hgt = (top * (170u + (h & 85u))) >> 8;
+        pr[j].p = (uint32_t)(((uint64_t)((u * (65536u - u)) >> 14) * hgt) >> 16);   /* the arc, in 1/16 px above the ground */
+        pr[j].col = fx_pal_at(x->pal, j * 0x5555u);
+    }
+    for (; a < b; a++) {
+        const uint32_t v = VP(x, a) << 4;
+        rgb_t c = x->c[1];
+        for (j = 0; j < cnt; j++) {
+            const uint32_t d = v > pr[j].p ? v - pr[j].p : pr[j].p - v;
+            if (d < 40u) {
+                c = fx_add_sat(c, fx_scale_rgb(pr[j].col, ((40u - d) * 51u) >> 3));
+            }
+        }
+        fx_put(o + a, c);
+    }
+}
+
 /* ------------------------------------------------------------------------------- the table and the engine */
 typedef struct { render_fn render; prep_fn prep; } fx_def_t;
 static const fx_def_t fx_defs[FX_COUNT] = {
@@ -730,6 +1073,16 @@ static const fx_def_t fx_defs[FX_COUNT] = {
     { fx_plasma, 0 },
     { fx_noise, prep_noise },
     { fx_running, prep_running },
+    { fx_ripples, 0 },
+    { fx_wipe, prep_wipe },
+    { fx_stripes, prep_stripes },
+    { fx_bulbs, prep_bulbs },
+    { fx_lava, prep_lava },
+    { fx_mosaic, prep_cells },
+    { fx_silk, prep_silk },
+    { fx_canopy, prep_cells },
+    { fx_opal, prep_cells },
+    { fx_landings, 0 },
 };
 
 uint32_t fx_state_bytes(uint8_t id, uint32_t n)
@@ -742,6 +1095,11 @@ uint8_t fx_default_palette(uint8_t id)
     return id < FX_COUNT ? fx_pal_default_tab[id] : 0u;
 }
 
+rgb_t fx_pal_entry(uint32_t id, uint32_t k)
+{
+    return fx_unpack565(fx_pals565[id < PAL_COUNT ? id : 0u][k]);
+}
+
 static void build_palette(fx_ctx_t *x)
 {
     uint32_t k;
@@ -752,7 +1110,7 @@ static void build_palette(fx_ctx_t *x)
         }
     } else {
         for (k = 0; k < 16u; k++) {
-            x->pal[k] = fx_pals[x->pal_id < PAL_COUNT ? x->pal_id : 0u][k];
+            x->pal[k] = fx_pal_entry(x->pal_id, k);
         }
     }
 }
@@ -767,7 +1125,6 @@ void fx_begin(fx_ctx_t *x, const fx_params_t *p, uint16_t n, uint8_t *state)
     x->custom1 = p->custom1;
     x->custom2 = p->custom2;
     x->flags = p->flags;
-    x->reserved = 0;
     for (k = 0; k < 3u; k++) {
         x->c[k] = p->c[k];
     }
@@ -777,9 +1134,11 @@ void fx_begin(fx_ctx_t *x, const fx_params_t *p, uint16_t n, uint8_t *state)
     x->seed = p->seed;
     x->t = x->t_last = x->et = 0;
     x->et_frac = 0;
-    x->rnd = p->seed | 1u;
     for (k = 0; k < 5u; k++) {
         x->u[k] = 0;
+    }
+    if (x->id == FX_FIRE) {                                /* context-owned, independent of every other segment and crossfade */
+        x->u[1] = p->seed | 1u;
     }
     x->state = state;
     if (state != 0) {
@@ -820,9 +1179,7 @@ void fx_frame(fx_ctx_t *x, uint32_t t_ms)
     x->et_frac = (uint8_t)acc;
     x->t = x->t + dt < x->t ? 0xFFFFFFFFu : x->t + (uint32_t)dt;      /* (raw effect time: counts up, saturates; no wrap at 49 days) */
     x->t_last = t_ms;
-    if (x->pal_id == PAL_COLORS) {
-        build_palette(x);
-    }
+    /* fx_begin / fx_set_colors keep the palette current, including during colour ramps. */
     if (fx_defs[x->id].prep != 0) {
         fx_defs[x->id].prep(x, de);
     }

@@ -5,6 +5,12 @@
 #include "udfx.h"
 
 #if defined(__GNUC__)
+#define UX_BARRIER() __asm volatile("" ::: "memory")
+#else
+#define UX_BARRIER() ((void)0)
+#endif
+
+#if defined(__GNUC__)
 uint8_t ux_pool[UX_POOL_BYTES] __attribute__((aligned(4)));
 #elif defined(_MSC_VER)
 __declspec(align(4)) uint8_t ux_pool[UX_POOL_BYTES];
@@ -58,7 +64,7 @@ static uint32_t ux_order_ok(uint32_t v, uint32_t bpp)
 
 static uint32_t ux_max_px(uint32_t bpp)
 {
-    return UX_POOL_BYTES / bpp;
+    return bpp == 3u ? ULTRA_PX_MAX_RGB : bpp == 4u ? ULTRA_PX_MAX_RGBW : ULTRA_PX_MAX_RGBCCT;
 }
 
 /* the configuration into the derived fields and the engine (not while LOCAL: the tick uses the tables and the encoder) */
@@ -74,7 +80,7 @@ static void ux_derive(udfx_t *u)
     u->chip.bpp = c->bpp;
     u->chip.reset_w = c->reset_w;
     u->latch_w = c->latch_w;
-    u->pack.gamma = fx_gamma28;
+    u->pack.gamma = 1;
     u->pack.bpp = c->bpp;
     for (k = 0; k < 5u; k++) {
         u->pack.ord[k] = (ord != 0u && ux_order_ok(ord, c->bpp)) ? (uint8_t)((ord >> (3u * k)) & 7u) : c->ord[k];
@@ -87,7 +93,7 @@ static void ux_derive(udfx_t *u)
     u->period_us = fps != 0u ? 1000000u / fps : 0u;
     u->period_w = fps != 0u ? (uint32_t)(((uint64_t)u->period_us * u->wpu24) >> 24) : 0u;
     ws_lut_build(&u->lut, &u->chip);
-    fx_engine_init(&u->eng, u->npx, ux_state, sizeof ux_state);   /* (every segment inactive: ux_reapply puts the running ones back) */
+    fx_engine_init(&u->eng, u->npx, ux_state, sizeof ux_state);   /* frame setup restores running segments */
 }
 
 void udfx_init(udfx_t *u)
@@ -101,6 +107,7 @@ void udfx_init(udfx_t *u)
     u->wpu24 = (uint32_t)(((uint64_t)1 << 48) / UX_RATE_NOM);
     u->lim_bri = 255;
     u->cl_q8 = 256;
+    u->cfg[ULTRA_CFG_PX_FPS - ULTRA_CFG_PX_FIRST] = ULTRA_PX_DEFAULT_FPS;
     ux_derive(u);
 }
 
@@ -118,17 +125,23 @@ uint32_t udfx_word_at(const udfx_t *u, uint32_t host_us)
 /* the engine's host ms: a count that goes on across the 32-bit us wrap, for a host time near the reference. The reference
  * (host us, a multiple of 1000, and its ms) moves with the time (ux_ms_advance), so differences of ms are floor(us / 1000)
  * differences: the same on every receiver that gets the same host times */
+static int32_t ux_ms_delta(int32_t d)
+{
+    /* Floor signed us to ms without negating INT32_MIN or adding 999 to it. */
+    return d / 1000 - (d % 1000 < 0);
+}
+
 static uint32_t ux_ms(const udfx_t *u, uint32_t host_us)
 {
     const int32_t d = (int32_t)(host_us - u->hus_ref);
-    return u->hms_ref + (uint32_t)(d >= 0 ? d / 1000 : -((-d + 999) / 1000));
+    return u->hms_ref + (uint32_t)ux_ms_delta(d);
 }
 
 static void ux_ms_advance(udfx_t *u, uint32_t host_us)
 {
     const int32_t d = (int32_t)(host_us - u->hus_ref);
     if (d >= 500000 || d <= -500000) {
-        const int32_t q = d >= 0 ? d / 1000 : -((-d + 999) / 1000);
+        const int32_t q = ux_ms_delta(d);
         u->hms_ref += (uint32_t)q;
         u->hus_ref += (uint32_t)q * 1000u;
     }
@@ -221,13 +234,14 @@ static void ux_stream(udfx_t *u)
         ((uint8_t *)&q)[i] = 0;
     }
     q.id = FX_STREAM;
+    u->stream_pending = 0;
     for (i = 0; i < UX_SEGS; i++) {
         u->seg[i].run = 0;
         u->seg[i].pend_have = 0;
         fx_engine_set(&u->eng, i, &q, 0, 0);             /* (inactive) */
     }
     u->want_local = 0;
-    u->want_stream = 1;
+    u->want_stream = (uint8_t)!u->chain;                 /* (CHAIN: no stream to go back to: the strip goes dark) */
     u->standalone = 0;
     u->dark = u->black_sent = 0;
 }
@@ -244,38 +258,43 @@ static void ux_apply(udfx_t *u, uint32_t si, const ultra_pixel_fx_t *f, uint32_t
     fx_engine_set(&u->eng, si, &q, now_ms, anchor_ms);
     s->p = *f;
     s->p.flags &= (uint8_t)(0xFFu ^ ULTRA_PXF_RESTART);         /* (an action, not a setting) */
-    s->anchor = u->eng.seg[si].anchor;                   /* (a renewal, the same slot with a new START, keeps the running anchor) */
-    s->run = 1;
-    u->dark = u->black_sent = 0;
-}
-
-/* every running segment into the engine again (the engine was re-initialised, or the virtual strip changed): at once, the
- * effect's own time goes on from its anchor */
-static void ux_reapply(udfx_t *u, uint32_t now_ms)
-{
-    uint32_t i;
-    for (i = 0; i < UX_SEGS; i++) {
-        if (u->seg[i].run) {
-            ultra_pixel_fx_t f = u->seg[i].p;
-            fx_params_t q;
-            ux_params(u, i, &f, &q);
-            q.trans_ms = 0;
-            fx_engine_set(&u->eng, i, &q, now_ms, u->seg[i].anchor);
-        }
+    {
+        const fx_seg_t *sg = &u->eng.seg[si];
+        /* Metadata describes s->p, including an A09 queued target. A CONFIG
+         * rebuild must restore that target at its own anchor. */
+        s->anchor = sg->xf >= 0 && (u->eng.xf[sg->xf].used & 2u) ? anchor_ms : sg->anchor;
     }
+    s->run = (uint8_t)(f->effect != FX_STREAM);
+    u->dark = u->black_sent = 0;
 }
 
 static void ux_seg_cmd(udfx_t *u, uint32_t si, const ultra_pixel_fx_t *f, uint32_t hdr_us)
 {
     ux_seg_t *s = &u->seg[si];
-    if (f->start_ms > 20) {                              /* a future START: wait for it */
-        s->pend = *f;
-        s->pend_at = hdr_us + (uint32_t)f->start_ms * 1000u;
-        s->pend_have = 1;
-        return;
+    s->pend = *f;
+    s->pend_at = hdr_us + (uint32_t)f->start_ms * 1000u;
+    s->pend.start_ms = (int32_t)(ux_ms(u, hdr_us) + (uint32_t)f->start_ms);
+    s->pend_have = (uint8_t)(f->start_ms > 0 ? 2 : 1);
+    u->dark = 0;                                        /* wake a dark LOCAL renderer to examine the queue */
+}
+
+static void ux_queue_stream(udfx_t *u)
+{
+    ultra_pixel_fx_t f = {0};
+    uint32_t i;
+    for (i = 0; i < UX_SEGS; i++) {
+        ux_seg_cmd(u, i, &f, 0);
     }
-    s->pend_have = 0;
-    ux_apply(u, si, f, ux_ms(u, hdr_us), ux_ms(u, hdr_us) + (uint32_t)f->start_ms);
+    u->stream_pending = 1;
+}
+
+/* START is signed milliseconds, so a positive delay can exceed half a host-us
+ * wrap. Compare in that epoch first; use us only to preserve the sub-ms edge. */
+static uint32_t ux_due(const ux_seg_t *s, uint32_t host, uint32_t ms)
+{
+    const int32_t dt = (int32_t)(ms - (uint32_t)s->pend.start_ms);
+    return s->pend_have && (s->pend_have == 1u || dt > 0 ||
+           (dt == 0 && (int32_t)(host - s->pend_at) >= 0));
 }
 
 void udfx_pixel_fx(udfx_t *u, const uint8_t *slot, uint32_t hdr_us)
@@ -298,12 +317,13 @@ void udfx_pixel_fx(udfx_t *u, const uint8_t *slot, uint32_t hdr_us)
             u->save_due = 1;
             u->save_ms = u->ms;
         }
-        ux_stream(u);
+        ux_queue_stream(u);                            /* STREAM ignores START; STORE above is immediate */
         return;
     }
     u->lock = (uint8_t)((f.flags & ULTRA_PXF_LOCK) != 0u);
     u->standalone = 0;
     u->want_stream = 0;
+    u->stream_pending = 0;
     if (f.flags & ULTRA_PXF_STORE) {
         const uint32_t k = seg == (int)ULTRA_LIGHT_BOARD ? 0u : (uint32_t)seg;
         u->stored[k] = f;
@@ -314,15 +334,10 @@ void udfx_pixel_fx(udfx_t *u, const uint8_t *slot, uint32_t hdr_us)
         u->save_ms = u->ms;
     }
     if (seg == (int)ULTRA_LIGHT_BOARD) {                 /* the whole strip: segment 0, the others stopped */
-        fx_params_t q;
-        for (i = 0; i < sizeof q; i++) {
-            ((uint8_t *)&q)[i] = 0;
-        }
-        q.id = FX_STREAM;
+        ultra_pixel_fx_t cancel = {0};
+        cancel.start_ms = f.start_ms;
         for (i = 1; i < UX_SEGS; i++) {
-            u->seg[i].run = 0;
-            u->seg[i].pend_have = 0;
-            fx_engine_set(&u->eng, i, &q, 0, 0);
+            ux_seg_cmd(u, i, &cancel, hdr_us);
         }
         ux_seg_cmd(u, 0, &f, hdr_us);
     } else {
@@ -363,6 +378,16 @@ uint32_t udfx_config(udfx_t *u, uint32_t id, uint32_t v)
             return 0;
         }
         break;
+    case ULTRA_CFG_PX_LINE_MODE:
+        if (v > ULTRA_PXLM_CHAIN) {
+            return 0;
+        }
+        break;
+    case ULTRA_CFG_PX_SMOOTH:
+        if (v > ULTRA_PXS_OFF) {
+            return 0;
+        }
+        break;
     default:
         break;
     }
@@ -373,6 +398,9 @@ uint32_t udfx_config(udfx_t *u, uint32_t id, uint32_t v)
     u->save_due = 1;
     u->save_ms = u->ms;
     u->dark = u->black_sent = 0;
+    if (id == ULTRA_CFG_PX_LINE_MODE || id == ULTRA_CFG_PX_SMOOTH) {
+        return 1;                                        /* (the glue, udchain, reads the line mode each ms; the smoothing is read at each frame) */
+    }
     if (id <= ULTRA_CFG_PX_FPS || id == ULTRA_CFG_PX_WHITE) {
         u->reconf = 1;                                   /* the tables / encoder / pool: leave and re-enter local */
     } else if (id == ULTRA_CFG_PX_VOFFSET || id == ULTRA_CFG_PX_VLENGTH) {
@@ -386,25 +414,60 @@ uint32_t udfx_config(udfx_t *u, uint32_t id, uint32_t v)
 static uint32_t ux_frame_begin(udfx_t *u)
 {
     ws_enc_t *e = &u->e;
-    uint32_t i, host, nw, now_ms, m;
+    uint32_t i, host, nw, now_ms;
     if (u->period_us != 0u) {                            /* on the host grid: frame k at host time k x P */
         nw = e->next_w;
         host = udfx_host_us(u, nw);
-        host = (host + u->period_us / 2u) / u->period_us * u->period_us;
+        {                                               /* round without overflowing before the division at host-us wrap */
+            const uint32_t rem = host % u->period_us;
+            host = host - rem + (rem >= (u->period_us + 1u) / 2u ? u->period_us : 0u);
+        }
     } else {
         nw = e->w + (e->low_w < e->reset_w ? e->reset_w - e->low_w : 0u);
         host = udfx_host_us(u, nw);
     }
-    now_ms = ux_ms(u, host);
-    if (u->rebegin) {
-        u->rebegin = 0;
-        ux_reapply(u, now_ms);
+    {                                                    /* the output step (CONFIG 141): AUTO dithers from 50 frames a second; the phase is the host frame index */
+        const uint32_t s = ux_cfg_get(u, ULTRA_CFG_PX_SMOOTH);
+        const uint32_t fast = u->period_us != 0u ? u->period_us <= 1000000u / ULTRA_PXS_AUTO_FPS : u->fps10 >= 10u * ULTRA_PXS_AUTO_FPS;
+        u->pack.smooth = (uint8_t)(s == ULTRA_PXS_OFF ? FX_SM_8BIT : s == ULTRA_PXS_ROUND ? FX_SM_ROUND : (s == ULTRA_PXS_DITHER || fast) ? FX_SM_DITHER : FX_SM_ROUND);
+        u->pack.phase = fx_dither_phase(u->period_us != 0u ? host / u->period_us : u->frames_done);
+        u->pack.dmin = (uint8_t)(s == ULTRA_PXS_AUTO ? ULTRA_PXS_AUTO_MIN_LEVEL : 0u);
     }
-    fx_engine_frame(&u->eng, now_ms);
+    now_ms = ux_ms(u, host);
+    if (u->stream_pending) {
+        u->stream_pending = 0;
+        ux_stream(u);
+        if (!u->chain) {
+            return 0;
+        }
+    }
+    for (i = 0; i < UX_SEGS; i++) {
+        ux_seg_t *s = &u->seg[i];
+        s->apply = (uint8_t)(u->rebegin && s->run ? 2 : 0);
+        if (ux_due(s, host, now_ms)) {
+            s->p = s->pend;
+            s->anchor = (uint32_t)s->pend.start_ms;
+            s->pend_have = 0;
+            s->apply = 1;
+        }
+    }
+    u->rebegin = 0;
+    u->eng.now = now_ms;
+    u->rendered = 0;
+    u->begun = 2;                                       /* freeze commands together, then prepare them in bounded steps */
+    return 1;
+}
+
+static uint32_t ux_frame_ready(udfx_t *u)
+{
+    uint32_t i, m;
+    /* The 400 kHz exact encoder leaves less main-loop time during chain bursts. */
+    u->chunk = (uint8_t)(fx_engine_heavy(&u->eng) ? (u->lut.fast ? UX_CHUNK_HEAVY : 2u) : UX_CHUNK);
     u->frame_dark = (uint8_t)fx_engine_dark(&u->eng);
     if (u->frame_dark) {
         if (u->black_sent) {
             u->dark = 1;
+            u->begun = 0;
             u->dark_at = u->ms;
             return 0;
         }
@@ -422,7 +485,6 @@ static uint32_t ux_frame_begin(udfx_t *u)
     u->pack.white_mode = (uint8_t)m;
     u->fsum = 0;
     u->rendered = 0;
-    u->begun = 1;
     return 1;
 }
 
@@ -449,7 +511,7 @@ static void ux_limit(udfx_t *u)
         }
     }
     if (u->meas_ma != 0u && u->meas_ma > lim) {         /* measured over the limit: trim */
-        u->cl_q8 = (uint16_t)(u->cl_q8 - u->cl_q8 / 16u);
+        u->cl_q8 = (uint16_t)(u->cl_q8 - (u->cl_q8 + 15u) / 16u);
         if (u->cl_q8 < 8u) {
             u->cl_q8 = 8;
         }
@@ -461,28 +523,68 @@ static void ux_limit(udfx_t *u)
     }
 }
 
+static uint32_t ux_prepare(udfx_t *u)
+{
+    if (!u->begun) {
+        return ux_frame_begin(u);                    /* snapshot, commands and prep have separate steps */
+    }
+    while (u->begun <= UX_SEGS + 1u) {
+        const uint32_t si = u->begun - 2u;
+        ux_seg_t *s = &u->seg[si];
+        if (s->apply) {
+            ultra_pixel_fx_t f = s->p;
+            if (s->apply == 2u) f.transition_ms = 0;
+            ux_apply(u, si, &f, u->eng.now, s->anchor);
+            s->apply = 0;
+            return 1;
+        }
+        u->begun++;
+        if (fx_engine_dequeue(&u->eng, si, u->eng.now)) {
+            s->anchor = u->eng.seg[si].anchor;
+            return 1;
+        }
+    }
+    while (u->begun <= 2u * UX_SEGS + 1u) {
+        const uint32_t si = u->begun++ - UX_SEGS - 2u;
+        if (u->eng.seg[si].active) {
+            fx_engine_frame_seg(&u->eng, si, u->eng.now);
+            return 1;
+        }
+    }
+    u->begun = 1;
+    return ux_frame_ready(u);
+}
+
 uint32_t udfx_render(udfx_t *u)
 {
     ws_enc_t *e = &u->e;
     const uint32_t bpp = u->chip.bpp, npx = u->npx;
     uint32_t upto, n;
-    if (!u->local || u->want_stream || e->ready || u->dark || npx == 0u) {
+    const uint32_t ch = u->chunk;
+    if (!u->local || u->want_stream || u->pause_req || e->ready || u->dark || npx == 0u) {
         return 0;
     }
-    if (!u->begun && !ux_frame_begin(u)) {
-        return 0;
+    if (u->begun != 1u) {
+        return ux_prepare(u);
     }
     upto = e->state == WS_FRAME ? e->i / bpp : npx;      /* (bytes before e->i are in the ring: their pixels are free) */
     if (upto > npx) {
         upto = npx;
     }
     n = upto - u->rendered;
-    if (upto > u->rendered && (n >= UX_CHUNK || upto == npx)) {   /* (a chunk of 32 pixels, or what is left of the frame) */
+    if (upto > u->rendered && (n >= ch || upto == npx)) {   /* 32 pixels, Pacifica 4 (400 kHz: 2), or the frame's tail */
         rgb_t px[UX_CHUNK];
-        if (n > UX_CHUNK) {
-            n = UX_CHUNK;
+        if (n > ch) {
+            n = ch;
         }
+#ifdef UDFX_RENDER_PAD                                   /* a measurement build only (tools / the budget sweep): this many extra loop turns (3 cycles each) per render step */
+        {
+            uint32_t pad = UDFX_RENDER_PAD;
+            __asm__ volatile("1: addi %0, %0, -1\n bnez %0, 1b" : "+r"(pad));
+        }
+#endif
         fx_engine_render(&u->eng, px, u->rendered, u->rendered + n);
+        u->pack.px0 = (uint16_t)u->rendered;
         u->fsum += fx_pack(px, ux_pool + u->rendered * bpp, n, u->lim_bri, &u->pack);
         u->rendered += n;
         return 1;
@@ -492,6 +594,7 @@ uint32_t udfx_render(udfx_t *u)
         ux_limit(u);
         u->begun = 0;
         u->frames_done++;
+        UX_BARRIER();                                  /* all frame bytes precede the tick's ready flag */
         e->ready = 1;
     }
     return 0;
@@ -506,7 +609,7 @@ uint32_t udfx_flash_ok(const udfx_t *u)
 void udfx_service(udfx_t *u, const dline_t *d, uint32_t ms, uint32_t meas_ma, uint32_t vk_q8)
 {
     const uint32_t now_w = d->wpos;
-    uint32_t i, host, any_run = 0, quiet_ms;
+    uint32_t i, host, now_ms, any_run = 0, quiet_ms, request_local = u->want_local;
     u->ms = ms;
     u->meas_ma = (uint16_t)(meas_ma > 0xFFFFu ? 0xFFFFu : meas_ma);
     u->vk_q8 = (uint16_t)(vk_q8 > 0xFFFFu ? 0xFFFFu : vk_q8);
@@ -520,45 +623,58 @@ void udfx_service(udfx_t *u, const dline_t *d, uint32_t ms, uint32_t meas_ma, ui
     }
     host = udfx_host_us(u, now_w);
     ux_ms_advance(u, host);
+    now_ms = ux_ms(u, host);
+    if (!u->local && u->stream_pending) {
+        ux_stream(u);                                  /* already STREAM: no render can be in progress */
+        request_local = 0;
+    }
 
     for (i = 0; i < UX_SEGS; i++) {
         ux_seg_t *s = &u->seg[i];
-        if (s->pend_have && (int32_t)(host - s->pend_at) >= 0) {
-            const ultra_pixel_fx_t f = s->pend;
-            s->pend_have = 0;
-            ux_apply(u, i, &f, ux_ms(u, host), ux_ms(u, s->pend_at));
-            if (!u->local && u->npx != 0u) {
-                u->want_local = 1;
-            }
-        }
         any_run |= s->run;
+        if (!u->stream_pending && ux_due(s, host, now_ms)) {
+            any_run = 1;                                /* enter LOCAL; only the renderer applies the scene */
+            u->dark = 0;
+        }
     }
 
-    if (u->reconf) {                                     /* the chip / pixels / order / fps changed */
-        if (u->local) {
+    /* Finish frozen scene preparation before resetting the engine. */
+    if (u->reconf && u->begun <= 1u) {                    /* the chip / pixels / order / fps changed */
+        if (u->local && u->chain) {                      /* CHAIN: the encoder pauses in LOW (the tick), the tables change,
+                                                            it goes on at once: the ring is never the line's */
+            u->pause_req = 1;
+            if (u->paused) {
+                UX_BARRIER();                           /* the tick has finished using the old tables */
+                ux_derive(u);
+                u->reconf = 0;
+                u->begun = 0;
+                u->rebegin = 1;                             /* restore segments through the bounded frame-setup steps */
+                UX_BARRIER();                           /* new tables complete before the tick resumes */
+                u->pause_req = 0;                        /* (the tick starts the encoder again from where it is) */
+            }
+        } else if (u->local) {
             u->want_stream = 1;
         } else {
             ux_derive(u);
             u->reconf = 0;
             u->begun = 0;
-            ux_reapply(u, ux_ms(u, host));
+            u->rebegin = 1;                             /* restore segments through the bounded frame-setup steps */
             if (any_run && u->npx != 0u) {
                 u->want_stream = 0;
-                u->want_local = 1;
+                request_local = 1;
             }
         }
     }
 
     /* the standalone policy: the stored effect when the line stays quiet from power-up / goes quiet */
     quiet_ms = (d->wpos - d->edge_w) / DLINE_W_PER_MS;
-    if (!u->local && !u->want_local && u->stored_have && u->npx != 0u && !any_run) {
+    if ((!u->local || u->chain) && !request_local && u->stored_have && u->npx != 0u && !any_run) {
         const uint32_t pol = ux_cfg_get(u, ULTRA_CFG_PX_POLICY), lt = ux_cfg_get(u, ULTRA_CFG_PX_LOSS_TIMEOUT);
         const uint32_t loss_ms = (lt != 0u ? lt : 30u) * 100u;
         const uint32_t never_seen = d->st.frames == 0u && d->st.marks == 0u;
         if (((pol & ULTRA_PXP_POWER_ON) && never_seen && quiet_ms >= UX_POWER_ON_MS && ms >= UX_POWER_ON_MS) ||
             ((pol & ULTRA_PXP_ON_LOSS) && !never_seen && quiet_ms >= loss_ms)) {
             uint32_t k;
-            const uint32_t now_ms = ux_ms(u, host);
             for (k = 0; k < UX_SEGS; k++) {
                 if (u->stored_have & (1u << k)) {
                     ultra_pixel_fx_t f = u->stored[k];
@@ -566,30 +682,31 @@ void udfx_service(udfx_t *u, const dline_t *d, uint32_t ms, uint32_t meas_ma, ui
                     if (f.transition_ms < UX_FADE_IN_MS) {
                         f.transition_ms = UX_FADE_IN_MS;
                     }
-                    ux_apply(u, k, &f, now_ms, now_ms);
+                    ux_seg_cmd(u, k, &f, host);
                 }
             }
             u->standalone = 1;
             u->lock = 0;
-            u->want_local = 1;
+            request_local = !u->local;
             u->frames_seen = d->st.frames;
         }
     }
-    if (u->local && !u->want_stream) {                   /* a plain stream takes the strip back (not locked) */
+    if (u->local && !u->want_stream && !u->chain && !u->undec) {   /* a plain stream takes the strip back (not locked; CHAIN: every
+                                                            Ultra frame would look like one, undecided: it may be) */
         if ((ux_cfg_get(u, ULTRA_CFG_PX_POLICY) & ULTRA_PXP_STREAM_WINS) && !u->lock &&
             d->st.frames - u->frames_seen >= 2u) {
-            ux_stream(u);
+            ux_queue_stream(u);
         }
     }
-    if (!u->local && !u->want_local) {
+    if (!u->local && !request_local) {
         u->frames_seen = d->st.frames;
     }
-    if (any_run && !u->local && !u->want_stream && !u->want_local && u->npx != 0u && !u->reconf) {
-        u->want_local = 1;
+    if (any_run && !u->local && !u->want_stream && !request_local && u->npx != 0u && !u->reconf) {
+        request_local = 1;
     }
 
     /* the first frame's start word (the grid), refreshed while a switch waits; the grid's phase while LOCAL */
-    if (u->want_local && !u->local) {
+    if (request_local && !u->local) {
         if (u->period_us != 0u) {
             const uint32_t start = host + u->chip.reset_w * 4u / 9u + 1000u;   /* a reset + 1 ms of margin */
             const uint32_t td = (start + u->period_us - 1u) / u->period_us * u->period_us;
@@ -597,6 +714,8 @@ void udfx_service(udfx_t *u, const dline_t *d, uint32_t ms, uint32_t meas_ma, ui
         } else {
             u->first_w = 0;
         }
+        UX_BARRIER();                                  /* publish the grid word before the tick can take LOCAL */
+        u->want_local = 1;
     }
     if (u->local && u->period_us != 0u && u->nudge == 0 && (ms & 15u) == 0u) {
         const uint32_t nw = u->e.next_w;
@@ -643,6 +762,23 @@ static uint32_t ux_need(udfx_t *u, uint32_t w, uint32_t ok)
     return (int32_t)(w - u->wait_w) >= (int32_t)UX_LATCH_WAIT_W ? DLINE_W_LATCH : u->latch_w;
 }
 
+/* the encoder takes the ring at word w: LOW from here (the first frame waits a whole reset and the grid) */
+static void ux_enter_local(udfx_t *u, dline_t *d, uint16_t *ring, uint32_t w)
+{
+    ws_enc_init(&u->e, &u->chip, ux_pool, u->npx, w, u->period_w);
+    if (u->period_w != 0u && (int32_t)(u->first_w - u->e.next_w) > 0) {
+        u->e.next_w = u->first_w;
+    }
+    u->begun = 0;
+    u->rendered = 0;
+    u->want_local = 0;
+    u->local = 1;
+    d->local = 1;
+    u->frames_seen = d->st.frames;                       /* (the hub's frames up to here are not a controller taking over) */
+    u->switches++;
+    (void)ws_ring_fill(&u->e, &u->lut, ring, w);
+}
+
 void udfx_tick(udfx_t *u, dline_t *d, uint16_t *ring)
 {
     const uint32_t w = d->wpos;
@@ -657,10 +793,18 @@ void udfx_tick(udfx_t *u, dline_t *d, uint16_t *ring)
             u->e.next_w += (uint32_t)u->nudge;
             u->nudge = 0;
         }
-        if (u->want_stream) {
+        if (u->paused && !u->pause_req) {                /* CHAIN: the main loop is done with the tables: the encoder goes on from where it is
+                                                            (before any fill: a frame it hands over now starts only after this) */
+            u->paused = 0;
+            ws_enc_init(&u->e, &u->chip, ux_pool, u->npx, u->e.w, u->period_w);
+        }
+        if (u->want_stream || u->pause_req) {
             u->e.ready = 0;                              /* no new frame: the one in progress ends */
         }
         (void)ws_ring_fill(&u->e, &u->lut, ring, w);
+        if (u->pause_req) {                              /* CHAIN, tables about to change: idle in LOW, a whole reset out */
+            u->paused = (uint8_t)(u->e.state == WS_LOW && u->e.low_w >= u->e.reset_w && u->e.w == w);
+        }
         if (u->want_stream && u->e.state == WS_LOW && u->e.low_w >= u->e.reset_w && u->e.w == w &&
             dline_low_run(d) >= ux_need(u, w, 1u)) {
             u->wait_on = 0;
@@ -670,27 +814,40 @@ void udfx_tick(udfx_t *u, dline_t *d, uint16_t *ring)
             u->begun = 0;
             u->switches++;
         }
-    } else if (u->want_local && !u->want_stream && u->npx != 0u && !d->direct && !d->rec &&
+    } else if (u->chain && d->ch_enter == 2u) {         /* CHAIN at boot: dline zeroed the ring and switched the mux, BLANK_N is
+                                                            still held: the encoder takes the ring now (the strip line stays LOW) */
+        d->ch_enter = 0;
+        ux_enter_local(u, d, ring, w);
+    } else if (u->want_local && !u->want_stream && (u->npx != 0u || u->chain) && !d->direct && !d->rec &&
                dline_low_run(d) >= ux_need(u, w, 1u)) {
         u->wait_on = 0;
-        ws_enc_init(&u->e, &u->chip, ux_pool, u->npx, w, u->period_w);
-        if (u->period_w != 0u && (int32_t)(u->first_w - u->e.next_w) > 0) {
-            u->e.next_w = u->first_w;
-        }
-        u->begun = 0;
-        u->rendered = 0;
-        u->want_local = 0;
-        u->local = 1;
-        d->local = 1;
-        u->frames_seen = d->st.frames;                   /* (the hub's frames up to here are not a controller taking over) */
-        u->switches++;
-        (void)ws_ring_fill(&u->e, &u->lut, ring, w);
+        ux_enter_local(u, d, ring, w);
+    }
+}
+
+/* CHAIN on / off from the main loop. Off: the usual way back to the stream (at a latch); on: dline has taken the ring
+ * (dline_ch_start) or the encoder follows at a latch of the incoming line */
+void udfx_chain(udfx_t *u, uint32_t mode)
+{
+    const uint32_t on = mode == 1u;
+    u->chain = (uint8_t)on;
+    u->undec = (uint8_t)(mode == 2u);
+    if (mode == 2u) {
+        return;
+    }
+    if (on) {
+        u->want_stream = 0;
+        u->want_local = (uint8_t)!u->local;
+    } else {
+        u->pause_req = 0;
+        ux_queue_stream(u);                              /* STREAM again: no effect runs (the hub starts one with PIXEL_FX), the encoder hands
+                                                            the strip back at a latch */
     }
 }
 
 /* ------------------------------------------------------------------------------------------------ the record */
-/* 128 bytes: magic (2), version (1), segments (1), seq (4), the eleven values (22), four segments of 23 bytes (92: the
- * PIXEL_FX fields but its START; effect 0 = none), the stored mask (1), 3 spare, the CRC-16 (never an erased value) */
+/* 128 bytes: magic (2), version (1), segments (1), seq (4), the twelve values (24), four segments of 23 bytes (92: the
+ * PIXEL_FX fields but its START; effect 0 = none), the stored mask (1), 1 spare, the CRC-16 (never an erased value) */
 static uint32_t ux_erased(uint32_t c)
 {
     return c == 0xFFFFu || c == 0xE339u;
@@ -720,14 +877,16 @@ void udfx_rec_pack(const udfx_t *u, uint32_t seq, uint8_t *r)
         r[i] = 0;
     }
     ux_put(r, UX_REC_MAGIC, 2);
-    r[2] = 1;
+    r[2] = UX_REC_FORMAT;
     r[3] = UX_SEGS;
     ux_put(r + 4, seq, 4);
-    for (i = 0; i < ULTRA_CFG_PX_COUNT; i++) {
+    for (i = 0; i < UX_REC_SLOTS; i++) {
         ux_put(r + 8u + 2u * i, u->cfg[i], 2);
     }
+    ux_put(r + 8u + 2u * (UX_REC_SLOTS - 1u), (uint32_t)(u->cfg[ULTRA_CFG_PX_LINE_MODE - ULTRA_CFG_PX_FIRST] & 0xFFu) |
+           (uint32_t)(u->cfg[ULTRA_CFG_PX_SMOOTH - ULTRA_CFG_PX_FIRST] & 0xFFu) << 8, 2);
     for (i = 0; i < UX_SEGS; i++) {
-        uint8_t *q = r + 30u + 23u * i;
+        uint8_t *q = r + UX_REC_SEG0 + 23u * i;
         const ultra_pixel_fx_t *f = &u->stored[i];
         q[0] = f->effect;
         q[1] = f->speed;
@@ -744,9 +903,9 @@ void udfx_rec_pack(const udfx_t *u, uint32_t seq, uint8_t *r)
         q[21] = f->custom1;
         q[22] = f->custom2;
     }
-    r[122] = u->stored_have;
+    r[UX_REC_MASK] = u->stored_have;
     do {
-        r[123]++;                                        /* (a CRC that would read erased: one more spare count) */
+        r[UX_REC_MASK + 1u]++;                                        /* (a CRC that would read erased: one more spare count) */
         c = ultra_crc16(r, UX_REC_BYTES - 2u);
     } while (ux_erased(c));
     ux_put(r + UX_REC_BYTES - 2u, c, 2);
@@ -755,7 +914,7 @@ void udfx_rec_pack(const udfx_t *u, uint32_t seq, uint8_t *r)
 int udfx_rec_valid(const uint8_t *r)
 {
     const uint32_t c = ux_get(r + UX_REC_BYTES - 2u, 2);
-    return ux_get(r, 2) == UX_REC_MAGIC && r[2] == 1u && r[3] == UX_SEGS && !ux_erased(c) &&
+    return ux_get(r, 2) == UX_REC_MAGIC && r[2] == UX_REC_FORMAT && r[3] == UX_SEGS && !ux_erased(c) &&
            c == ultra_crc16(r, UX_REC_BYTES - 2u);
 }
 
@@ -763,11 +922,13 @@ void udfx_load(udfx_t *u, const uint8_t *r)
 {
     uint32_t i, k;
     u->rec_seq = ux_get(r + 4, 4);
-    for (i = 0; i < ULTRA_CFG_PX_COUNT; i++) {
+    for (i = 0; i < UX_REC_SLOTS; i++) {
         u->cfg[i] = (uint16_t)ux_get(r + 8u + 2u * i, 2);
     }
+    u->cfg[ULTRA_CFG_PX_SMOOTH - ULTRA_CFG_PX_FIRST] = (uint16_t)(u->cfg[ULTRA_CFG_PX_LINE_MODE - ULTRA_CFG_PX_FIRST] >> 8);
+    u->cfg[ULTRA_CFG_PX_LINE_MODE - ULTRA_CFG_PX_FIRST] &= 0xFFu;
     for (i = 0; i < UX_SEGS; i++) {
-        const uint8_t *q = r + 30u + 23u * i;
+        const uint8_t *q = r + UX_REC_SEG0 + 23u * i;
         ultra_pixel_fx_t *f = &u->stored[i];
         f->effect = q[0];
         f->speed = q[1];
@@ -785,7 +946,7 @@ void udfx_load(udfx_t *u, const uint8_t *r)
         f->custom2 = q[22];
         f->start_ms = 0;
     }
-    u->stored_have = r[122];
+    u->stored_have = r[UX_REC_MASK];
     ux_derive(u);
     u->save_due = 0;
 }
@@ -798,7 +959,7 @@ void udfx_rec_saved(udfx_t *u)
 /* ------------------------------------------------------------------------------------------------ page 0x81 */
 int udfx_page(const udfx_t *u, uint32_t part, uint8_t *d)
 {
-    uint32_t i;
+    uint32_t i, run = 0;
     if (part == ULTRA_PXG_PART_STATE) {
         ultra_put16(d + ULTRA_PXG_CATALOGUE, UX_CATALOGUE_VERSION);
         d[ULTRA_PXG_EFFECTS] = (uint8_t)FX_LAST;
@@ -806,11 +967,14 @@ int udfx_page(const udfx_t *u, uint32_t part, uint8_t *d)
         d[ULTRA_PXG_CHIPS] = (uint8_t)ULTRA_PXC_COUNT;
         d[ULTRA_PXG_SEGMENTS] = (uint8_t)UX_SEGS;
         ultra_put16(d + ULTRA_PXG_MAX_PIXELS, u->max_px);
-        d[ULTRA_PXG_MODE] = (uint8_t)(u->local ? (u->standalone ? ULTRA_PXM_STANDALONE : ULTRA_PXM_LOCAL) : ULTRA_PXM_STREAM);
         for (i = 0; i < UX_SEGS; i++) {
             d[ULTRA_PXG_RUNNING + i] = u->seg[i].run ? u->seg[i].p.effect : 0u;
             d[ULTRA_PXG_SEQ + i] = (u->seq_have & (1u << i)) ? u->seq5[i] : 0u;
+            run |= u->seg[i].run;
         }
+        /* (CHAIN with no effect running is the strip dark: STREAM, nothing runs) */
+        d[ULTRA_PXG_MODE] = (uint8_t)(u->local && (run || !u->chain) ? (u->standalone ? ULTRA_PXM_STANDALONE : ULTRA_PXM_LOCAL)
+                                                                      : ULTRA_PXM_STREAM);
         ultra_put16(d + ULTRA_PXG_FPS10, u->fps10);
         d[ULTRA_PXG_LOAD] = u->load;
         d[ULTRA_PXG_LIMIT] = u->lim_bri;

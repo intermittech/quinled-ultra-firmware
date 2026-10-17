@@ -9,16 +9,26 @@
 
 #if defined(__GNUC__)
 #define FX_NOINL __attribute__((noinline))
-#define FX_INL   static inline __attribute__((always_inline))   /* (the hot per-pixel helpers: -Os would call them) */
+#define FX_AI    static inline __attribute__((always_inline))   /* (forced: Pacifica's per-pixel helpers, -Os would call them) */
+#define FX_INL   static inline                                    /* (the compiler's choice: -Os shares them, which is smaller) */
 #else
 #define FX_NOINL
+#define FX_AI    static inline
 #define FX_INL   static inline
 #endif
 
 extern const uint16_t fx_qsin16[66];
-extern const uint16_t fx_asin_recip[64];
 
+#ifdef FX_SAT_CHECK                                   /* host tests only: counts the scalings that would wrap (s or i over 255) */
+extern uint32_t fx_sat_over;
+static inline uint8_t fx_scale8(uint32_t i, uint32_t s)
+{
+    fx_sat_over += (i > 255u || s > 255u);
+    return (uint8_t)((i * (s + 1u)) >> 8);
+}
+#else
 static inline uint8_t fx_scale8(uint32_t i, uint32_t s) { return (uint8_t)((i * (s + 1u)) >> 8); }   /* s 255: i */
+#endif
 static inline uint8_t fx_qadd8(uint32_t a, uint32_t b) { a += b; return (uint8_t)(a > 255u ? 255u : a); }
 static inline uint8_t fx_qsub8(uint32_t a, uint32_t b) { return (uint8_t)(a > b ? a - b : 0u); }
 static inline uint8_t fx_u8(uint32_t v) { return (uint8_t)(v > 255u ? 255u : v); }
@@ -39,16 +49,17 @@ static inline void fx_put(rgb_t *o, rgb_t c)         /* (field stores: -Os turns
     o->b = c.b;
 }
 
-FX_INL rgb_t fx_scale_rgb(rgb_t c, uint32_t s)
+FX_AI rgb_t fx_scale_rgb_ai(rgb_t c, uint32_t s)
 {
     c.r = fx_scale8(c.r, s);
     c.g = fx_scale8(c.g, s);
     c.b = fx_scale8(c.b, s);
     return c;
 }
+FX_INL rgb_t fx_scale_rgb(rgb_t c, uint32_t s) { return fx_scale_rgb_ai(c, s); }
 
 /* a -> b by f (0..255): f 0 is a, f 255 is b exactly */
-FX_INL rgb_t fx_blend(rgb_t a, rgb_t b, uint32_t f)
+FX_AI rgb_t fx_blend_ai(rgb_t a, rgb_t b, uint32_t f)
 {
     const int32_t g = (int32_t)(f + (f >> 7));       /* 0..256 */
     rgb_t o;
@@ -57,23 +68,25 @@ FX_INL rgb_t fx_blend(rgb_t a, rgb_t b, uint32_t f)
     o.b = (uint8_t)(a.b + (((int32_t)b.b - a.b) * g >> 8));
     return o;
 }
+FX_INL rgb_t fx_blend(rgb_t a, rgb_t b, uint32_t f) { return fx_blend_ai(a, b, f); }
 
 FX_INL uint8_t fx_lerp8(uint32_t a, uint32_t b, uint32_t f)   /* a -> b by f 0..255 */
 {
     return (uint8_t)((int32_t)a + (((int32_t)b - (int32_t)a) * (int32_t)(f + (f >> 7)) >> 8));
 }
 
-FX_INL rgb_t fx_add_sat(rgb_t a, rgb_t b)
+FX_AI rgb_t fx_add_sat_ai(rgb_t a, rgb_t b)
 {
     a.r = fx_qadd8(a.r, b.r);
     a.g = fx_qadd8(a.g, b.g);
     a.b = fx_qadd8(a.b, b.b);
     return a;
 }
+FX_INL rgb_t fx_add_sat(rgb_t a, rgb_t b) { return fx_add_sat_ai(a, b); }
 
 /* ------------------------------------------------------------------------------- sine and beats (fx_math.c) */
 int32_t  fx_sin16(uint32_t th);                      /* th: 65536 = a turn; -32767 .. 32767 */
-FX_INL int32_t fx_sin16_i(uint32_t th)               /* the same, inline (a hot per-pixel loop) */
+FX_AI int32_t fx_sin16_i(uint32_t th)               /* the same, inline (a hot per-pixel loop) */
 {
     uint32_t r = th & 0x3FFFu;
     int32_t v;
@@ -137,16 +150,22 @@ uint8_t  fx_nz1(fx_nz1_t *z, uint32_t x8);
 
 /* ------------------------------------------------------------------------------- palettes and colour */
 rgb_t    fx_pal_at(const rgb_t *pal, uint32_t idx16);   /* circular: 0..65535 round the 16 entries */
-FX_INL rgb_t fx_pal_at_i(const rgb_t *pal, uint32_t idx16)   /* the same, inline */
+FX_AI rgb_t fx_pal_at_i(const rgb_t *pal, uint32_t idx16)   /* the same, inline */
 {
     const uint32_t e = (idx16 >> 12) & 15u;
-    return fx_blend(pal[e], pal[(e + 1u) & 15u], (idx16 >> 4) & 255u);
+    return fx_blend_ai(pal[e], pal[(e + 1u) & 15u], (idx16 >> 4) & 255u);
 }
 rgb_t    fx_pal_lin(const rgb_t *pal, uint32_t idx8);   /* non-wrapping: 0..255 = entry 0 .. entry 15 */
 rgb_t    fx_hue(uint32_t h);                           /* full saturation and value, h 0..255 round the wheel */
 rgb_t    fx_sat(rgb_t c, uint32_t s);                  /* toward white: s 255 keeps the colour */
 
-extern const rgb_t fx_pals[PAL_COUNT][16];
+extern const uint16_t fx_pals565[PAL_COUNT][16];
+FX_INL rgb_t fx_unpack565(uint32_t v)                  /* RGB565 -> 8 bits per channel, the top bits replicated (31 -> 255) */
+{
+    const uint32_t r = v >> 11, g = (v >> 5) & 63u, b = v & 31u;
+    return fx_rgb((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2));
+}
+rgb_t    fx_pal_entry(uint32_t id, uint32_t k);        /* entry k of built-in palette id (ids >= PAL_COUNT: palette 0) */
 extern const rgb_t fx_pal_pacifica[3][16];
 
 #endif

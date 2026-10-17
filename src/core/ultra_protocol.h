@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT
  * Copyright (C) 2026 QuinLED
  *
- * QuinLED Ultra protocol 0.2 (wire VERSION 2), this file: release 0.2.8 (CHANGELOG.md). Shared by the
+ * QuinLED Ultra protocol 0.2 (wire VERSION 2), this file: release 0.2.9 (CHANGELOG.md). Shared by the
  * board firmware (C) and the controllers (C / C++).
  * Master: include/ultra_protocol.h in https://github.com/intermittech/quinled-ultra-protocol (spec in its wiki).
  * Every copy (board firmware, ESPHome component, other controllers) must be byte-identical to one tagged release
@@ -115,7 +115,11 @@ enum {
  * with the shared clock's measured rate). During the window the forwarding gate is held CLOSED (DOUT LOW, not high-Z):
  * DIN sees the relayed answers, and a re-armed plan would forward them downstream. Host: no RW frame before the chain
  * is locked (after the DARK preamble) and has sent headers for ULTRA_RW_LOCK_MS, none during an update session, never
- * with UPD, and never with EXT (until an extension defines it). In one RW frame every POLL carries the same R and rate;
+ * with UPD, and never with EXT (until an extension defines it). On a normal Ultra line the host drives the line LOW from t0 for at least
+ * ULTRA_RW_RELEASE_MIN_US and has stopped driving by t0 + ULTRA_RW_RELEASE_US; the pair then floats HIGH (the receivers' fail-safe) until a
+ * board answers or the host takes the line back. A board that closes a frame by its LOW run (the Ultra-Digital receiver on a normal Ultra line,
+ * alone on it) needs that LOW: 2 us between the last pulse and the release HIGH is no frame end for it. (A digital port: below.) In one RW
+ * frame every POLL carries the same R and rate;
  * the answer indices are unique, < R and rise along the chain, and the boards between the hub and an answering board
  * get ULTRA_POLL_RELAY_ONLY. Behind the last board that answers or relays, the slots may be of any type (those boards
  * don't take part and don't turn around). The next frame >= W + ULTRA_RW_HOLDOFF_US after t0, answers or not; a missing
@@ -134,7 +138,8 @@ enum {
  * a framing error or a CRC failure (ultra_answer_check). */
 #define ULTRA_POLL_RELAY_ONLY 0xFFu    /* POLL index: relay, don't answer (the page and its arguments are ignored) */
 #define ULTRA_RW_MAX_SLOTS    16u      /* INDEX is a nibble in the answer */
-#define ULTRA_RW_RELEASE_US   150u     /* host / sender has stopped driving */
+#define ULTRA_RW_RELEASE_US   150u     /* host / sender has stopped driving (at the latest) ... */
+#define ULTRA_RW_RELEASE_MIN_US 60u    /* ... and not before this (a normal Ultra line): LOW from the RW frame's last falling edge for at least this long (the aim: +20 us) */
 #define ULTRA_RW_DIR_MIN_US   250u     /* boards turn around between MIN and MAX */
 #define ULTRA_RW_DIR_MAX_US   900u
 #define ULTRA_RW_CHECK_US     920u     /* the turnaround check, 920-977 us (after DIR_MAX, before slot 0) */
@@ -229,8 +234,9 @@ enum {
     ULTRA_PAGE_HW = 0x80,              /* 0x0F-0x7F: future official pages; 0x80-0xFD: hardware-specific, by hardware id
                                           (hardware 3, the Ultra-Digital receiver: 0x80 PIXEL, its pixel statistics, and
                                           0x81 PIXEL_FX, its local effects (ULTRA_PXG_* below); its firmware's wiki) */
-    ULTRA_PAGE_HW_FX = 0x81,           /* hardware 3: PIXEL_FX, in three parts (POLL argument 0: 0 = state, 1 = the
-                                          effects it has, 2 = its palettes; 3-255: UNSUPPORTED) (ULTRA_PXG_*) */
+    ULTRA_PAGE_HW_FX = 0x81,           /* hardware 3: PIXEL_FX, in four parts (POLL argument 0: 0 = state, 1 = the
+                                          effects it has, 2 = its palettes, 3 = the line (stream / chain mode); 4-255:
+                                          UNSUPPORTED) (ULTRA_PXG_*, ULTRA_PXL_*) */
     ULTRA_PAGE_BUSY = 0xFE, ULTRA_PAGE_UNSUPPORTED = 0xFF,
 };
 /* IDENTITY page DATA, two parts (POLL argument 0 = ULTRA_ID_PART_*, 2-255: UNSUPPORTED). A host reads both at
@@ -266,9 +272,13 @@ enum {
 #define ULTRA_HWCAP_PIXEL         0x00000040u  /* a pixel delay line on a digital port (the Ultra-Digital
                                                   receiver): polled behind a marker (ULTRA_DP_* above), one per port */
 #define ULTRA_HWCAP_PIXEL_FX      0x00000080u  /* runs local pixel effects (the Ultra-Digital receiver): PIXEL_FX,
-                                                  CONFIG 129-139, page 0x81 (ULTRA_PX_* below) */
+                                                  CONFIG 129-141, page 0x81 (ULTRA_PX_* below) */
+#define ULTRA_HWCAP_CHAIN         0x00000100u  /* runs on a normal Ultra line, behind a marker-less chain of boards
+                                                  (the Ultra-Digital receiver's chain mode: CONFIG 140, page 0x81 part 3,
+                                                  ULTRA_PXL_* below); the capability sets 0x01CD without RELAY: this
+                                                  firmware answers as the last board of a chain and does not forward */
 /*      0x00000020                reserved
- *      0x00000100-0x80000000     reserved: later official capabilities */
+ *      0x00000200-0x80000000     reserved: later official capabilities */
 /* STATUS page DATA (wiki: Return channel), the fields the firmware measures already (console `status`):
  * the MCU (die) temperature from the CH32V203's internal sensor, int16 0.1 C, ULTRA_ST_NA = not valid (no good
  * conversion yet, or 5 bad ones in a row; core/mcutemp.h), and the 3.3 V rail from VREFINT, mV (0 = not known).
@@ -663,8 +673,8 @@ enum {
     /* hardware 3 (the Ultra-Digital receiver): the local pixel effects' settings, all persisted (ULTRA_PX_* below) */
     ULTRA_CFG_PX_CHIP = 129,           /* the strip's chip (ULTRA_PXC_*): its timing, bytes per pixel and colour order */
     ULTRA_CFG_PX_ORDER = 130,          /* the wire order of the channels (ULTRA_PX_ORDER; 0 = the chip's own) */
-    ULTRA_CFG_PX_PIXELS = 131,         /* pixels on the strip (0 = none yet: no local effect runs) */
-    ULTRA_CFG_PX_FPS = 132,            /* frames per second at most (0 = as many as the line allows) */
+    ULTRA_CFG_PX_PIXELS = 131,         /* pixels on the strip (0 = none); clamped to ULTRA_PX_MAX_* by chip format */
+    ULTRA_CFG_PX_FPS = 132,            /* frames per second at most (default 60; 0 = as many as the line allows) */
     ULTRA_CFG_PX_MA_CH = 133,          /* LED current of one channel at 255, 0.1 mA, at the strip's supply (0 = 20 mA): the
                                           limiter's estimate */
     ULTRA_CFG_PX_LIMIT_MA = 134,       /* the limit of the receiver's bus-side input current, mA, as it measures and reports
@@ -676,8 +686,18 @@ enum {
     ULTRA_CFG_PX_VLENGTH = 137,        /* ... the virtual strip's length (0 = this strip alone) */
     ULTRA_CFG_PX_POLICY = 138,         /* standalone behaviour (ULTRA_PXP_*) */
     ULTRA_CFG_PX_LOSS_TIMEOUT = 139,   /* x 100 ms with no pixel frame and no marker = signal loss, 5..600 (0 = 30) */
+    ULTRA_CFG_PX_LINE_MODE = 140,      /* what the line carries (ULTRA_PXLM_*): 0 AUTO (the default: the board decides once per
+                                          power-up from what it sees), 1 STREAM (a pixel line: the hub's pixels pass, polls
+                                          behind markers), 2 CHAIN (a normal Ultra line: plain Ultra frames, the board takes
+                                          the first slot it sees; it only ever shows its own effects) */
+    ULTRA_CFG_PX_SMOOTH = 141,         /* pixel smoothing (ULTRA_PXS_*): how the receiver takes its colour to the strip's 8 bits. The 16-bit paths do the
+                                          gamma, the brightness and the auto-white at 16 bits and round at the end; a dither adds an ordered, stateless
+                                          threshold (host frame index and pixel index) first, so receivers on one grid make the same bytes and the average
+                                          over 256 frames is the 16-bit value. 0 AUTO (the default: 16 bits; at 50 frames a second or more it dithers the channels at
+                                          wire level 4 and up and rounds the dimmer ones, below 50 frames it rounds: ULTRA_PXS_AUTO_FPS and ULTRA_PXS_AUTO_MIN_LEVEL,
+                                          both bench items), 1 ROUND, 2 DITHER (all levels), 3 OFF (the 8-bit path of 0.6.12) */
     ULTRA_CFG_PX_FIRST = 129,
-    ULTRA_CFG_PX_COUNT = 11,           /* ids 129 .. 139 */
+    ULTRA_CFG_PX_COUNT = 13,           /* ids 129 .. 141 */
 };
 
 /* ----------------------------------------------------------------------------------- local pixel effects (hardware 3) */
@@ -711,6 +731,14 @@ enum {
  *   CUSTOM1, CUSTOM2  u8 each: the effect's extra sliders (the catalogue names them)
  */
 #define ULTRA_PX_SEGMENTS     4u
+/* Per Ultra-Digital receiver, by wire format; independent of the virtual strip's length.
+ * CONFIG keeps the requested count for its CRC; the effective count/page maximum is clamped.
+ * 60 fps is the nominal target, limited by complete wire frames plus reset. Higher requests
+ * (up to 1000) and explicit 0 (back to back) are allowed; neither shortens bits or reset. */
+#define ULTRA_PX_MAX_RGB      600u
+#define ULTRA_PX_MAX_RGBW     500u
+#define ULTRA_PX_MAX_RGBCCT   400u
+#define ULTRA_PX_DEFAULT_FPS  60u
 #define ULTRA_PX_EFFECT       3u
 #define ULTRA_PX_START        4u
 #define ULTRA_PX_SPEED        8u
@@ -729,7 +757,7 @@ enum {
 #define ULTRA_PX_FX_STREAM    0u       /* EFFECT 0 */
 #define ULTRA_PX_PAL_COLORS   0xFEu    /* PALETTE: c1 -> c2 -> c3 -> c1 */
 #define ULTRA_PX_PAL_DEFAULT  0xFFu    /* PALETTE: the effect's own */
-/* FLAGS. STORE: this segment's fields (not START and SEQ) and CONFIG 129-139 become the power-on / standalone effect
+/* FLAGS. STORE: this segment's fields (not START and SEQ) and CONFIG 129-141 become the power-on / standalone effect
  * (CONFIG 138); with EFFECT 0 the stored effect is cleared. The record is written only in stream mode or while the strip
  * is dark, never as a visible pause. LOCK: a plain pixel stream from the controller doesn't take the strip back
  * (otherwise, with ULTRA_PXP_STREAM_WINS, it does). RESTART: this slot is not a renewal of the running effect: the
@@ -794,7 +822,7 @@ enum {
 #define ULTRA_PXG_LOAD         19u     /* u8: the CPU load of the last second, 0.5 % steps (0-200) */
 #define ULTRA_PXG_LIMIT        20u     /* u8: the current limiter's brightness scale now, 255 = none */
 #define ULTRA_PXG_LATE         21u     /* u8: frames that started after their grid time (saturating) */
-#define ULTRA_PXG_CONFIG_CRC   22u     /* u16: ultra_px_config_crc over CONFIG 129-139 as the receiver has them */
+#define ULTRA_PXG_CONFIG_CRC   22u     /* u16: ultra_px_config_crc over CONFIG 129-141 as the receiver has them */
 /* part 1: bit (id & 7) of byte id >> 3 (ids 0-191) = the effect id is in the firmware's catalogue; part 2 the same for
  * the palettes */
 #define ULTRA_PXG_PART_STATE    0u
@@ -803,6 +831,55 @@ enum {
 #define ULTRA_PXM_STREAM        0u     /* the hub's pixels pass */
 #define ULTRA_PXM_LOCAL         1u     /* a PIXEL_FX effect runs */
 #define ULTRA_PXM_STANDALONE    2u     /* the stored effect runs (CONFIG 138: power-on, signal loss) */
+
+/* The line mode (ULTRA_HWCAP_CHAIN, CONFIG 140). STREAM is everything above: the board sits in a strip's data path on a
+ * pixel line and the hub's pixels pass through it. CHAIN is the board on a normal Ultra line (a Diff-Power port with
+ * Ultra-Analog receivers; ULTRA_HWCAP_RETURN boards behind one RS-485 pair): the line carries plain Ultra frames, N slots and
+ * the header trailer, no pixels and no markers; the board takes the first 256 bits it sees as its slot (position = chain
+ * order, as for every Ultra board), the strip is driven by its local effects only (PIXEL_FX, CONFIG, standalone), and a POLL
+ * is answered in the Ultra window (ULTRA_RW_FIRST_US + index x pitch after t0, no marker, no release). The effect clock is
+ * the header TIME of every frame. AUTO (the factory default) decides once per power-up, in RAM, with the strip held dark:
+ * two plain frames in a row whose header (MAGIC, VERSION, CRC-8) and length (256 x n + 64 bits, n >= 1) are right are CHAIN;
+ * a marker, or half a second of line activity that is no Ultra frame, are STREAM. Silence decides nothing (a hub may start
+ * late): after two seconds the strip is let go (the stored power-on effect may run, else it stays dark), the board stays
+ * undecided and the same evidence decides whenever it comes. A change of CONFIG 140 takes effect at once. Without a hardware gate (this firmware) the board answers as the LAST board of its line
+ * and does not forward: it is a chain end (n > 1 frames are counted, ULTRA_PXL_F_LONG). In CHAIN a pixel stream is no Ultra
+ * frame and is never shown (the strip keeps its effect or stays dark); the board counts it (ULTRA_PXL_F_NONULTRA) and shows it
+ * on its status LED. Marker frames (a digital-port hub) are still understood, so a
+ * hub on a digital port can reach a CHAIN board to set CONFIG 140 back. */
+#define ULTRA_PXS_AUTO          0u     /* CONFIG 141 values (pixel smoothing) */
+#define ULTRA_PXS_ROUND         1u
+#define ULTRA_PXS_DITHER        2u
+#define ULTRA_PXS_OFF           3u
+#define ULTRA_PXS_AUTO_FPS      50u    /* AUTO dithers from this frame rate (the frame grid's, or the measured one without a grid) */
+#ifndef ULTRA_PXS_AUTO_MIN_LEVEL
+#define ULTRA_PXS_AUTO_MIN_LEVEL 4u    /* ... and only a channel whose wire level is at least this (AUTO rounds the dimmer ones: a dither at the bottom flips a pixel between
+                                          levels 1 and 0 at the frame rate, a visible shimmer at low rates; at level 4 one step is at most 25 % of the light); 0 = every
+                                          channel (the packer's code for the level is then left out). Bench item, like the frame rate above
+                                          ROUND / DITHER ignore it */
+#endif
+#define ULTRA_PXLM_AUTO         0u     /* CONFIG 140 values */
+#define ULTRA_PXLM_STREAM       1u
+#define ULTRA_PXLM_CHAIN        2u
+/* page ULTRA_PAGE_HW_FX part 3, the line (24 bytes, big-endian) */
+#define ULTRA_PXG_PART_LINE     3u
+#define ULTRA_PXL_CONFIG        0u     /* u8: CONFIG 140 as stored (ULTRA_PXLM_*) */
+#define ULTRA_PXL_MODE          1u     /* u8: the mode in effect: 0 undecided (AUTO: no evidence yet; the strip is held for the first 2 s), 1 STREAM, 2 CHAIN */
+#define ULTRA_PXL_FLAGS         2u     /* u8: ULTRA_PXL_F_* */
+#define ULTRA_PXL_SLOTS         3u     /* u8: slots in the last Ultra frame ((bits - 64) / 256; 0 none; saturating) */
+#define ULTRA_PXL_FRAMES        4u     /* u16: Ultra frames with a right header and length since power-up (wraps) */
+#define ULTRA_PXL_NONULTRA      6u     /* u16: frames that are no Ultra frame (CHAIN or deciding: a pixel stream, noise; wraps) */
+#define ULTRA_PXL_LONG          8u     /* u16: Ultra frames of more than one slot (the board can not forward them; wraps) */
+#define ULTRA_PXL_WINDOWS       10u    /* u16: RW windows this board took part in (a valid POLL for it; wraps) */
+#define ULTRA_PXL_ANSWERS       12u    /* u16: ... answered (wraps) */
+#define ULTRA_PXL_MISSED        14u    /* u16: ... a POLL for this board that could not be answered in its slot (late, flash, the clock's rate not measured yet; wraps) */
+#define ULTRA_PXL_BITS          16u    /* u24: bits of the last Ultra frame */
+#define ULTRA_PXL_MARKERS       19u    /* u16: marker frames seen while CHAIN (a pixel-line hub talking to a chain board; wraps) */
+#define ULTRA_PXL_F_LOCKED      0x01u  /* CHAIN: a right Ultra frame within the last 2 s */
+#define ULTRA_PXL_F_NONULTRA    0x02u  /* a frame that is no Ultra frame was seen in this mode (cleared by a mode change) */
+#define ULTRA_PXL_F_LONG        0x04u  /* a frame of more than one slot was seen (not the last board of its line) */
+#define ULTRA_PXL_F_MARKERS     0x08u  /* marker frames seen while CHAIN */
+#define ULTRA_PXL_F_LIT         0x10u  /* the board is running a local effect */
 
 /* ----------------------------------------------------------------------------------------------- helpers */
 /* CRC-8/SMBus (poly 0x07, init 0) and CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF), a nibble at a time: 16-entry
@@ -1236,7 +1313,7 @@ static inline int ultra_pixel_fx_parse(const uint8_t *s, ultra_pixel_fx_t *f)
     return (int)light;
 }
 
-/* page 0x81's CONFIG CRC: ultra_crc16 over (id, value u16) of ids 129 .. 139 in order; values[k] = id 129 + k */
+/* page 0x81's CONFIG CRC: ultra_crc16 over (id, value u16) of ids 129 .. 141 in order; values[k] = id 129 + k */
 static inline uint16_t ultra_px_config_crc(const uint16_t *values)
 {
     uint8_t b[ULTRA_CFG_PX_COUNT * 3u];

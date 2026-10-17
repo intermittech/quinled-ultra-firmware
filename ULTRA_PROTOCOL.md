@@ -3,7 +3,7 @@
 **The specification** is the QuinLED Ultra protocol repository, intermittech/quinled-ultra-protocol: the header
 `include/ultra_protocol.h` with every constant and builder, `CHANGELOG.md`, the test vectors, and its wiki (frame
 layout, slot types, effects, CONFIG ids, the shared clock, the compatibility rules, the return channel, host
-behaviour). `src/core/ultra_protocol.h` here is a byte-identical copy (protocol 0.2.8, wire VERSION 2), and so is the
+behaviour). `src/core/ultra_protocol.h` here is a byte-identical copy (protocol 0.2.9, wire VERSION 2), and so is the
 ESPHome component's: its host test checks the two match. This file keeps only what is this firmware's own: what it
 implements, how it renders, and its firmware update frames.
 
@@ -22,8 +22,8 @@ implements, how it renders, and its firmware update frames.
   0x007FFFBF without bit 6, the update, in a standalone build), words 1-5 0. STATUS 3: the hardware id.
 - **QuinLED Diff-Power Ultra-Digital receiver** (`BOARD=3`, in development): a pixel port's delay line, polled
   behind a marker with the release-keyed window (the protocol wiki: Return channel, digital ports). The Ultra-Analog
-  receiver's pages it can fill, + 0x80 PIXEL; IDENTIFY 7. IDENTITY part 0: hardware id 3, capabilities 0x4D
-  (answers, bus voltage, input current, PIXEL; no relay), its features: [docs/ultradigital-firmware.md](docs/ultradigital-firmware.md)
+  receiver's pages it can fill, + 0x80 PIXEL; IDENTIFY 7. IDENTITY part 0: hardware id 3, capabilities 0x1CD
+  (answers, bus voltage, input current, PIXEL, local effects, chain mode; no relay), its features: [docs/ultradigital-firmware.md](docs/ultradigital-firmware.md)
   section 8.
 
 ## How it renders a SET (beyond the specification)

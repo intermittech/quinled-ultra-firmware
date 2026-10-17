@@ -32,6 +32,9 @@ ADC = 0x40012400
 TIMS = {T1: 5, T2: 1, T3: 3}                             # timer -> its PWM DMA channel
 CH = {"G": (T1, 1), "R": (T1, 2), "B": (T2, 4), "W2": (T3, 3), "W1": (T3, 4)}
 fails = 0
+# the receiver's answer UART (board.h ANSWER_UART; the ELF's build): its interrupt number, which flash_op masks and the
+# trap_entry fallback must reach
+RC_IRQ = {"1": 53, "2": 54, "3": 55}[os.environ.get("ANSWER_UART", "3")]
 
 
 def check(ok, msg):
@@ -425,7 +428,7 @@ def flash(elf):
     bad = []
     irq1 = (1 << 12) | (1 << 13) | (1 << 14)           # TIM2 / TIM3 / TIM4
     if "rc_uart_isr" in e.syms:
-        irq1 |= 1 << 23                                # the receiver (BOARD=2): its return channel's USART3 too
+        irq1 |= 1 << (RC_IRQ - 32)                     # the receiver (BOARD=2): its return channel's USART too
     for o in e.ops:
         k, a, s = o[0], o[1], o[2]
         if not s["irq_on"]:
@@ -588,9 +591,9 @@ def vectors(elf):
           % ("%08x" % mt if mt is not None else "not written", entry))
     handlers = {e.addr(f): f for f in ("poll_isr", "gate_isr", "slew2_isr", "slew3_isr")}
     want = {0x8000000C: "poll_isr", 0x8000002E: "gate_isr", 0x8000002C: "slew2_isr", 0x8000002D: "slew3_isr"}
-    if "rc_uart_isr" in e.syms:                          # (review r6) the receiver: USART3 (55) too, should VTF slot 1
-        handlers[e.addr("rc_uart_isr")] = "rc_uart_isr"  # not take it
-        want[0x80000037] = "rc_uart_isr"
+    if "rc_uart_isr" in e.syms:                          # (review r6) the receiver: its answer USART (USART3, 55, by default) too,
+        handlers[e.addr("rc_uart_isr")] = "rc_uart_isr"  # should VTF slot 1 not take it
+        want[0x80000000 | RC_IRQ] = "rc_uart_isr"
     bad = []
     # every exception code (0-11: the privileged spec's below the page faults; QingKe V4 has no MMU), every interrupt
     # number of the CH32V203 (0-69; above 63 the low 6 bits alias 0-5)
@@ -611,7 +614,7 @@ def vectors(elf):
         if got != want.get(cause) or (got is None and pc not in seen):
             bad.append("%08x -> %s" % (cause, got))
     check(not bad, "SysTick / TIM4 / TIM2 / TIM3%s to poll / gate / slew2 / slew3%s, the other %d causes to the loop %s"
-          % (" / USART3" if len(want) > 4 else "", " / rc_uart" if len(want) > 4 else "", 82 - len(want), bad[:4] or ""))
+          % (" / USART%d" % (RC_IRQ - 52) if len(want) > 4 else "", " / rc_uart" if len(want) > 4 else "", 82 - len(want), bad[:4] or ""))
 
 
 def ramtext(elf):

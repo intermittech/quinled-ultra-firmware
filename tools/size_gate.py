@@ -8,7 +8,8 @@ below, tools/measure.py's rows against a baseline, and the frozen record corpus 
 --out: the builds' folder (default build/size_gate); --no-build: use the builds already there. The builds
 (tools/build_target.sh; XW needs WCH_GCC_DIR, as there): the six release images (the Dig2Analog-Ultra app, the
 Ultra-Analog receiver, BOARD=2, and the Ultra-Digital receiver, BOARD=3, behind the bootloader: UPD_APP=1,
-vendor/wch/Link_app.ld; each XW and XW=0); with --measure / --write-measure the standalone image and its measurement
+vendor/wch/Link_app.ld; each XW and XW=0) and the receivers' answer UART settings (board.h ANSWER_UART: BOARD=2 and 3 with 2,
+BOARD=3 with 1; each XW and XW=0); with --measure / --write-measure the standalone image and its measurement
 twin (MEASURE=1; the app's twin doesn't fit the slot); with --corpus the measurement twins of the main board and the
 receiver.
 --measure <baseline>: tools/measure.py on the standalone image and its twin, each row's cycles against the baseline
@@ -25,23 +26,33 @@ FW = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".
 SLOT = 57088                        # the app slot (vendor/wch/Link_app.ld): .init + .text + .ramtext + .data
 RAM = 20480 - 2048                  # SRAM less the stack (__stack_size, vendor/wch/Link_sections.ld)
 
-# name, build variables, the least free slot bytes, the most RAM (.data + .bss + .noinit), the round-14 values. The
+# name, build variables, the least free slot bytes, the most RAM (.data + .bss + .noinit), the 0.6.12 values. The
 # floors: room for the next features, and the XW=0 fallback's goal of >= 1 KB (the generic compiler must keep fitting
 # every feature); RAM: the round-12 use + 64 B. The Ultra-Digital receiver's rows (the local pixel effects): Quindor's budget
 # decision 2026-10-17, "use the flash and RAM, but keep a few KB of flash free and 1 to 2 KB of RAM": the floors are 4 KB of
-# the slot (4,096 B, both compilers) and the SRAM total (UD_SRAM below) leaves 1.5 KB free beyond the stack. Measured with
-# the real effect engine (26 effects, 20 palettes, the packer): the engine ~16.2 KB of flash, the controller, encoder, glue
-# and page ~7 KB: 22.7 KB of the 36 KB the receiver had. RAM (.data + .bss): the frame buffer 3,480 B, the engine's state
-# 1,024 B, the controller 2.1 KB, the ring's guard 128: 12,044 B + 64 B. Lower a floor or raise a RAM limit only as a
-# decision, in this table.
+# the slot (4,096 B) on the XW build and, since the squeeze round (2026-10-17, Quindor), 2 KB (2,048 B) on the XW=0 fallback, and the SRAM total (UD_SRAM below) leaves 1.5 KB free beyond the stack. Measured with
+# the real effect engine (36 effects, 31 palettes, the packer): the engine ~19.2 KB of flash, the controller, encoder, glue
+# and page ~7 KB: 25.7 KB of the 36 KB the receiver had; the chain mode (docs/ultradigital-firmware.md section 12) +4.1 KB.
+# RAM (.data + .bss): the frame buffer 2,000 B (600 RGB / 500 RGBW / 400 RGBCCT pixels),
+# the engine's state 1,024 B, the controller 2.1 KB, the ring's guard 128: 10,696 B (limit 12,096 B). Lower a floor or
+# raise a RAM limit only as a decision, in this table.
 APP = ["UPD_APP=1"]
 BUDGET = [
     ("app", APP, 1, 3072, 17068, (3592, 17004)),
     ("app_xw0", APP, 0, 1024, 17068, (1932, 17004)),
     ("rx", APP + ["BOARD=2"], 1, 2560, 17052, (2956, 16988)),
     ("rx_xw0", APP + ["BOARD=2"], 0, 1024, 17052, (1248, 16988)),
-    ("ud", APP + ["BOARD=3"], 1, 4096, 12096, (13780, 12044)),
-    ("ud_xw0", APP + ["BOARD=3"], 0, 4096, 12096, (12556, 12044)),
+    ("ud", APP + ["BOARD=3"], 1, 4096, 12096, (4108, 10696)),
+    ("ud_xw0", APP + ["BOARD=3"], 0, 2048, 12096, (2600, 10696)),
+    # the answer UART's other settings (board.h ANSWER_UART; the same floors as their boards, so the pivot can't rot out of
+    # the budget): USART2 / PA2 on both receivers (the console's TX off, its text in a RAM ring: the buffers it replaces), USART1 / PA9 on the
+    # Ultra-Digital receiver
+    ("rx_au2", APP + ["BOARD=2", "ANSWER_UART=2"], 1, 2560, 17052, (3316, 16988)),
+    ("rx_au2_xw0", APP + ["BOARD=2", "ANSWER_UART=2"], 0, 1024, 17052, (1556, 16988)),
+    ("ud_au2", APP + ["BOARD=3", "ANSWER_UART=2"], 1, 4096, 12096, (4464, 10696)),
+    ("ud_au2_xw0", APP + ["BOARD=3", "ANSWER_UART=2"], 0, 2048, 12096, (2932, 10696)),
+    ("ud_au1", APP + ["BOARD=3", "ANSWER_UART=1"], 1, 4096, 12096, (4108, 10696)),
+    ("ud_au1_xw0", APP + ["BOARD=3", "ANSWER_UART=1"], 0, 2048, 12096, (2604, 10696)),
 ]
 UD_SRAM = 20480 - 2048 - 1536       # the Ultra-Digital receiver: .ramtext + .data + .bss + .noinit must fit the SRAM less the stack
                                     # and 1.5 KB kept free (Quindor 2026-10-17)
@@ -82,7 +93,7 @@ def build(out, name, defs, xw, ldscript=None, measure=False):
 
 def gate_sizes(out, do_build):
     fails = 0
-    print("image      free slot (floor, round 14)        RAM (limit, round 14)")
+    print("image      free slot (floor, 0.6.12)        RAM (limit, 0.6.12)")
     for name, defs, xw, floor, ram_max, (free0, ram0) in BUDGET:
         elf = build(out, name, defs, xw, "vendor/wch/Link_app.ld") if do_build else os.path.join(out, name, "fw.elf")
         s = sections(elf)
@@ -92,7 +103,7 @@ def gate_sizes(out, do_build):
         sram = ram + s.get(".ramtext", 0)
         bad = free < floor or ram > ram_max or (name.startswith("ud") and sram > UD_SRAM)
         fails += bad
-        print("%-8s %6d B (>= %5d, %+5d)          %6d B (<= %5d, %+4d)%s%s" % (
+        print("%-10s %6d B (>= %5d, %+5d)          %6d B (<= %5d, %+4d)%s%s" % (
             name, free, floor, free - free0, ram, ram_max, ram - ram0,
             ("   SRAM %5d B (<= %d)" % (sram, UD_SRAM)) if name.startswith("ud") else "", "  OVER BUDGET" if bad else ""))
     return fails

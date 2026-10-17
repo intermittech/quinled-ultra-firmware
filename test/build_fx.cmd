@@ -23,6 +23,11 @@ cl /nologo /O2 /W4 /D_CRT_SECURE_NO_WARNINGS /Fe:"%OUT%\test_fx.exe" /Fo:"%OUT%\
 if %errorlevel% neq 0 exit /b 1
 "%OUT%\test_fx.exe"
 if %errorlevel% neq 0 exit /b 1
+mkdir "%OUT%\dmin" 2>nul
+cl /nologo /O2 /W4 /D_CRT_SECURE_NO_WARNINGS /Fe:"%OUT%\test_fx_dmin.exe" /Fo:"%OUT%\dmin\\" "%HERE%test_fx_dmin.c" "%CORE%\fx_pack.c" "%CORE%\fx_tables.c"
+if %errorlevel% neq 0 exit /b 1
+"%OUT%\test_fx_dmin.exe"
+if %errorlevel% neq 0 exit /b 1
 python "%HERE%test_fx_catalogue.py"
 if %errorlevel% neq 0 exit /b 1
 if /i "%~2"=="render" (

@@ -29,7 +29,7 @@ trap_entry:
     bnez    t0, 2f
     call    dl_spi1_isr
     mret
-2:  addi    t0, t0, -4                      /* USART3 (55): the reply's bytes */
+2:  addi    t0, t0, -(RC_IRQN - 51)         /* the answer UART (board.h: USART3, 55): the reply's bytes */
     bnez    t0, HardFault_Handler
     call    rc_uart_isr
     mret
@@ -54,7 +54,7 @@ trap_entry:
     /* (review r6) USART3 (55), the receiver's return channel: its entry is VTF slot 1 (hw.c rc_hw_init), which
      * bypasses mtvec. Should the core take it through mtvec after all (BENCH: VTF with the unified mtvec), it lands
      * here instead of the fault loop (a watchdog reset at the first burst: the outputs would go dark every poll). */
-4:  addi    t0, t0, -10
+4:  addi    t0, t0, -(RC_IRQN - 45)         /* (board.h RC_IRQN: USART3 = 55 by default) */
     bnez    t0, HardFault_Handler
     call    rc_uart_isr
     mret

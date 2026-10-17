@@ -36,38 +36,42 @@
 #include "fx.h"                         /* the effect engine: src/core/fx.h */
 
 #define UX_SEGS        ULTRA_PX_SEGMENTS
-#define UX_POOL_BYTES  3480u            /* the frame buffer (pixels x bytes per pixel): 1,160 RGB / 870 RGBW / 696 five-channel pixels
-                                         * (Quindor 2026-10-17: >= 1.5 KB of SRAM stays free; a frame is then at most 38 ms: 26 fps) */
+#define UX_POOL_BYTES  2000u            /* complete wire frame: 600 RGB / 500 RGBW / 400 five-channel pixels */
 #define UX_STATE_BYTES (FX_MAX_SEG * FX_FIRE_CELLS)   /* the engine's state pool (Fire's heat: 256 B a Fire segment) */
 #define UX_CHUNK       FX_CHUNK         /* pixels rendered per step (<= ~55 us) */
+#define UX_CHUNK_HEAVY 4u              /* Pacifica: ~6,000 cycles (8,000 at most); 2 px on the 400 kHz encoder */
 #define UX_RING_WORDS  (DLINE_RING_WORDS + WS_GUARD)
 #define UX_RATE_NOM    7456540u         /* host us per ring word, Q24 (36 MHz / 16 = 2.25 words per us) */
 #define UX_REC_BYTES   128u             /* the stored record (2 a page) */
 #define UX_REC_MAGIC   0xD5A1u
+#define UX_REC_FORMAT  3u               /* the record's format: 3 keeps CONFIG 140 and 141 (two small values) in the last of its twelve u16 slots */
+#define UX_REC_SLOTS   12u              /* u16 slots for CONFIG 129 .. 140; CONFIG 141 shares the last one (high byte) */
+#define UX_REC_SEG0    (8u + 2u * UX_REC_SLOTS)          /* the first segment's offset in the record: 32 */
+#define UX_REC_MASK    (UX_REC_SEG0 + 23u * UX_SEGS)     /* the stored mask: 124, then a spare count, then the CRC-16 */
 #define UX_STEP_US     50000u           /* the clock steps past this error, else slews */
 #define UX_POWER_ON_MS 2000u            /* ULTRA_PXP_POWER_ON: the quiet line before the stored effect fades in */
 #define UX_FADE_IN_MS  1000u            /* ... the least fade-in of a stored effect */
 #define UX_LATCH_WAIT_W 225000u         /* 100 ms: a switch that found no LOW of the chip's latch takes dline's (46 us) after this */
-#define UX_CATALOGUE_VERSION 1u         /* = fx_catalogue.json's catalogue_version */
+#define UX_CATALOGUE_VERSION 3u         /* = fx_catalogue.json's catalogue_version */
 
 typedef struct {                        /* one segment */
     ultra_pixel_fx_t p;                 /* the PIXEL_FX in effect */
-    ultra_pixel_fx_t pend;              /* ... waiting for its start (a future START) */
+    ultra_pixel_fx_t pend;              /* next frame's command; start_ms holds its absolute engine anchor */
     uint32_t pend_at;                   /* host us the pending one applies at */
     uint32_t anchor;                    /* the effect's time zero, host ms (ux_ms) */
     uint8_t  run;                       /* an effect runs */
     uint8_t  restarts;                  /* ULTRA_PXF_RESTART slots applied (mixed into the seed: the random effects start anew) */
-    uint8_t  pend_have;
+    uint8_t  pend_have;                 /* 1 immediate, 2 scheduled (pend_at) */
+    uint8_t  apply;                     /* frozen at frame start: 1 command, 2 virtual-strip reapply */
 } ux_seg_t;
 
 typedef struct udfx_s {
-    /* ---- configuration (CONFIG 129-139), persisted */
+    /* ---- configuration (CONFIG 129-141), persisted */
     uint16_t cfg[ULTRA_CFG_PX_COUNT];
     /* derived by ux_derive */
     ws_chip_t chip;
     ws_lut_t  lut;
     fx_pack_cfg_t pack;                 /* gamma, bytes per pixel, wire order, white mode and split */
-    uint8_t   white_def;                /* the strip's auto-white mode (CONFIG 135) */
     uint16_t  npx, max_px;
     uint32_t  latch_w;                  /* LOW words after which the strip has surely latched (the switches wait for them) */
     uint32_t  period_w;                 /* the frame grid, words (0: back to back) */
@@ -76,6 +80,8 @@ typedef struct udfx_s {
     ultra_pixel_fx_t stored[UX_SEGS];
     uint8_t   stored_have;
     uint8_t   save_due;                 /* the record needs writing (config or stored effect changed) */
+    uint8_t   white_def;                /* the strip's auto-white mode (CONFIG 135) */
+    uint8_t   wait_on;                  /* tick: a switch is waiting at wait_w (bytes grouped to avoid padding) */
     uint32_t  save_ms;                  /* ... since this ms of the controller's clock (the glue debounces) */
     uint32_t  rec_seq;
     /* ---- the mode */
@@ -85,33 +91,39 @@ typedef struct udfx_s {
     volatile uint8_t want_stream;       /* ... out */
     volatile uint32_t first_w;          /* the first frame's start word (grid-aligned), refreshed by the main loop */
     uint32_t  wait_w;                   /* tick: the ring word a pending switch began to wait at (wait_on) */
-    uint8_t   wait_on;
     volatile int32_t nudge;             /* main loop -> tick: add to enc.next_w at the next tick (the tick clears it) */
     uint8_t   lock;                     /* the running effect is locked against a plain stream */
     uint8_t   dark;                     /* LOCAL, every segment dark and its black frame sent: the line is LOW */
     uint8_t   black_sent, frame_dark;
     uint32_t  dark_at;
-    uint8_t   reconf;                   /* the chip / pixels / order / fps changed: leave and re-enter local */
+    uint8_t   reconf;                   /* the chip / pixels / order / fps changed: leave and re-enter local (CHAIN: pause the encoder) */
     uint8_t   rebegin;                  /* the virtual strip changed: every running effect starts again */
+    uint8_t   chunk;                    /* frame-frozen render quota (Pacifica: 4) */
+    /* ---- CHAIN line mode (udfx_chain; docs/ultradigital-firmware.md section 12): the encoder owns the ring for good */
+    uint8_t   chain;                    /* CHAIN: never leaves local, no stream to hand back to, STREAM_WINS off */
+    uint8_t   undec;                    /* AUTO, the line mode not decided yet: STREAM_WINS waits for the mode (two Ultra frames on a chain line
+                                           would look like a stream taking the strip) */
+    volatile uint8_t pause_req;         /* main loop -> tick: stop starting frames (the tables are about to change) */
+    volatile uint8_t paused;            /* tick -> main loop: the encoder is idle in LOW, the ring zeroed by it; derive now */
     uint8_t   seq5[UX_SEGS + 1u];       /* the SEQ of each segment's last PIXEL_FX (the fifth: the whole strip) */
     uint8_t   seq_have;
     uint32_t  frames_seen;
     /* ---- the encoder and the renderer */
     ws_enc_t  e;
-    uint8_t   begun;                    /* the next frame's render has started */
     uint32_t  rendered;                 /* pixels of it rendered */
     uint32_t  fsum;                     /* its channel sum (the limiter) */
     uint32_t  frames_done;
     uint8_t   lim_bri;                  /* the limiter's brightness for the packer, 255 = none */
+    uint8_t   begun;                    /* the next frame's render has started */
     uint16_t  cl_q8;                    /* the closed-loop trim of the limit, 8..256 */
     uint16_t  meas_ma;                  /* the measured bus current (the glue's) */
     uint16_t  vk_q8;                    /* bus-side mA per strip-side mA, Q8 (the glue's: V_B / V_bus / efficiency) */
     uint8_t   load;                     /* CPU load, 0.5 % steps (0..200; the glue's) */
+    uint8_t   stream_pending;           /* main: cancel the scene at the next frame boundary */
     uint16_t  fps10;
     uint32_t  fps_frames, fps_ms;
     uint32_t  ms;                       /* the controller's own ms clock (udfx_service) */
     /* ---- the clock */
-    uint8_t   a_have, r_have;
     uint32_t  a_host, a_w;              /* the anchor: host us at ring word a_w */
     uint32_t  r_host, r_w;              /* the rate reference */
     uint32_t  wq24;                     /* host us per word, Q24 */
@@ -120,6 +132,7 @@ typedef struct udfx_s {
     uint32_t  hus_ref, hms_ref;         /* ux_ms()'s reference: host us (a multiple of 1000) and its ms count */
     /* ---- the tick's stats */
     uint16_t  switches;
+    uint8_t   a_have, r_have;           /* the clock has an anchor / measured rate */
     /* ---- segments, and the engine */
     ux_seg_t  seg[UX_SEGS];
     fx_engine_t eng;
@@ -140,18 +153,28 @@ UX_AINLINE uint32_t udfx_answer_blank(const udfx_t *u)
     return !u->local;
 }
 
+/* the line mode (CONFIG 140) as stored: ULTRA_PXLM_* */
+UX_AINLINE uint32_t udfx_line_cfg(const udfx_t *u)
+{
+    return u->cfg[ULTRA_CFG_PX_LINE_MODE - ULTRA_CFG_PX_FIRST];
+}
+
 /* ---- main loop */
 void     udfx_init(udfx_t *u);                              /* defaults; no record yet */
+/* The line mode (main loop): 1 CHAIN: the encoder takes the ring (dline_ch_start has zeroed it, or at a latch of the incoming line) and
+ * never gives it back; no effect running = a dark strip. 0 STREAM: back to the stream at a latch (the usual switch). 2 AUTO, not
+ * decided yet: as STREAM, but STREAM_WINS does not hand the strip back until the mode is known */
+void     udfx_chain(udfx_t *u, uint32_t mode);
 void     udfx_load(udfx_t *u, const uint8_t *rec);          /* a valid stored record (udfx_rec_valid) */
 /* the clock: a marker frame's header TIME and the ring word of its last edge */
 void     udfx_anchor(udfx_t *u, uint32_t host_us, uint32_t w);
 uint32_t udfx_host_us(const udfx_t *u, uint32_t w);         /* host us at ring word w */
 uint32_t udfx_word_at(const udfx_t *u, uint32_t host_us);   /* ring word at host us */
-/* CONFIG id 129..139 (other ids: ignored). Returns 1 when the value was taken and changed */
+/* CONFIG id 129..141 (other ids: ignored). Returns 1 when the value was taken and changed */
 uint32_t udfx_config(udfx_t *u, uint32_t id, uint32_t value);
 /* a CRC-checked ULTRA_PIXEL_FX slot of a frame whose header TIME is hdr_us. Applied once per (segment, SEQ). */
 void     udfx_pixel_fx(udfx_t *u, const uint8_t *slot, uint32_t hdr_us);
-/* once a ms: pending commands, the mode requests, the policy (stored effect at power-up / signal loss, a stream taking
+/* once a ms: mode requests, the policy (stored effect at power-up / signal loss, a stream taking
  * over), the limiter's measured current. d: dline (its counters and positions) */
 void     udfx_service(udfx_t *u, const dline_t *d, uint32_t ms, uint32_t meas_ma, uint32_t vk_q8);
 /* one render step (<= UX_CHUNK pixels); returns 1 while it has more to do right now */

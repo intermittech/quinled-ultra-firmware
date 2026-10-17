@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define FX_SAT_CHECK 1
+#include <stdint.h>
+uint32_t fx_sat_over;
 #include "../src/core/fx_effects.c"
 
 static int g_fail, g_checks;
@@ -182,11 +185,15 @@ static void test_math(void)
     }
     {                                                                       /* tables */
         uint32_t i;
+        uint32_t worst = 0;
         for (i = 1; i < 256u; i++) {
-            CHECK(fx_gamma28[i] >= fx_gamma28[i - 1u], "gamma monotonic at %u", i);
+            const uint32_t d = (uint32_t)abs((int)fx_gamma(i) - (int)floor(255.0 * pow(i / 255.0, 2.8) + 0.5));
+            CHECK(fx_gamma(i) >= fx_gamma(i - 1u), "gamma monotonic at %u", i);
+            CHECK(d == 0u, "gamma 2.8 at %u: %u, the rounded curve %.2f", i, fx_gamma(i), 255.0 * pow(i / 255.0, 2.8));
+            worst = d > worst ? d : worst;
         }
-        CHECK(fx_gamma28[0] == 0 && fx_gamma28[255] == 255, "gamma ends");
-        CHECK(abs((int)fx_gamma28[128] - (int)floor(255.0 * pow(128.0 / 255.0, 2.8) + 0.5)) <= 1, "gamma 2.8 at 128");
+        CHECK(fx_gamma(0) == 0 && fx_gamma(255) == 255, "gamma ends");
+        printf("  gamma 8-bit (the 16-bit table rounded): at most %u off the rounded exact curve, i.e. the 0.6.12 table\n", worst);
     }
 }
 
@@ -517,10 +524,10 @@ static void test_behaviour(void)
             prev = s;
         }
         render_whole(&p, 30, dur + 1000u, bufA);
-        CHECK(near_rgb(bufA[0], fx_pals[PAL_SUNRISE][15], 2), "sunrise ends in the last palette entry");
+        CHECK(near_rgb(bufA[0], fx_pal_entry(PAL_SUNRISE, 15), 2), "sunrise ends in the last palette entry");
         p.id = FX_SUNSET;
         render_whole(&p, 30, 0, bufA);
-        CHECK(near_rgb(bufA[0], fx_pals[PAL_SUNRISE][15], 2), "sunset starts bright");
+        CHECK(near_rgb(bufA[0], fx_pal_entry(PAL_SUNRISE, 15), 2), "sunset starts bright");
         render_whole(&p, 30, dur + 50000u, bufA);
         CHECK(sumrgb(bufA, 30) == 0, "sunset ends dark");
         render_whole(&p, 30, 3600000u * 5u, bufA);
@@ -627,10 +634,10 @@ static void test_behaviour(void)
         fx_ctx_t x;
         params_of(FX_FIRE, &p);
         fx_begin(&x, &p, 20, g_state);
-        CHECK(x.pal_id == PAL_HEAT && rgb_eq(x.pal[15], fx_pals[PAL_HEAT][15]), "fire's default palette");
+        CHECK(x.pal_id == PAL_HEAT && rgb_eq(x.pal[15], fx_pal_entry(PAL_HEAT, 15)), "fire's default palette");
         p.palette = PAL_OCEAN;
         fx_begin(&x, &p, 20, g_state);
-        CHECK(rgb_eq(x.pal[3], fx_pals[PAL_OCEAN][3]), "explicit palette");
+        CHECK(rgb_eq(x.pal[3], fx_pal_entry(PAL_OCEAN, 3)), "explicit palette");
     }
 }
 
@@ -916,6 +923,486 @@ static void test_pace(void)
     }
 }
 
+/* ---------------------------------------------------------------------------------------------------- round 15 effects */
+static uint32_t lit_count(const rgb_t *p, uint32_t n)           /* pixels that are not black */
+{
+    uint32_t i, k = 0;
+    for (i = 0; i < n; i++) {
+        k += (p[i].r | p[i].g | p[i].b) != 0u;
+    }
+    return k;
+}
+
+static void test_more(void)
+{
+    fx_params_t p;
+    uint32_t i, t, k;
+    /* Stripes: Share 0 / 255 are all colour 2 / all colour 1; 128 is about half; the stripes move towards the higher pixels, one period
+     * (8 px at Size 190) in 8 / 20 s; the edges are soft (a blend now and then) but never leave the two colours' range */
+    params_of(FX_STRIPES, &p);
+    p.custom1 = 0;
+    render_whole(&p, 120, 1234, bufA);
+    for (i = 0; i < 120u; i++) CHECK(rgb_eq(bufA[i], p.c[1]), "stripes share 0: pixel %u", i);
+    p.custom1 = 255;
+    render_whole(&p, 120, 1234, bufA);
+    for (i = 0; i < 120u; i++) CHECK(rgb_eq(bufA[i], p.c[0]), "stripes share 255: pixel %u", i);
+    params_of(FX_STRIPES, &p);
+    for (t = 0; t < 4000u; t += 500u) {
+        uint32_t red = 0;
+        render_whole(&p, 160, t, bufA);
+        for (i = 0; i < 160u; i++) {                                  /* c1 red (255,0,0), c2 white: the green channel is the mix */
+            red += bufA[i].g < 128u;
+            CHECK(bufA[i].r == 255u && bufA[i].g == bufA[i].b, "stripes: a pixel outside the two colours' blend (%u,%u,%u)", bufA[i].r, bufA[i].g, bufA[i].b);
+        }
+        CHECK(red > 60u && red < 100u, "stripes share 128 at t %u: %u of 160 pixels are colour 1", t, red);
+    }
+    {                                                                 /* the pattern moves towards the higher pixels (20 px/s: ~1.3 px in 70 ms) */
+        uint32_t best = 0, bestd = 0;
+        render_whole(&p, 160, 1000, bufA);
+        for (k = 0; k < 8u; k++) {                                    /* the shift s (0..7 px) that maps frame 1 onto frame 2 best */
+            uint32_t d = 0;
+            render_whole(&p, 160, 1000u + 120u, bufB);
+            for (i = 8; i < 152u; i++) d += (uint32_t)abs((int)bufB[i].g - (int)bufA[i - k].g);
+            if (k == 0u || d < bestd) { bestd = d; best = k; }
+        }
+        CHECK(best >= 1u && best <= 4u, "stripes move towards the higher pixels (best shift %u px in 120 ms, 20 px/s -> ~2)", best);
+    }
+    /* Bulbs: ~Size of every cell lit; the lit pixels are palette colours; the colours hop one bulb every ~0.68 s (and not at speed 0) */
+    params_of(FX_BULBS, &p);
+    p.speed = 128;
+    p.palette = PAL_COLORS;
+    p.c[0] = fx_rgb(255, 0, 0); p.c[1] = fx_rgb(0, 0, 0); p.c[2] = fx_rgb(0, 0, 255);
+    render_whole(&p, 160, 100, bufA);
+    k = lit_count(bufA, 160);
+    CHECK(k > 60u && k < 110u, "bulbs size 128: %u of 160 pixels lit", k);
+    render_whole(&p, 160, 100 + 1400u, bufB);                         /* two hops later: the colour of the bulb has changed */
+    CHECK(memcmp(bufA, bufB, 160 * sizeof(rgb_t)) != 0, "bulbs: the colours do not hop");
+    p.speed = 0;
+    render_whole(&p, 160, 100, bufA);
+    render_whole(&p, 160, 100 + 9000u, bufB);
+    CHECK(memcmp(bufA, bufB, 160 * sizeof(rgb_t)) == 0, "bulbs move at speed 0");
+    p.speed = 128; p.custom2 = 0;                                     /* Colour step 0: one colour for every bulb */
+    render_whole(&p, 160, 5000, bufA);
+    for (i = 0; i < 160u; i++) {
+        CHECK(bufA[i].g == 0u && bufA[i].b == 0u, "bulbs colour step 0: pixel %u is not colour 1 (%u,%u,%u)", i, bufA[i].r, bufA[i].g, bufA[i].b);
+    }
+    p.custom1 = 0;
+    render_whole(&p, 160, 5000, bufA);
+    CHECK(lit_count(bufA, 160) == 0u, "bulbs size 0: some are lit");
+    /* Wipe: a sweep fills from pixel 0, front colour then the next; at the end of a sweep the strip is one colour; the cycle boundary has no jump */
+    params_of(FX_WIPE, &p);
+    p.speed = 128;
+    {
+        rgb_t f0 = p.c[0], f1 = p.c[1];
+        uint32_t cyc = 0;
+        render_whole(&p, 100, 100, bufA);                             /* early in the sweep: the front is c1 at the start, c2 behind */
+        CHECK(near_rgb(bufA[0], f0, 2) && near_rgb(bufA[99], f1, 2), "wipe start: front %u,%u,%u back %u,%u,%u", bufA[0].r, bufA[0].g, bufA[0].b, bufA[99].r, bufA[99].g, bufA[99].b);
+        for (i = 1; i < 100u; i++) {                                  /* the front is a prefix: once it is the back colour it stays so */
+            if (near_rgb(bufA[i], f1, 2) && !near_rgb(bufA[i - 1], f1, 2)) cyc++;
+        }
+        CHECK(cyc <= 1u, "wipe: front is not one run");
+        render_whole(&p, 100, 3700, bufA);                            /* sweep done (4096 - 64 * 12 = 3328 et ms = 3.43 s): all c1 */
+        for (i = 0; i < 100u; i++) CHECK(near_rgb(bufA[i], f0, 2), "wipe hold: pixel %u not the front colour", i);
+        {                                                             /* the next cycle starts from that colour and wipes c2 over it */
+            const uint32_t cyc_ms = 4096u * 256u / 248u;                  /* (a cycle, 4096 et ms, in host ms at speed 128) */
+            render_whole(&p, 100, cyc_ms - 40u, bufA);
+            render_whole(&p, 100, cyc_ms + 40u, bufB);
+            CHECK(near_rgb(bufA[50], f0, 2) && near_rgb(bufB[99], f0, 4), "wipe: a jump at the cycle boundary");
+            render_whole(&p, 100, cyc_ms + 1500u, bufB);
+            CHECK(near_rgb(bufB[0], f1, 2) && near_rgb(bufB[99], f0, 2), "wipe: the second wipe goes c2 over c1");
+        }
+        p.custom1 = 200;                                              /* palette colours: successive wipes differ */
+        {
+            rgb_t c[4];
+            for (k = 0; k < 4u; k++) {
+                render_whole(&p, 40, 4228u * k + 3900u, bufA);       /* (the hold phase of each of 4 cycles: one colour over the strip) */
+                c[k] = bufA[20];
+            }
+            CHECK(!rgb_eq(c[0], c[1]) && !rgb_eq(c[1], c[2]) && !rgb_eq(c[2], c[3]), "wipe palette mode: the colours repeat");
+        }
+    }
+    /* Ripples: Rain 0 is calm water (colour 2), Rain 255 has rings, they add up to bounded colours, a ring is symmetric about its centre */
+    params_of(FX_RIPPLES, &p);
+    p.custom1 = 0;
+    p.c[1] = fx_rgb(1, 2, 3);
+    for (t = 0; t < 20000u; t += 777u) {
+        render_whole(&p, 120, t, bufA);
+        for (i = 0; i < 120u; i++) CHECK(rgb_eq(bufA[i], p.c[1]), "ripples rain 0 at t %u pixel %u", t, i);
+    }
+    p.custom1 = 255;
+    {
+        uint32_t frames_lit = 0;
+        for (t = 0; t < 20000u; t += 250u) {
+            render_whole(&p, 160, t, bufA);
+            k = 0;
+            for (i = 0; i < 160u; i++) k += !rgb_eq(bufA[i], p.c[1]);
+            frames_lit += k > 0u;
+        }
+        CHECK(frames_lit >= 70u, "ripples rain 255: %u of 80 frames show rings", frames_lit);
+    }
+    /* Lava Lamp: blobs stay in the strip's range, move, and the background shows between them (Blob size small) */
+    params_of(FX_LAVA_LAMP, &p);
+    p.intensity = 0;
+    p.c[1] = fx_rgb(0, 0, 0);
+    for (t = 0; t < 40000u; t += 4000u) {
+        render_whole(&p, 160, t, bufA);
+        k = lit_count(bufA, 160);
+        CHECK(k > 10u && k < 150u, "lava lamp small blobs at t %u: %u of 160 lit", t, k);
+    }
+    render_whole(&p, 160, 1000, bufA);
+    render_whole(&p, 160, 6000, bufB);
+    CHECK(memcmp(bufA, bufB, 160 * sizeof(rgb_t)) != 0, "lava lamp stands still");
+}
+
+
+/* ---------------------------------------------------------------------------------------------------- round 16 effects */
+static uint32_t runs_of(const rgb_t *p, uint32_t n)       /* the number of places where a pixel differs from its left neighbour */
+{
+    uint32_t i, k = 0;
+    for (i = 1; i < n; i++) {
+        k += !rgb_eq(p[i], p[i - 1u]);
+    }
+    return k;
+}
+
+static void test_more2(void)
+{
+    fx_params_t p;
+    uint32_t i, t, k;
+    /* Mosaic Drift: Whiten 255 is neutral white everywhere; Whiten 0 keeps tiles of one colour (a few pixels of seam only), 100 px at Size 100 hold ~4 tiles */
+    params_of(FX_MOSAIC_DRIFT, &p);
+    p.custom1 = 255;
+    render_whole(&p, 100, 3000, bufA);
+    for (i = 0; i < 100u; i++) CHECK(near_rgb(bufA[i], fx_rgb(255, 250, 235), 1), "mosaic whiten 255: pixel %u", i);
+    p.custom1 = 0; p.intensity = 100;
+    for (t = 500; t < 20000u; t += 3700u) {
+        render_whole(&p, 100, t, bufA);
+        k = runs_of(bufA, 100);
+        CHECK(k >= 1u && k <= 24u, "mosaic at t %u: %u colour changes along 100 px (tiles of ~25 px, 1 px seams)", t, k);
+    }
+    render_whole(&p, 100, 1000, bufA);                          /* the tiles melt: a pixel's colour changes slowly, with no jump between frames */
+    {
+        uint32_t worst = 0;
+        for (t = 1000; t < 12000u; t += 33u) {
+            render_whole(&p, 100, t + 33u, bufB);
+            for (i = 0; i < 100u; i++) {
+                const uint32_t d = (uint32_t)(abs((int)bufB[i].r - bufA[i].r) + abs((int)bufB[i].g - bufA[i].g) + abs((int)bufB[i].b - bufA[i].b));
+                worst = d > worst ? d : worst;
+            }
+            memcpy(bufA, bufB, 100 * sizeof(rgb_t));
+        }
+        CHECK(worst < 40u, "mosaic: a pixel changes by %u in 33 ms (it should melt)", worst);
+    }
+    /* Silk Weave: with all three colours equal and no white, the strip is that colour; the crossings are whiter than the ribbons */
+    params_of(FX_SILK_WEAVE, &p);
+    p.c[0] = p.c[1] = p.c[2] = fx_rgb(40, 60, 90);
+    p.custom1 = 0;
+    render_whole(&p, 120, 4321, bufA);
+    for (i = 0; i < 120u; i++) CHECK(rgb_eq(bufA[i], fx_rgb(40, 60, 90)), "silk, one colour: pixel %u", i);
+    params_of(FX_SILK_WEAVE, &p);
+    p.custom1 = 255;
+    {
+        uint32_t whitest = 0;
+        for (t = 0; t < 8000u; t += 500u) {
+            render_whole(&p, 160, t, bufA);
+            for (i = 0; i < 160u; i++) { const uint32_t m = bufA[i].r < bufA[i].g ? (bufA[i].r < bufA[i].b ? bufA[i].r : bufA[i].b) : (bufA[i].g < bufA[i].b ? bufA[i].g : bufA[i].b); whitest = m > whitest ? m : whitest; }
+        }
+        CHECK(whitest >= 215u, "silk: the crossings never turn pearly (the whitest pixel's weakest channel is %u)", whitest);
+    }
+    /* Canopy Shade: Depth 0 is the pure wash; at the default most of the strip is lit (the wash) and some of it is shadow */
+    params_of(FX_CANOPY_SHADE, &p);
+    p.intensity = 0;
+    render_whole(&p, 120, 2000, bufA);
+    for (i = 0; i < 120u; i++) CHECK(rgb_eq(bufA[i], p.c[0]), "canopy depth 0: pixel %u", i);
+    params_of(FX_CANOPY_SHADE, &p);
+    p.intensity = 255;
+    for (t = 0; t < 20000u; t += 4000u) {
+        uint32_t wash = 0, dark = 0;
+        render_whole(&p, 200, t, bufA);
+        for (i = 0; i < 200u; i++) {
+            wash += rgb_eq(bufA[i], p.c[0]);
+            dark += bufA[i].r < 200u;
+        }
+        CHECK(wash > 100u && dark > 10u, "canopy at t %u: %u pixels pure wash, %u in shadow of 200", t, wash, dark);
+    }
+    /* Opal Facets: without reflection every facet is one colour for good; with it some pixels turn whiter than their facet */
+    params_of(FX_OPAL_FACETS, &p);
+    p.custom1 = 0;
+    render_whole(&p, 100, 1000, bufA);
+    render_whole(&p, 100, 7000, bufB);
+    CHECK(memcmp(bufA, bufB, 100 * sizeof(rgb_t)) == 0, "opal strength 0: the facets change");
+    k = runs_of(bufA, 100);
+    CHECK(k >= 4u && k <= 40u, "opal: %u facet edges along 100 px", k);
+    p.custom1 = 255;
+    {
+        uint32_t brighter = 0;
+        render_whole(&p, 100, 4000, bufB);
+        for (i = 0; i < 100u; i++) {
+            brighter += (uint32_t)bufB[i].r + bufB[i].g + bufB[i].b > (uint32_t)bufA[i].r + bufA[i].g + bufA[i].b + 30u;
+        }
+        CHECK(brighter >= 3u, "opal: %u pixels carry a reflection", brighter);
+    }
+    /* Quiet Landings: Pearls 0 is one pearl (a few pixels lit), 255 three (more); a pearl stands on the ground at the start of a cycle */
+    params_of(FX_QUIET_LANDINGS, &p);
+    p.custom1 = 0;
+    {
+        uint32_t one = 0, three = 0;
+        for (t = 0; t < 12000u; t += 400u) {
+            render_whole(&p, 120, t, bufA);
+            k = lit_count(bufA, 120);
+            one = k > one ? k : one;
+        }
+        p.custom1 = 255;
+        for (t = 0; t < 12000u; t += 400u) {
+            render_whole(&p, 120, t, bufA);
+            k = lit_count(bufA, 120);
+            three = k > three ? k : three;
+        }
+        CHECK(one >= 3u && one <= 7u, "landings, one pearl: up to %u lit pixels", one);
+        CHECK(three > one && three <= 21u, "landings, three pearls: up to %u lit pixels (one: %u)", three, one);
+    }
+    p.custom1 = 0;
+    render_whole(&p, 120, 0, bufA);
+    CHECK(bufA[0].r + bufA[0].g + bufA[0].b > 150u, "landings: the pearl does not start on the ground");
+    {                                                         /* the pearl stays under Height of the strip */
+        uint32_t top = 0;
+        p.intensity = 128;
+        for (t = 0; t < 12000u; t += 50u) {
+            render_whole(&p, 120, t, bufA);
+            for (i = 0; i < 120u; i++) if (bufA[i].r + bufA[i].g + bufA[i].b > 30u) top = i > top ? i : top;
+        }
+        CHECK(top <= 120u / 2u + 4u, "landings: a pearl at Height 128 reached pixel %u of 120", top);
+    }
+}
+
+/* ---------------------------------------------------------------------------------------------------- smooth dimming (CONFIG 141) */
+extern uint32_t fx_gamma16_of(uint32_t v);
+
+/* the 8-bit gamma of 0.6.12's table: round(255 * (v / 255) ^ 2.8), computed here, not read from the firmware's table */
+static uint32_t ref_g8(uint32_t v) { return (uint32_t)floor(255.0 * pow(v / 255.0, 2.8) + 0.5); }
+
+/* the 8-bit packer as it was before the 16-bit path (a copy of its algorithm: brightness, gamma cubic, auto-white, order) */
+static uint32_t ref_pack8(const rgb_t *in, uint8_t *wire, uint32_t n, uint8_t bri, const fx_pack_cfg_t *c)
+{
+    uint32_t i, sum = 0, k;
+    for (i = 0; i < n; i++, wire += c->bpp) {
+        uint8_t src[5];
+        uint32_t r = in[i].r, g = in[i].g, b = in[i].b;
+        if (bri != 255u) {
+            r = fx_scale8(r, bri); g = fx_scale8(g, bri); b = fx_scale8(b, bri);
+        }
+        if (c->gamma) {
+            r = ref_g8(r); g = ref_g8(g); b = ref_g8(b);
+        }
+        src[3] = src[4] = 0;
+        if (c->bpp >= 4u && (c->white_mode == FX_W_ACCURATE || c->white_mode == FX_W_BRIGHT)) {
+            uint32_t w = r < g ? r : g;
+            w = w < b ? w : b;
+            if (c->white_mode == FX_W_ACCURATE) {
+                r -= w; g -= w; b -= w;
+            }
+            if (c->bpp == 5u) {
+                src[3] = fx_scale8(w, 255u - c->white_split);
+                src[4] = fx_scale8(w, c->white_split);
+            } else {
+                src[3] = (uint8_t)w;
+            }
+        }
+        src[0] = (uint8_t)r; src[1] = (uint8_t)g; src[2] = (uint8_t)b;
+        for (k = 0; k < c->bpp; k++) {
+            wire[k] = src[c->ord[k]];
+            sum += wire[k];
+        }
+    }
+    return sum;
+}
+
+static void test_smooth(void)
+{
+    static const uint8_t ords[3][5] = { { 1, 0, 2, 0, 0 }, { 0, 1, 2, 3, 0 }, { 0, 1, 2, 3, 4 } };
+    uint32_t v, i, k, round_, bad;
+    int worst = 0;
+    /* the 16-bit gamma against the exact curve: monotonic, ends exact, within ~10 of 65280 */
+    for (v = 0; v < 256u; v++) {
+        const int d = abs((int)fx_gamma16_of(v) - (int)floor(65280.0 * pow(v / 255.0, 2.8) + 0.5));
+        worst = d > worst ? d : worst;
+        if (v > 0u) {
+            CHECK(fx_gamma16_of(v) >= fx_gamma16_of(v - 1u), "gamma16 not monotonic at %u", v);
+        }
+    }
+    CHECK(fx_gamma16_of(0) == 0 && fx_gamma16_of(255) == 65280, "gamma16 ends: %u %u", fx_gamma16_of(0), fx_gamma16_of(255));
+    CHECK(worst <= 1, "gamma16 is %d of 65280 off the exact curve", worst);
+    printf("  gamma 16-bit: at most %d of 65280 off the exact curve\n", worst);
+    /* option 3 (FX_SM_8BIT) is the old packer, byte for byte, on random frames: RGB, RGBW (accurate / bright / off), WS2805, brightness, gamma on / off */
+    for (round_ = 0; round_ < 3000u; round_++) {
+        fx_pack_cfg_t c;
+        rgb_t px[40];
+        uint8_t w1[200], w2[200];
+        uint32_t s1, s2;
+        const uint32_t bi = round_ % 3u;
+        memset(&c, 0, sizeof(c));
+        c.bpp = (uint8_t)(3u + bi);
+        for (k = 0; k < 5u; k++) c.ord[k] = ords[bi][k];
+        c.gamma = (uint8_t)(rnd() & 1u);
+        c.white_mode = (uint8_t)(rnd() % 4u);
+        c.white_split = (uint8_t)rnd();
+        c.smooth = FX_SM_8BIT;
+        c.phase = (uint8_t)rnd();
+        c.px0 = (uint16_t)rnd();
+        for (i = 0; i < 40u; i++) {
+            px[i].r = (uint8_t)rnd(); px[i].g = (uint8_t)rnd(); px[i].b = (uint8_t)rnd();
+        }
+        k = rnd() & 255u;
+        s1 = fx_pack(px, w1, 40, (uint8_t)k, &c);
+        s2 = ref_pack8(px, w2, 40, (uint8_t)k, &c);
+        CHECK(s1 == s2 && memcmp(w1, w2, 40u * c.bpp) == 0, "smoothing off differs from the 8-bit packer (round %u)", round_);
+    }
+    /* dim fades: one channel at every brightness 255 .. 0, in each mode: never a rise as the light dims, and the 16-bit paths use far more levels than 8 bits */
+    {
+        uint32_t levels[3];
+        uint32_t mode;
+        for (mode = 0; mode < 3u; mode++) {
+            fx_pack_cfg_t c;
+            rgb_t px = { 200, 100, 50 };
+            uint8_t w[3], prev = 255;
+            uint32_t seen = 0, bri;
+            uint8_t used[256];
+            memset(&c, 0, sizeof(c));
+            memset(used, 0, sizeof(used));
+            c.bpp = 3; c.ord[1] = 1; c.ord[2] = 2; c.gamma = 1; c.smooth = (uint8_t)mode;
+            for (bri = 255; bri > 0u; bri--) {
+                fx_pack(&px, w, 1, (uint8_t)bri, &c);
+                CHECK(w[0] <= prev, "mode %u: the red channel rose from %u to %u as the light dimmed (bri %u)", mode, prev, w[0], bri);
+                prev = w[0];
+                if (!used[w[0]]) { used[w[0]] = 1; seen++; }
+            }
+            levels[mode] = seen;
+        }
+        CHECK(levels[1] >= levels[0] && levels[2] >= levels[0], "levels: %u (8 bit), %u (round), %u (dither)", levels[0], levels[1], levels[2]);
+        printf("  dim fade of red 200: %u wire levels in the 8-bit path, %u rounded, %u dithered\n", levels[0], levels[1], levels[2]);
+    }
+    /* the dither: over the 256 frames of its pattern every channel's average is exactly the 16-bit value / 256 (checked on RGB, RGBW and five channels, with brightness) */
+    bad = 0;
+    for (round_ = 0; round_ < 400u; round_++) {
+        fx_pack_cfg_t c;
+        rgb_t px;
+        uint8_t w[5];
+        uint32_t total[5] = { 0, 0, 0, 0, 0 }, ph, g16[3], bri = 1u + rnd() % 255u, gb = fx_gamma16_of(bri), mb = gb + (gb >> 8);
+        memset(&c, 0, sizeof(c));
+        c.bpp = 3; c.ord[1] = 1; c.ord[2] = 2; c.gamma = 1; c.smooth = FX_SM_DITHER;
+        c.px0 = (uint16_t)(rnd() % 600u);
+        px.r = (uint8_t)(rnd() % 200u); px.g = (uint8_t)(rnd() % 200u); px.b = (uint8_t)(rnd() % 200u);
+        for (ph = 0; ph < 256u; ph++) {
+            c.phase = fx_dither_phase(ph);
+            fx_pack(&px, w, 1, (uint8_t)bri, &c);
+            for (k = 0; k < 3u; k++) total[k] += w[k];
+        }
+        g16[0] = fx_gamma16_of(px.r); g16[1] = fx_gamma16_of(px.g); g16[2] = fx_gamma16_of(px.b);
+        for (k = 0; k < 3u; k++) {
+            const uint32_t e = bri == 255u ? g16[k] : (g16[k] * mb + 32768u) >> 16;
+            bad += total[k] != e;                                          /* sum over 256 frames of floor((e + t) / 256) = e exactly */
+        }
+    }
+    CHECK(bad == 0u, "%u dither averages are not the 16-bit value", bad);
+    /* two receivers on the same frame make the same bytes, and a frame cut into chunks equals the whole one (the pixel index decides, not the call) */
+    {
+        fx_pack_cfg_t c;
+        rgb_t px[100];
+        uint8_t wa[300], wb[300], wc[300];
+        memset(&c, 0, sizeof(c));
+        c.bpp = 3; c.ord[1] = 1; c.ord[2] = 2; c.gamma = 1; c.smooth = FX_SM_DITHER; c.phase = fx_dither_phase(12345u);
+        for (i = 0; i < 100u; i++) { px[i].r = (uint8_t)(i * 3u); px[i].g = (uint8_t)(i * 2u + 7u); px[i].b = (uint8_t)(255u - i); }
+        fx_pack(px, wa, 100, 90, &c);
+        fx_pack(px, wb, 100, 90, &c);
+        CHECK(memcmp(wa, wb, 300) == 0, "two receivers differ");
+        c.px0 = 0; fx_pack(px, wc, 32, 90, &c);
+        c.px0 = 32; fx_pack(px + 32, wc + 96, 68, 90, &c);
+        CHECK(memcmp(wa, wc, 300) == 0, "a chunked frame differs from the whole frame");
+    }
+}
+
+/* no scaling may be asked for more than 255 (fx_scale8 does not saturate: a factor of 260 wraps a bright channel to dark): every effect
+ * x parameters x palettes x times, counted by the host build's fx_scale8 (FX_SAT_CHECK) */
+static void test_saturation(void)
+{
+    static const uint8_t lv[3] = { 0, 100, 255 }, cu[3] = { 0, 128, 255 };
+    uint32_t id, a, b, c, pal, t;
+    fx_sat_over = 0;
+    for (id = 1; id <= FX_LAST; id++) {
+        for (a = 0; a < 3u; a++) {
+            for (b = 0; b < 3u; b++) {
+                for (c = 0; c < 3u; c++) {
+                    for (pal = 0; pal <= PAL_COUNT; pal++) {
+                        fx_params_t p;
+                        params_of(id, &p);
+                        p.intensity = lv[a]; p.custom1 = cu[b]; p.custom2 = cu[c];
+                        p.palette = (uint8_t)(pal == PAL_COUNT ? PAL_COLORS : pal);
+                        p.c[0] = fx_rgb(255, 255, 255); p.c[1] = fx_rgb(255, 255, 255); p.c[2] = fx_rgb(255, 255, 255);
+                        for (t = 500; t < 9000u; t += 2300u) {
+                            render_whole(&p, 60, t, bufA);
+                        }
+                    }
+                }
+            }
+        }
+        CHECK(fx_sat_over == 0u, "effect %u: %u scalings above 255", id, fx_sat_over);
+        fx_sat_over = 0;
+    }
+}
+
+/* the speed-integrated time wraps at 2^32 ms (26 days at speed 255, 51 at 128): no effect may jump there. Frames 33 ms apart across the wrap;
+ * the number of pixels that change by more than 64 between two frames must not be larger at the wrap than at the other frames
+ * (Fire keeps state and Sunrise / Sunset run on the raw time, which saturates: both are left out) */
+/* (Ripples: a drop is born at a cycle boundary, and every power of two from 2^12 up is one: a ring of a few pixels appearing is the effect, not a jump) */
+static void test_etwrap(void)
+{
+    static const uint32_t bits[] = { 24, 26, 28, 29, 30, 31, 32 };      /* the effect time's powers of two: an effect's own arithmetic may wrap at any of them (Gradient's did at 2^28) */
+    uint32_t id, sp, v, k, n = 200, bi;
+    for (id = 1; id <= FX_LAST; id++) {
+        if (id == FX_FIRE || id == FX_SUNRISE || id == FX_SUNSET) {
+            continue;
+        }
+        for (bi = 0; bi < sizeof bits / sizeof bits[0]; bi++) {
+          for (sp = 0; sp < 2u; sp++) {
+            for (v = 0; v < 3u; v++) {
+                fx_params_t p;
+                fx_ctx_t x;
+                uint32_t cnt, other = 0, wrap = 0, prev_et;
+                params_of(id, &p);
+                p.speed = sp ? 255 : 128;
+                if (v == 1u) {
+                    p.custom1 = 200;                                   /* (Wipe: palette colours) */
+                } else if (v == 2u) {
+                    p.intensity = 200;                                 /* (Gradient: only from 16 up does it loop and scroll) */
+                }
+                fx_begin(&x, &p, (uint16_t)n, g_state);
+                x.et = (bits[bi] == 32u ? 0u : 1u << bits[bi]) - 700u;
+                x.et_frac = 0;
+                fx_frame(&x, 0);
+                fx_render(&x, bufA, 0, n);
+                for (k = 1; k <= 60u; k++) {
+                    uint32_t i;
+                    prev_et = x.et;
+                    fx_frame(&x, k * 33u);
+                    fx_render(&x, bufB, 0, n);
+                    for (cnt = 0, i = 0; i < n; i++) {
+                        const int d = abs((int)bufB[i].r - bufA[i].r) + abs((int)bufB[i].g - bufA[i].g) + abs((int)bufB[i].b - bufA[i].b);
+                        cnt += d > 64;
+                    }
+                    if (bits[bi] == 32u ? x.et < prev_et : (x.et >> bits[bi]) != (prev_et >> bits[bi])) {
+                        wrap = cnt;
+                    } else if (cnt > other) {
+                        other = cnt;
+                    }
+                    memcpy(bufA, bufB, n * sizeof(rgb_t));
+                }
+                CHECK(wrap <= other + (id == FX_RIPPLES ? 6u : 2u), "effect %u (speed %u, custom1 %u): %u pixels jump at the effect time's 2^%u (%u at other frames)", id, p.speed, p.custom1, wrap, bits[bi], other);
+            }
+          }
+        }
+    }
+}
+
 /* ---------------------------------------------------------------------------------------------------- engine */
 #define NPX 200
 static fx_engine_t E;
@@ -1132,7 +1619,7 @@ static void test_engine(void)
     fx_engine_frame(&E, 10);
     render_strip(&E, out1, 60);
     CHECK(near_rgb(out1[0], RED, 2) && near_rgb(out1[20], RED, 2) && near_rgb(out1[40], BLUE, 2), "the third crossfade switches hard (%u,%u,%u)", out1[40].r, out1[40].g, out1[40].b);
-    /* fire: stateful, crossfades out to a stateless effect; fire -> fire (palette change) is a hard switch; no pool room: solid */
+    /* Fire keeps its heat while fading, including a queued palette change. */
     fx_engine_init(&E, NPX, pool, sizeof(pool));
     params_of(FX_FIRE, &p);
     fx_engine_set(&E, 0, &p, 0, 0);
@@ -1155,7 +1642,10 @@ static void test_engine(void)
     fx_engine_set(&E, 0, &p, 3600, 0);
     p.palette = PAL_LAVA;
     fx_engine_set(&E, 0, &p, 3700, 0);
-    CHECK(E.seg[0].xf < 0, "fire -> fire with another palette is a hard switch (one state)");
+    CHECK(E.seg[0].xf >= 0 && E.xf[E.seg[0].xf].used == 3, "Fire palette change waits for the running fade");
+    fx_engine_frame(&E, 3950);
+    CHECK(E.seg[0].xf >= 0 && E.xf[E.seg[0].xf].prev.state == E.seg[0].cur.state,
+          "Fire palette crossfade must share heat without clearing or double-stepping it");
     {
         uint8_t tiny[10];
         fx_engine_init(&E, NPX, tiny, sizeof(tiny));
@@ -1309,12 +1799,12 @@ static void test_pack(void)
     c.bpp = 3; c.ord[0] = 1; c.ord[1] = 0; c.ord[2] = 2;
     sum = fx_pack(in + 1, w, 1, 255, &c);
     CHECK(w[0] == 20 && w[1] == 10 && w[2] == 30 && sum == 60, "GRB: %u %u %u sum %u", w[0], w[1], w[2], sum);
-    c.gamma = fx_gamma28;
+    c.gamma = 1;
     sum = fx_pack(in, w, 1, 255, &c);
-    CHECK(w[0] == fx_gamma28[150] && w[1] == fx_gamma28[100] && w[2] == fx_gamma28[200], "gamma applied");
+    CHECK(w[0] == fx_gamma(150) && w[1] == fx_gamma(100) && w[2] == fx_gamma(200), "gamma applied");
     CHECK(sum == (uint32_t)w[0] + w[1] + w[2], "sum of the wire bytes");
     sum = fx_pack(in, w, 1, 128, &c);
-    CHECK(w[1] == fx_gamma28[fx_scale8(100, 128)] && w[0] == fx_gamma28[fx_scale8(150, 128)], "brightness before gamma");
+    CHECK(w[1] == fx_gamma(fx_scale8(100, 128)) && w[0] == fx_gamma(fx_scale8(150, 128)), "brightness before gamma");
     c.gamma = 0;
     /* RGBW accurate: W = min taken out */
     c.bpp = 4; c.ord[0] = 0; c.ord[1] = 1; c.ord[2] = 2; c.ord[3] = 3; c.white_mode = FX_W_ACCURATE;
@@ -1384,7 +1874,7 @@ static void test_pack(void)
         for (i = 0; i < 300u; i++) {
             frame[i] = fx_rgb(255, 200, (i * 3u) & 255u);
         }
-        c.bpp = 3; c.ord[0] = 1; c.ord[1] = 0; c.ord[2] = 2; c.gamma = fx_gamma28; c.white_mode = 0;
+        c.bpp = 3; c.ord[0] = 1; c.ord[1] = 0; c.ord[2] = 2; c.gamma = 1; c.white_mode = 0;
         s0 = fx_pack(frame, wire, 300, 255, &c);
         CHECK(fx_limit_bri(255, s0, s0) == 255 && fx_limit_bri(200, s0, s0 + 1000u) == 200, "limiter leaves a frame under the limit");
         for (max_sum = s0 / 8u; max_sum < s0; max_sum += s0 / 8u) {
@@ -1406,6 +1896,159 @@ static void report_sizes(void)
            (unsigned)sizeof(fx_xfade_t), (unsigned)sizeof(fx_engine_t), FX_MAX_SEG, FX_MAX_XFADE);
 }
 
+/* Long legal transitions must approach the target before their final frame, also across host-ms wrap. */
+static void test_long_transitions(void)
+{
+    static const uint16_t durations[] = { 1000, 10000, 32769, 40000, 60000, 65535 };
+    fx_engine_t e;
+    fx_params_t p;
+    uint32_t j, t, now = 0xFFFFF000u;
+    for (j = 0; j < sizeof durations / sizeof durations[0]; j++) {
+        const uint32_t dur = durations[j];
+        params_of(FX_SOLID, &p);
+        p.c[0] = fx_rgb(255, 0, 0);
+        p.trans_ms = (uint16_t)dur;
+        fx_engine_init(&e, 8, 0, 0);
+        fx_engine_set(&e, 0, &p, now, now);
+        for (t = 0; t <= dur; t += dur / 7u) {
+            int expected = (int)(255u * t / dur);
+            fx_engine_frame(&e, now + t);
+            CHECK(abs((int)e.seg[0].bri - expected) <= 1, "long ramp dur=%u t=%u bri=%u expected=%d", dur, t, e.seg[0].bri, expected);
+        }
+        fx_engine_frame(&e, now + dur - 1u);
+        CHECK(e.seg[0].bri >= 253u, "long ramp final step dur=%u bri=%u", dur, e.seg[0].bri);
+        fx_engine_frame(&e, now + dur);
+        p.id = FX_BREATHE;
+        fx_engine_set(&e, 0, &p, now + dur, now);
+        fx_engine_frame(&e, now + 2u * dur - 1u);
+        CHECK(e.seg[0].xf >= 0 && e.xf[e.seg[0].xf].w >= 254u, "long crossfade final step dur=%u", dur);
+    }
+}
+
+static void test_fire_segment_isolation(void)
+{
+    fx_engine_t e;
+    fx_params_t p;
+    uint8_t heat[FX_MAX_SEG * FX_FIRE_CELLS], saved[64];
+    uint32_t t, k;
+    fx_engine_init(&e, 512, heat, sizeof heat);
+    params_of(FX_FIRE, &p);
+    p.seg_start = 300;
+    p.seg_len = 64;
+    fx_engine_set(&e, 1, &p, 0, 0);       /* the hub may configure segments in any order */
+    for (t = 0; t <= 2000; t += 30) {
+        fx_engine_frame(&e, t);
+    }
+    memcpy(saved, e.seg[1].cur.state, sizeof saved);
+    p.seg_start = 0;
+    p.seg_len = 256;
+    fx_engine_set(&e, 0, &p, 2010, 2010);
+    CHECK(memcmp(saved, e.seg[1].cur.state, sizeof saved) == 0, "starting Fire segment 0 changed running segment 1 heat");
+    CHECK(e.seg[0].cur.state + 256 <= e.seg[1].cur.state || e.seg[1].cur.state + 64 <= e.seg[0].cur.state,
+          "Fire segments share heat cells after reverse setup order");
+    /* Resizing an earlier segment must not move its allocation into a later one. */
+    fx_engine_init(&e, 512, heat, sizeof heat);
+    p.seg_len = 8;
+    fx_engine_set(&e, 0, &p, 0, 0);
+    p.seg_start = 300;
+    p.seg_len = 64;
+    fx_engine_set(&e, 1, &p, 0, 0);
+    for (k = 0; k < sizeof saved; k++) {
+        e.seg[1].cur.state[k] = saved[k] = (uint8_t)(k + 1u);
+    }
+    p.seg_start = 0;
+    p.seg_len = 256;
+    fx_engine_set(&e, 0, &p, 2010, 2010);
+    CHECK(memcmp(saved, e.seg[1].cur.state, sizeof saved) == 0, "resizing Fire segment 0 changed segment 1 heat");
+    /* The live RNG must be isolated too: extra Fire work and a fading-out Fire
+     * on segment 0 must not change segment 1's subsequent heat or pixels. */
+    {
+        fx_engine_t control;
+        uint8_t control_heat[FX_MAX_SEG * FX_FIRE_CELLS];
+        rgb_t got[32], want[32];
+        fx_engine_init(&e, 512, heat, sizeof heat);
+        fx_engine_init(&control, 512, control_heat, sizeof control_heat);
+        params_of(FX_FIRE, &p);
+        p.seg_start = 300;
+        p.seg_len = 64;
+        fx_engine_set(&e, 1, &p, 0, 0);
+        fx_engine_set(&control, 1, &p, 0, 0);
+        for (t = 0; t <= 3000; t += 30) {
+            if (t == 900 || t == 1500 || t == 2100) {
+                p.seg_start = 0;
+                p.seg_len = t == 900 ? 8 : 256;
+                p.id = t == 2100 ? FX_SOLID : FX_FIRE;
+                p.trans_ms = t == 2100 ? 600 : 0;
+                fx_engine_set(&e, 0, &p, t, t);
+            }
+            fx_engine_frame(&e, t);
+            fx_engine_frame(&control, t);
+            fx_engine_render(&e, got, 300, 332);
+            fx_engine_render(&control, want, 300, 332);
+            CHECK(memcmp(got, want, sizeof got) == 0 &&
+                  memcmp(e.seg[1].cur.state, control.seg[1].cur.state, 64) == 0,
+                  "Fire segment 1 RNG/heat coupled to segment 0 at %u ms", t);
+        }
+    }
+}
+
+static void test_gradient_short_virtual(void)
+{
+    fx_ctx_t x;
+    fx_params_t p;
+    rgb_t whole[32], one;
+    uint32_t n, vlen, offset, k;
+    for (n = 2; n <= 32; n *= 2) {
+        for (vlen = 1; vlen <= 7; vlen++) {
+            for (offset = 0; offset <= 65535; offset += 65535) {
+                params_of(FX_GRADIENT, &p);
+                p.intensity = 255;
+                p.vlen = (uint16_t)vlen;
+                p.vstart = (uint16_t)offset;
+                fx_begin(&x, &p, (uint16_t)n, 0);
+                fx_frame(&x, 12345);
+                fx_render(&x, whole, 0, n);
+                for (k = 0; k < n; k++) {
+                    const uint32_t step = (8u * (3u << 16)) / vlen;
+                    const uint32_t g = (uint32_t)(((uint64_t)(offset + k) * step + ((x.et * 4u) & 65535u) * 3u) % (3u << 16));
+                    const uint32_t s = g >> 16;
+                    const rgb_t expected = fx_blend(p.c[s], p.c[s == 2u ? 0u : s + 1u], (g >> 8) & 255u);
+                    fx_render(&x, &one, k, k + 1);
+                    CHECK(rgb_eq(whole[k], expected) && rgb_eq(one, expected), "gradient n=%u vlen=%u offset=%u px=%u escapes colour cycle/chunk", n, vlen, offset, k);
+                }
+            }
+        }
+    }
+}
+
+static void test_wipe_virtual_extent(void)
+{
+    const uint32_t lengths[] = { 32767, 32768, 40000, 65535 };
+    fx_ctx_t x;
+    fx_params_t p;
+    rgb_t out[32];
+    uint32_t j, k, offset;
+    for (j = 0; j < sizeof lengths / sizeof lengths[0]; j++) {
+        for (offset = 0; offset < lengths[j]; offset += lengths[j] - 16u) {
+            params_of(FX_WIPE, &p);
+            p.vlen = (uint16_t)lengths[j];
+            p.vstart = (uint16_t)offset;
+            p.intensity = 255;
+            p.custom1 = 0;
+            p.c[0] = fx_rgb(255, 0, 0);
+            p.c[1] = fx_rgb(0, 0, 255);
+            fx_begin(&x, &p, 32, 0);
+            x.et = 3000;                         /* cycle 0's fully completed wipe/hold */
+            fx_frame(&x, 0);
+            fx_render(&x, out, 0, 32);
+            for (k = 0; k < 32; k++) {
+                CHECK(rgb_eq(out[k], p.c[offset + k < lengths[j] ? 0 : 1]),
+                      "Wipe held colour vlen=%u offset=%u px=%u", lengths[j], offset, k);
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "--golden") == 0) {
@@ -1422,9 +2065,18 @@ int main(int argc, char **argv)
     test_integrals();
     test_join_time();
     test_pace();
+    test_more();
+    test_more2();
+    test_smooth();
+    test_saturation();
+    test_etwrap();
     test_engine();
     test_renewal();
     test_pack();
+    test_long_transitions();
+    test_fire_segment_isolation();
+    test_gradient_short_virtual();
+    test_wipe_virtual_extent();
     report_sizes();
     printf("test_fx: %d checks, %d failed\n", g_checks, g_fail);
     return g_fail != 0;

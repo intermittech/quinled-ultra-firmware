@@ -57,8 +57,10 @@ RC_MEASURED uint16_t rc_brr(uint32_t rate_q16, uint8_t rate)
     /* PCLK1 runs on the HSI as the tick does: a tick of rate_q16 / 65536 host us instead of 50 means the clock is
      * 50 x 65536 / rate_q16 times the nominal; the divider for 1 Mbaud at 144 MHz is 144 (one step = 0.7 %: the
      * residual <= 0.35 %; 500 / 250 kbaud: 288 / 576, <= 0.17 / 0.09 %, each at its own resolution: review r6, 0.6.6
-     * rounded at 1 Mbaud's and shifted, 0.35 % at every rate, 4.6 us over a 250 kbaud burst) */
-    uint32_t nom = 144u << rate, brr = (nom * 3276800u + rate_q16 / 2u) / rate_q16;   /* (576 x 3276800 < 2^31) */
+     * rounded at 1 Mbaud's and shifted, 0.35 % at every rate, 4.6 us over a 250 kbaud burst). ANSWER_UART 1 (USART1,
+     * PCLK2 72 MHz, board.h RC_BRR_BASE): 72 / 144 / 288, one step 1.4 % at 1 Mbaud (residual <= 0.7 %), 0.7 / 0.35 %
+     * at 500 / 250 kbaud */
+    uint32_t nom = RC_BRR_BASE << rate, brr = (nom * 3276800u + rate_q16 / 2u) / rate_q16;   /* (576 x 3276800 < 2^31) */
     if (brr < nom - nom / 18u || brr > nom + nom / 18u) {
         brr = nom;                         /* not plausible (> 5.5 % off): nominal */
     }

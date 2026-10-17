@@ -39,6 +39,27 @@
 
 #define FWD_PIN    1u                                    /* PA1 = FWD_EN */
 
+#if BOARD_RETURN
+/* the answer UART (board.h ANSWER_UART): its registers, interrupt and TX pin; hw.c rc_*, hw_cold.c rc_hw_init */
+#if ANSWER_UART == 3
+#define RC_USART   USART3
+#define RC_IRQ     USART3_IRQn
+#define RC_TX_GPIO GPIOB                                 /* PB10 */
+#define RC_TX_PIN  10u
+#elif ANSWER_UART == 2
+#define RC_USART   USART2
+#define RC_IRQ     USART2_IRQn
+#define RC_TX_GPIO GPIOA                                 /* PA2 */
+#define RC_TX_PIN  2u
+#else
+#define RC_USART   USART1
+#define RC_IRQ     USART1_IRQn
+#define RC_TX_GPIO GPIOA                                 /* PA9 */
+#define RC_TX_PIN  9u
+#endif
+typedef char rc_irqn_is_board_h[RC_IRQ == RC_IRQN ? 1 : -1];   /* (isr.S takes the number from board.h) */
+#endif
+
 static inline void pin_cfg(GPIO_TypeDef *g, uint32_t pin, uint32_t cfg)
 {
     volatile uint32_t *r = pin < 8u ? &g->CFGLR : &g->CFGHR;

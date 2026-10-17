@@ -35,7 +35,7 @@ def main():
     cat = json.load(open(os.path.join(CORE, "fx_catalogue.json")))
     hdr = open(os.path.join(CORE, "fx.h")).read()
     fx = enum_ids(hdr, "FX_", {"FX_LAST", "FX_COUNT", "FX_MAX_SEG", "FX_MAX_XFADE", "FX_CHUNK"})
-    fx = {k: v for k, v in fx.items() if not k.startswith("FX_F_") and not k.startswith("FX_W_")}
+    fx = {k: v for k, v in fx.items() if not k.startswith(("FX_F_", "FX_W_", "FX_SM_"))}
     pal = enum_ids(hdr, "PAL_", {"PAL_LAST", "PAL_COUNT", "PAL_COLORS", "PAL_DEFAULT"})
     ids = [e["id"] for e in cat["effects"]]
     pids = [p["id"] for p in cat["palettes"]]

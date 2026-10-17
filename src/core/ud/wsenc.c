@@ -45,7 +45,7 @@ void ws_lut_build(ws_lut_t *L, const ws_chip_t *c)
     for (b = 0; b < 2u; b++) {
         uint32_t hi = b ? c->t1h : c->t0h;
         for (p = 0; p < 16u; p++) {
-            uint16_t *h = L->t.h[b][p];
+            uint16_t *h = L->t.exact.h[b][p];
             h[0] = h[1] = h[2] = h[3] = 0;
             for (q = 0; q < hi; q++) {                   /* sample p + q: word (p + q) >> 4, MSB = the earliest */
                 h[(p + q) >> 4] |= (uint16_t)(0x8000u >> ((p + q) & 15u));
@@ -53,7 +53,7 @@ void ws_lut_build(ws_lut_t *L, const ws_chip_t *c)
         }
     }
     for (p = 0; p < 16u; p++) {
-        L->adv[p] = (uint8_t)((p + s1) >> 4);
+        L->t.exact.adv[p] = (uint8_t)((p + s1) >> 4);
     }
     L->s1 = (uint8_t)s1;
     L->tail = (uint8_t)(c->s - s1);
@@ -158,9 +158,9 @@ WS_RAMCODE uint32_t ws_ring_fill(ws_enc_t *e, const ws_lut_t *L, uint16_t *buf, 
                 if ((int32_t)(w - e->next_w) > (int32_t)(WS_W_PER_MS / 2u)) {
                     ws_sat8(&e->late);
                 }
-                do {
-                    e->next_w += e->period_w;
-                } while ((int32_t)(w - e->next_w) >= 0);
+                /* Skip whole slots in constant time, even after a long render stall.
+                 * LOW scheduling above guarantees w >= next_w (signed, wrap-safe). */
+                e->next_w += ((w - e->next_w) / e->period_w + 1u) * e->period_w;
             } else {
                 e->next_w = w;
             }
@@ -207,8 +207,8 @@ WS_RAMCODE uint32_t ws_ring_fill(ws_enc_t *e, const ws_lut_t *L, uint16_t *buf, 
             while (i < n && limit - w >= need) {
                 uint32_t byte = fb[i++], k;
                 for (k = 0; k < 8u; k++) {
-                    const uint16_t *h = L->t.h[(byte >> 7) & 1u][p];
-                    const uint32_t a = L->adv[p], h0 = h[0], h1 = h[1], h2 = h[2], hn = h[a];
+                    const uint16_t *h = L->t.exact.h[(byte >> 7) & 1u][p];
+                    const uint32_t a = L->t.exact.adv[p], h0 = h[0], h1 = h[1], h2 = h[2], hn = h[a];
                     q[0] = (uint16_t)(cur | h0);
                     q[1] = (uint16_t)h1;
                     q[2] = (uint16_t)h2;

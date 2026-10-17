@@ -52,4 +52,21 @@ int ws_decode_count(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, cons
  * first). Returns the number of complete bits, or a WS_ERR_* code (a reset gap inside: WS_ERR_SHORT). */
 int ws_decode_last(const uint16_t *buf, uint32_t nsamples, const ws_timing_t *t, uint8_t *out);
 
+/* The same two decodes by the RISING edges only (the Ultra-Digital receiver's chain mode, where two CRCs check the result and the main loop has
+ * 50 us ticks to share): a bit is '1' when its high pulse is >= 17 samples (WS_TIMING_DEFAULT's thr_one) and a word is 16 samples, so the
+ * sample 16 after a rising edge is the same bit of the next word: HIGH = '1'. The falling edges, the pulse's length limit and the reset gap
+ * inside the frame are not looked at (a frame that is cut or has noise fails its CRC). About the cost of ws_decode_frame / _last (~90 cycles a bit); they are
+ * here for what those two cannot do: ws_rise_step resumes where the last call stopped (the frame's words arrive while it is decoded), ws_rise_last reads a ring in place.
+ * ws_rise_frame: the first nbits bits into out ((nbits + 7) / 8 bytes, zeroed); returns nbits, or WS_ERR_NO_GAP (the buffer starts HIGH),
+ * WS_ERR_NO_EDGE / WS_ERR_TRUNCATED (fewer bits in buf). ws_rise_last: nwords words of a ring (ring[(start + k) & mask]), every bit whose
+ * rising edge has a word after it, the last 64 kept in out; the window may start inside a pulse (that bit is skipped); returns the bits
+ * counted or WS_ERR_NO_EDGE. */
+int ws_rise_frame(const uint16_t *buf, uint32_t nsamples, uint16_t nbits, uint8_t *out);
+/* ws_rise_frame in steps, as the frame's words arrive (buf[0 .. nwords) so far, nwords only grows): ws_rise_t zeroed before the first call, out
+ * zeroed by the caller. Returns nbits when they are all out, 0 for "more words, please" (the last word waits for the one after it), or
+ * WS_ERR_NO_GAP */
+typedef struct { uint16_t k, b; uint8_t prev; } ws_rise_t;
+int ws_rise_step(ws_rise_t *st, const uint16_t *buf, uint32_t nwords, uint16_t nbits, uint8_t *out);
+int ws_rise_last(const uint16_t *ring, uint32_t mask, uint32_t start, uint32_t nwords, uint8_t *out);
+
 #endif

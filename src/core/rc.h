@@ -7,9 +7,9 @@
  * A receiver chain on one Diff-Power port: every receiver has an input RS-485 transceiver (towards the host, DE on
  * PB14) and an output one (towards the next receiver, DE on PA10); both ~RE on GND. In the response window every
  * receiver that got a valid POLL turns around: its input transceiver drives upstream, its output one listens, and a
- * resistor node (output RO via 1 k, USART3 TX on PB10 via 100 R) feeds the input DI, so the answers of the receivers
- * further down pass through in hardware. A receiver drives PB10 (USART3 TX, 8N1) only inside its own slot; otherwise
- * PB10 is an input (high-Z) and the node follows the output transceiver.
+ * resistor node (output RO via 1 k, the answer UART's TX via 100 R) feeds the input DI, so the answers of the receivers
+ * further down pass through in hardware. A receiver drives its TX pin (8N1; board.h ANSWER_UART: USART3 on PB10 by
+ * default) only inside its own slot; otherwise the pin is an input (high-Z) and the node follows the output transceiver.
  *
  * Timing (all from t0 = the RW frame's last falling edge, measured locally in the DIN ring; offsets in host us,
  * scaled to local ticks with the shared clock's rate):
@@ -74,7 +74,8 @@ int32_t  rc_last_edge(const uint16_t *w, uint32_t words);
  * (negative: the edge's samples were not in the ring yet at that read); rate_q16 = host us per local tick, Q16 (the
  * shared clock's) */
 void     rc_schedule(rc_sched_t *s, uint32_t edge_tick, int32_t back_samples, uint32_t rate_q16, const uint8_t *poll);
-/* USART3 BRR (PCLK1 144 MHz) for the return rate, corrected by the local clock's measured rate (the HSI's error) */
+/* the answer UART's BRR (board.h RC_BRR_BASE << rate: 144 / 288 / 576 at PCLK1 144 MHz, ANSWER_UART 1: 72 / 144 / 288 at
+ * PCLK2 72 MHz) for the return rate, corrected by the local clock's measured rate (the HSI's error) */
 uint16_t rc_brr(uint32_t rate_q16, uint8_t rate);
 /* k big-endian fields into d: field i is the low len[i] bytes (1-4) of v[i] (the pages' encoder) */
 void     rc_pack(uint8_t *d, const uint32_t *v, const uint8_t *len, uint32_t k);

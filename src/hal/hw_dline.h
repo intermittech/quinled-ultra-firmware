@@ -65,5 +65,11 @@ DL_INLINE uint16_t dl_hw_edges(void)
 {
     return (uint16_t)TIM4->CNT;
 }
+/* CHAIN: TIM4 back to 0 in the gap before a frame (core/dline.c DLINE_A_EDGES_ZERO): its count is then the frame's bits. TIM4's only
+ * writer: a hardware gate (a later phase) re-arms its compare from the same place */
+DL_INLINE void dl_hw_edges_zero(void)
+{
+    TIM4->CNT = 0;
+}
 
 #endif

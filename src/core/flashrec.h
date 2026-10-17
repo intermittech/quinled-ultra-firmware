@@ -43,9 +43,12 @@
 uint32_t flash_op(uint32_t addr, const uint16_t *src, uint32_t halfwords, uint32_t erase_addr);
 
 /* the four A/B page pairs (0.6.6: one descriptor each, flashrec.c; in main.c's erase order) */
-enum { REC_LIFE = 0, REC_SET, REC_CAL, REC_SCENE,
+enum { REC_LIFE = 0, REC_SET,
+#if BOARD != BOARD_DP_UD              /* BOARD 3 persists only lifetime and local-effects records */
+       REC_CAL, REC_SCENE,
 #if MON_EXTRA
        REC_CALHIST,                    /* (0.6.6, M2) the calibration history */
+#endif
 #endif
        REC_COUNT };
 /* a pair's erase: 2 = due before its next write, 1 = possible ahead (pagepair.h), 0 = none; ... and that erase */
@@ -68,6 +71,7 @@ static inline uint32_t settings_pending(void) { return flash_rec_pending(REC_SET
                                        the next write, 1 = possible ahead (pagepair.h) */
 static inline uint32_t settings_prepare(void) { return flash_rec_prepare(REC_SET); }   /* ... that erase */
 #endif
+#if BOARD != BOARD_DP_UD
 /* current calibration (core/calstore.h): the newest record (-1: none, or cleared); store one (levels 0 = clear).
  * *count: calibrations stored on this board (changes only when written) */
 int      cal_load(isense_cal_t *c, uint16_t *count);
@@ -81,6 +85,7 @@ static inline uint32_t scene_pending(void) { return flash_rec_pending(REC_SCENE)
                                        page that must be erased first; 1: the next page can be erased ahead (it holds
                                        only the oldest records) */
 static inline uint32_t scene_prepare(void) { return flash_rec_prepare(REC_SCENE); }
+#endif
 /* the lifetime record (core/energy.h, two pages; nothing erases them but a full chip erase): the newest stored one
  * into *r (1; 0 = none); store e's into the next erased entry (energy_pack) */
 uint32_t life_load(life_rec_t *r);
@@ -95,7 +100,7 @@ uint8_t  scene_fx_load(ultra_t *u, uint8_t crc[ULTRA_LIGHTS]);
  * lights in mask with their CRC-8s (none: the store is erased), the header last. Erases both pages: only where erases
  * are admitted. */
 uint32_t scene_fx_store(const ultra_t *u, uint8_t mask, const uint8_t crc[ULTRA_LIGHTS]);
-#if MON_EXTRA
+#if MON_EXTRA && BOARD != BOARD_DP_UD
 /* (0.6.6, M2) the calibration history (core/calhist.h): the newest record into *h (1; 0 = none: *h untouched); store *h
  * (calhist_pack, programmed from *h itself); the erases as the other pairs' */
 uint32_t calhist_load(calhist_t *h);
