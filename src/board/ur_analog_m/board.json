@@ -1,0 +1,279 @@
+{
+  "id": 2,
+  "pwm": 1,
+  "dline": 0,
+  "return": 1,
+  "channels": 5,
+  "outputs": 1,
+  "hw_id": 2,
+  "jig_pads": [
+    "PA3"
+  ],
+  "current": {
+    "fuse_ma": 3000,
+    "board_ma": 2250,
+    "sense_mv_per_a": 500
+  },
+  "voltage": {
+    "vref_mv": 3280,
+    "supply_ratio": 23,
+    "aux_ratio": 13
+  },
+  "pins": {
+    "din": "DIN",
+    "led": "STATUS",
+    "current": "ISENSE",
+    "supply": "VSENSE",
+    "aux": "AUX",
+    "jig": "TP6"
+  },
+  "product_name": "Diff-Power Ultra Receiver Analog-Medium",
+  "lights": 5,
+  "revision": 1,
+  "output_rating_ma": 8000,
+  "calibration_ms": 200,
+  "sense_full_scale_ma": 16500,
+  "link": {
+    "always_forwards": false,
+    "return": true,
+    "profile_mask": 15,
+    "timing_qualified": false
+  },
+  "assemblies": [
+    {
+      "id": 2,
+      "channel_ma": 3000,
+      "chain_port": false
+    },
+    {
+      "id": 3,
+      "channel_ma": 3000,
+      "chain_port": true
+    },
+    {
+      "id": 4,
+      "channel_ma": 5000,
+      "chain_port": false
+    },
+    {
+      "id": 5,
+      "channel_ma": 5000,
+      "chain_port": true
+    }
+  ],
+  "default_assembly": 3,
+  "bindings": {
+    "ch32v20x": {
+      "board": "ur_analog_m",
+      "mcu": "ch32v20x",
+      "answer_uarts": [
+        1
+      ],
+      "pins": {
+        "1": [
+          [
+            "A",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "6",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "5",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "1",
+            "LOW",
+            "OUTPUT"
+          ],
+          [
+            "A",
+            "2",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "3",
+            "HIGH",
+            "PULL"
+          ],
+          [
+            "A",
+            "4",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "7",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "8",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "9",
+            "HIGH",
+            "PULL"
+          ],
+          [
+            "A",
+            "10",
+            "HIGH",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "14",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "B",
+            "10",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "15",
+            "LOW",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "11",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "B",
+            "0",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "B",
+            "1",
+            "0",
+            "ALTERNATE"
+          ]
+        ]
+      },
+      "adc": {
+        "current": 7,
+        "supply": 4,
+        "aux": 0
+      }
+    }
+  },
+  "descriptor": {
+    "link": {
+      "port": 0,
+      "flags": 7,
+      "rates": 7,
+      "delay_ns": 300,
+      "width_ns": 24,
+      "gap_us": 500,
+      "late_us": 80,
+      "clock": 7,
+      "kind": 1,
+      "phy": 1,
+      "mtu": 48,
+      "reply": 1,
+      "reserved": 0,
+      "profiles": 15
+    },
+    "domains": [
+      {
+        "id_parent": 15,
+        "kind": 1,
+        "min_10mv": 4800,
+        "max_10mv": 5500,
+        "rating_ma": "$current.board_ma",
+        "trip_ma": "$current.fuse_ma",
+        "enforcement": 10,
+        "sense": 3,
+        "efficiency": 100
+      },
+      {
+        "id_parent": 16,
+        "kind": 5,
+        "min_10mv": 65535,
+        "max_10mv": 65535,
+        "rating_ma": "$output_rating_ma",
+        "trip_ma": 0,
+        "enforcement": 16,
+        "sense": 6,
+        "efficiency": 0
+      }
+    ],
+    "senses": [
+      {
+        "id": 0,
+        "quantity": 1,
+        "domain": 0,
+        "target": 255,
+        "flags": 5,
+        "exponent": 0,
+        "full_scale": "$sense_full_scale_ma"
+      },
+      {
+        "id": 1,
+        "quantity": 2,
+        "domain": 0,
+        "target": 255,
+        "flags": 5,
+        "exponent": 0,
+        "full_scale": 7590
+      },
+      {
+        "id": 2,
+        "quantity": 2,
+        "domain": 1,
+        "target": 255,
+        "flags": 1,
+        "exponent": 0,
+        "full_scale": 4290
+      },
+      {
+        "id": 3,
+        "quantity": 3,
+        "domain": 0,
+        "target": 255,
+        "flags": 9,
+        "exponent": 0,
+        "full_scale": 0
+      }
+    ],
+    "pwm": [
+      {
+        "first": 0,
+        "count": "$channels",
+        "domain": 1,
+        "flags": 15,
+        "channel_ma": "$assembly.channel_ma",
+        "bank_ma": "$output_rating_ma",
+        "enforcement": 16,
+        "cal_ms": "$calibration_ms",
+        "reserved": 0
+      }
+    ]
+  },
+  "descriptor_product_name": "Diff-Power-UR-Analog-M"
+}

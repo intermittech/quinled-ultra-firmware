@@ -1,0 +1,193 @@
+{
+ "batch": "b3_natural_particles",
+ "c": "b3_natural_particles.c",
+ "js": "b3_natural_particles.js",
+ "effects": [
+  {
+   "id": 45,
+   "symbol": "firefly_sync",
+   "built": true,
+   "flashy": false,
+   "white": false,
+   "tick_ms": 20,
+   "particles": 64,
+   "cost": {
+    "frame": 5200,
+    "px": 58,
+    "tick": 0,
+    "particle": 515,
+    "step": 417,
+    "px_pal": 115,
+    "step_pal": 423,
+    "frame_pal": 7320
+   }
+  },
+  {
+   "id": 46,
+   "symbol": "rain_on_glass",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 20,
+   "particles": 64,
+   "cost": {
+    "frame": 112880,
+    "px": 354,
+    "tick": 0,
+    "particle": 316,
+    "step": 1100
+   }
+  },
+  {
+   "id": 50,
+   "symbol": "koi_pond",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 20,
+   "particles": 6,
+   "cost": {
+    "frame": 7650,
+    "px": 440,
+    "tick": 0,
+    "particle": 382,
+    "step": 1667
+   }
+  },
+  {
+   "id": 53,
+   "symbol": "dust_motes",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 20,
+   "particles": 96,
+   "cost": {
+    "frame": 7100,
+    "px": 133,
+    "tick": 0,
+    "particle": 266,
+    "step": 834,
+    "px_pal": 200,
+    "frame_pal": 14290
+   }
+  },
+  {
+   "id": 56,
+   "symbol": "petal_fall",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 20,
+   "particles": 40,
+   "cost": {
+    "frame": 3000,
+    "px": 234,
+    "tick": 0,
+    "particle": 271
+   }
+  },
+  {
+   "id": 57,
+   "symbol": "starlings",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 20,
+   "particles": 160,
+   "cost": {
+    "frame": 121020,
+    "px": 139,
+    "tick": 0,
+    "particle": 511,
+    "step": 834,
+    "px_pal": 182,
+    "frame_pal": 150670
+   }
+  },
+  {
+   "id": 67,
+   "symbol": "dew_necklace",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 8100,
+    "px": 419,
+    "tick": 0,
+    "particle": 0,
+    "px_pal": 460,
+    "frame_pal": 99690
+   }
+  },
+  {
+   "id": 75,
+   "symbol": "marble_run",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 10,
+   "particles": 24,
+   "cost": {
+    "frame": 11000,
+    "px": 202,
+    "tick": 0,
+    "particle": 2046
+   }
+  },
+  {
+   "id": 90,
+   "symbol": "orbit_slingshot",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "hold": true,
+   "tick_ms": 20,
+   "particles": 128,
+   "cost": {
+    "frame": 8600,
+    "px": 330,
+    "tick": 0,
+    "particle": 1094,
+    "step": 1100
+   }
+  },
+  {
+   "id": 107,
+   "symbol": "snowfall",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 20,
+   "particles": 150,
+   "cost": {
+    "frame": 23110,
+    "px": 98,
+    "tick": 0,
+    "particle": 195,
+    "px_pal": 200
+   }
+  },
+  {
+   "id": 112,
+   "symbol": "champagne",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "hold": true,
+   "tick_ms": 20,
+   "particles": 200,
+   "cost": {
+    "frame": 12500,
+    "px": 219,
+    "tick": 0,
+    "particle": 189,
+    "step": 1000,
+    "px_pal": 300,
+    "frame_pal": 29620
+   }
+  }
+ ]
+}

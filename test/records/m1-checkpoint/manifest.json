@@ -1,0 +1,42 @@
+{
+ "elf_md5": "5aa3337e7967d40dbf545541d11adcb9",
+ "label": "m1-checkpoint",
+ "layout": "upper (src/mcu/ch32v20x/layout.h)",
+ "made_by": "tools/record_corpus.py write",
+ "source": "3edeb1e",
+ "stores": {
+  "cal": {
+   "cal": "0119324b64894b5a3a4a9618edaacdb77914a1e334ff75bec133566d6c5ea6088b97d4e050d3cce13d08645116f1a7",
+   "count": "0600",
+   "ret": 0
+  },
+  "calhist": {
+   "rec": "43414c4806000000ff1b0153463ab253e2f041c7c47a7a57011e156601283a70ee7fad89dcdbeace64e2b2c3a762b11117e3e3f7289b722bb0fdbed80000ea6b",
+   "ret": 1
+  },
+  "fx": {
+   "crc": "da00b50014",
+   "heads": [
+    "5ba11000816299d48c7f9cab6e0ead382544cf7b721eadf2ce5400002b493d007f34633d76b06a808b6ba59d539d89d013202b1688138a0960ea204e00000000b80ba00f000000001f030102060605010201db0383eea5464e3b260b029ef6d5e3b60000",
+    null,
+    "24461300c4dc956b1f4fdaee1cb194d5f518446f7b8dad24a53e0000d55280f6966ada3363e55ff34eb71c6f7c2c46af05aeb52f88131fda60ea204e00000000b80ba00f000000001f020201030103020201bc04434e4ae6dd75417e204525dfe1dd0000",
+    null,
+    "40b811006aa58ac8f35dcd2924f7ac9ebc51c81781926e3823e600007a4d75b70197d9461c823768e1013316a6f4793960d1eb8e88139ddd60ea204e00000000b80ba00f00000000170302040700050302016d08f67f41bd1a36d6b1607a47e6715a0000"
+   ],
+   "mask": 21
+  },
+  "life": {
+   "rec": "000000009f5a5b4a189c7d5f6a5b530a904d89dff90000000d000000879ffc8ee7024c9fdf8f5023efd60eeb514ed12a",
+   "ret": 1
+  },
+  "scene": {
+   "ret": 0,
+   "scene": "d5411cf84485e30dded514df"
+  },
+  "settings": {
+   "ext": "4107ae00b10621",
+   "ret": 0,
+   "set": "df0b4754f1dc83a3b271b4ca36bb4885"
+  }
+ }
+}

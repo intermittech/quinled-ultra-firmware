@@ -1,0 +1,584 @@
+{
+  "id": 3,
+  "pwm": 0,
+  "dline": 1,
+  "return": 1,
+  "channels": 0,
+  "outputs": 1,
+  "hw_id": 3,
+  "jig_pads": [
+    "PA3"
+  ],
+  "current": {
+    "fuse_ma": 3000,
+    "board_ma": 2250,
+    "sense_mv_per_a": 500
+  },
+  "voltage": {
+    "vref_mv": 3280,
+    "supply_ratio": 23,
+    "aux_ratio": 13
+  },
+  "pins": {
+    "din": "DIN",
+    "led": "STATUS",
+    "current": "ISENSE",
+    "supply": "VSENSE",
+    "aux": "AUX",
+    "jig": "TP6"
+  },
+  "product_name": "Diff-Power Ultra Receiver Digital-Medium",
+  "lights": 0,
+  "revision": 1,
+  "output_rating_ma": 2250,
+  "calibration_ms": 6000,
+  "sense_full_scale_ma": 6600,
+  "link": {
+    "always_forwards": false,
+    "return": true,
+    "profile_mask": 15,
+    "timing_qualified": false
+  },
+  "assemblies": [
+    {
+      "id": 0,
+      "chain_port": true
+    }
+  ],
+  "default_assembly": 0,
+  "bindings": {
+    "ch32v20x": {
+      "board": "ur_digital_m",
+      "mcu": "ch32v20x",
+      "answer_uarts": [
+        1
+      ],
+      "pins": {
+        "1": [
+          [
+            "A",
+            "10",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "1",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "14",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "7",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "A",
+            "6",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "5",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "4",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "2",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "3",
+            "HIGH",
+            "PULL"
+          ],
+          [
+            "B",
+            "15",
+            "LOW",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "11",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "10",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "A",
+            "8",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "1",
+            "CLEAR",
+            "OUTPUT"
+          ]
+        ]
+      },
+      "adc": {
+        "current": 8,
+        "supply": 4,
+        "aux": 0
+      },
+      "features": {
+        "lean_telemetry": 1
+      }
+    },
+    "ch32v40x": {
+      "board": "ur_digital_m",
+      "mcu": "ch32v40x",
+      "answer_uarts": [
+        7
+      ],
+      "pins": {
+        "7": [
+          [
+            "A",
+            "8",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "6",
+            "CLEAR",
+            "OUTPUT_SLOW"
+          ],
+          [
+            "B",
+            "7",
+            "CLEAR",
+            "OUTPUT_SLOW"
+          ],
+          [
+            "A",
+            "11",
+            "CLEAR",
+            "OUTPUT_SLOW"
+          ],
+          [
+            "A",
+            "15",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "5",
+            "CLEAR",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "3",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "B",
+            "4",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "3",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "10",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "9",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "1",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "2",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "6",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "12",
+            "HIGH",
+            "PULL"
+          ],
+          [
+            "A",
+            "4",
+            "LOW",
+            "OUTPUT"
+          ],
+          [
+            "A",
+            "5",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "7",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "1",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "8",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "9",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "10",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "11",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "12",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "13",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "14",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "B",
+            "15",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "1",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "2",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "3",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "4",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "5",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "10",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "11",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "12",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "13",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "14",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "C",
+            "15",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "D",
+            "2",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "D",
+            "8",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "D",
+            "14",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "D",
+            "15",
+            "0",
+            "ANALOG"
+          ]
+        ]
+      },
+      "adc": {
+        "current": 2,
+        "supply": 1,
+        "aux": 0
+      },
+      "overrides": {
+        "calibration_ms": 6500,
+        "descriptor": {
+          "pixel": {
+            "delay_us": 174,
+            "bit_ns": 1250,
+            "frame_bytes": 2500,
+            "rgb": 800,
+            "rgbw": 600,
+            "rgbcct": 500
+          },
+          "resources": {
+            "pool": 2500,
+            "simultaneous": 2500
+          }
+        }
+      },
+      "features": {
+        "fx_v407": 1
+      }
+    }
+  },
+  "descriptor": {
+    "link": {
+      "port": 0,
+      "flags": 55,
+      "rates": 7,
+      "delay_ns": 300,
+      "width_ns": 24,
+      "gap_us": 500,
+      "late_us": 80,
+      "clock": 7,
+      "kind": 1,
+      "phy": 1,
+      "mtu": 48,
+      "reply": 1,
+      "reserved": 0,
+      "profiles": 15
+    },
+    "domains": [
+      {
+        "id_parent": 15,
+        "kind": 1,
+        "min_10mv": 4800,
+        "max_10mv": 5500,
+        "rating_ma": "$current.board_ma",
+        "trip_ma": "$current.fuse_ma",
+        "enforcement": 42,
+        "sense": 3,
+        "efficiency": 100
+      },
+      {
+        "id_parent": 16,
+        "kind": 5,
+        "min_10mv": 65535,
+        "max_10mv": 65535,
+        "rating_ma": "$output_rating_ma",
+        "trip_ma": 0,
+        "enforcement": 48,
+        "sense": 6,
+        "efficiency": 0
+      }
+    ],
+    "senses": [
+      {
+        "id": 0,
+        "quantity": 1,
+        "domain": 0,
+        "target": 255,
+        "flags": 5,
+        "exponent": 0,
+        "full_scale": "$sense_full_scale_ma"
+      },
+      {
+        "id": 1,
+        "quantity": 2,
+        "domain": 0,
+        "target": 255,
+        "flags": 5,
+        "exponent": 0,
+        "full_scale": 7590
+      },
+      {
+        "id": 2,
+        "quantity": 2,
+        "domain": 1,
+        "target": 255,
+        "flags": 1,
+        "exponent": 0,
+        "full_scale": 4290
+      },
+      {
+        "id": 3,
+        "quantity": 3,
+        "domain": 0,
+        "target": 255,
+        "flags": 9,
+        "exponent": 0,
+        "full_scale": 0
+      }
+    ],
+    "pixel": [
+      {
+        "output": 0,
+        "domain": 1,
+        "segments": 4,
+        "flags": 31,
+        "frame_bytes": 2000,
+        "rgb": 600,
+        "rgbw": 500,
+        "rgbcct": 400,
+        "bit_ns": 1334,
+        "delay_us": 234,
+        "chips": 127,
+        "rating_ma": "$output_rating_ma",
+        "fps": 1000,
+        "enforcement": 48,
+        "sources": 3,
+        "ingresses": 1,
+        "cal_ms": "$calibration_ms",
+        "latch_us": 500,
+        "control": 0
+      }
+    ],
+    "resources": {
+      "pool": 2000,
+      "simultaneous": 2000,
+      "local_bytes_s": 100000,
+      "stream_bytes_s": 100000,
+      "outputs": 1,
+      "calibrations": 1
+    }
+  },
+  "descriptor_product_name": "Diff-Power-UR-Digital-M"
+}

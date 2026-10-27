@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 QuinLED
+# Two data lines with QuinLED dig2analog-plus-5ch boards, each with its own update entity. "Update all lines"
+# installs the release on both: the image is downloaded and checked once, then sent to one line after the other.
+# Line A is on a switched supply (Diff-Power): the update switches it on for the session.
+esphome:
+  name: d2a-plus-two-lines
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/quinled-ultra-esphome@main
+    components: [ultra_line, dig2analog_plus]
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+http_request:
+
+power_supply:
+  - id: line_a_supply
+    pin: GPIO13
+    enable_time: 0ms
+    keep_on_time: 10s
+
+ultra_line:
+  - id: line_a
+    pin: GPIO16
+    num_boards: 4
+    rmt_symbols: 128              # several lines share the RMT memory
+    power_supply: line_a_supply
+  - id: line_b
+    pin: GPIO17
+    num_boards: 12
+    rmt_symbols: 128
+
+light:
+  - platform: dig2analog_plus
+    ultra_line_id: line_a
+    name: Hall
+    board: 0
+    channel: 1
+  - platform: dig2analog_plus
+    ultra_line_id: line_b
+    name: Garden path
+    board: 0
+    channel: 1
+
+update:
+  - platform: ultra_line
+    ultra_line_id: line_a
+    id: fw_line_a
+    name: Line A board firmware
+    channel_select:               # switch stable / beta / alpha from Home Assistant (stored on the ESP32)
+      name: Line A firmware channel
+    status:
+      name: Line A update status
+  - platform: ultra_line
+    ultra_line_id: line_b
+    id: fw_line_b
+    name: Line B board firmware
+    status:
+      name: Line B update status
+
+button:
+  - platform: template
+    name: Update all lines
+    entity_category: config
+    on_press:
+      - update.perform: fw_line_a
+      - update.perform: fw_line_b   # queued: runs after line A, with the same download

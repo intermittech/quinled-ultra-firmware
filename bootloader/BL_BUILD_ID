@@ -1,0 +1,4 @@
+# Development ABI-3 bootloader identity, seven bytes in QDB2.
+# The ABI-3 transaction candidate is not physically qualified.
+# Packaging stays disabled. Binary evidence includes compiler and SHA-256.
+id 261024a

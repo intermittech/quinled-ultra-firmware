@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 QuinLED
+# QuinLED dig2analog-plus-5ch boards in WS mode (driven like WS2805 / WS2915 chips by ESPHome's ws2915 component),
+# with buttons that change board settings through config frames. Every accepted change blinks an acknowledge on
+# the feedback channel (red at 25 %). The settings are stored on the board, so they stay when another WS controller
+# (WLED, ...) drives it later.
+# Command names and values: https://github.com/intermittech/quinled-ultra-firmware/wiki/WS-Modes-And-Config-Frames
+esphome:
+  name: d2a-plus-ws
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/esphome-ws2915-ws2805@main
+    components: [ws2915]
+
+logger:
+api:
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+ws2915:
+  id: d2a
+  chip_type: ws2805               # the board detects WS2805 / WS2915 itself
+  pin: GPIO16
+  num_chips: 2                    # boards on this line
+
+output:
+  - { platform: ws2915, id: b0_ch1, chip: 0, channel: 1 }
+  - { platform: ws2915, id: b1_ch1, chip: 1, channel: 1 }
+
+light:
+  - platform: monochromatic
+    name: Board 0 CH1
+    output: b0_ch1
+  - platform: monochromatic
+    name: Board 1 CH1
+    output: b1_ch1
+
+button:
+  - platform: template
+    name: PWM 25 kHz on all boards
+    on_press:
+      - ws2915.send_config:
+          id: d2a
+          command: pwm_preset
+          value: 8                # 0..14 = 2.2..100 kHz; 8 = 25 kHz
+  - platform: template
+    name: Board 1 identify
+    on_press:
+      - ws2915.send_config:
+          id: d2a
+          chip: 1                 # only the second board (default: every board)
+          command: identify
+          value: 0
+  - platform: template
+    name: Store power-on scene
+    on_press:
+      - ws2915.send_config:
+          id: d2a
+          command: scene
+          value: 1                # what the boards show now; 0 removes it (dark at power-up)
+  - platform: template
+    name: Boards to Ultra mode
+    on_press:
+      - ws2915.send_config:
+          id: d2a
+          command: protocol
+          value: 3                # 0 auto, 1 WS2915, 2 WS2805, 3 Ultra

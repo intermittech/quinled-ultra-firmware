@@ -1,0 +1,29 @@
+{
+  "batch": "b5_cell_transport",
+  "c": "b5_cell_transport.c",
+  "js": "b5_cell_transport.js",
+  "effects": [
+    {"id": 64, "symbol": "silt_settling", "built": true, "flashy": false, "white": true,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 19830, "px": 380, "tick": 0, "particle": 0}},
+    {"id": 69, "symbol": "estuary_locks", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1430, "px": 255, "tick": 0, "particle": 0, "step": 715, "frame_pal": 1200, "px_pal": 318, "step_pal": 809}},
+    {"id": 71, "symbol": "morphogen", "built": true, "flashy": false, "white": true,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1700, "px": 805, "tick": 0, "particle": 0}},
+    {"id": 72, "symbol": "cyclic_automaton", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1000, "px": 200, "tick": 0, "particle": 0}},
+    {"id": 73, "symbol": "rule_garden", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1000, "px": 260, "tick": 0, "particle": 0}},
+    {"id": 74, "symbol": "night_traffic", "built": true, "flashy": false, "white": true,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1000, "px": 340, "tick": 0, "particle": 0, "frame_pal": 41510}},
+    {"id": 84, "symbol": "sand_pour", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 16430, "px": 215, "tick": 0, "particle": 0, "step": 625}},
+    {"id": 88, "symbol": "excitable_wire", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1000, "px": 180, "tick": 0, "particle": 0, "step_pal": 497, "frame_pal": 34760}},
+    {"id": 89, "symbol": "avalanche_loom", "built": true, "flashy": false, "white": true,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 40580, "px": 545, "tick": 0, "particle": 0}},
+    {"id": 91, "symbol": "chromatic_sort", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 4720, "px": 510, "tick": 0, "particle": 0, "step": 1000}},
+    {"id": 105, "symbol": "zipper_exchange", "built": true, "flashy": false, "white": false,
+     "tick_ms": 10, "particles": 0, "cost": {"frame": 1000, "px": 375, "tick": 0, "particle": 0, "step": 834, "step_pal": 1025, "px_pal": 410, "frame_pal": 3270}}
+  ]
+}

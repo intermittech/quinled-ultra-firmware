@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 QuinLED
+# QuinLED dig2analog-plus-5ch in Ultra mode, with board firmware updates from this repository's releases.
+# The full light setups (RGBCCT, downlights, strips) are in the quinled-ultra-esphome repository's examples/:
+# https://github.com/intermittech/quinled-ultra-esphome/tree/main/examples
+# Updates: https://github.com/intermittech/quinled-ultra-firmware/wiki/Updating-Over-The-Data-Line
+esphome:
+  name: d2a-plus
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: github://intermittech/quinled-ultra-esphome@main
+    components: [ultra_line, dig2analog_plus]
+
+logger:
+api:
+ota:
+  - platform: esphome
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+http_request:                     # downloads the releases (HTTPS, GitHub's redirects)
+
+ultra_line:
+  id: ultra
+  pin: GPIO16                     # to the first board's Data-In
+  num_boards: 2
+
+light:
+  - platform: dig2analog_plus
+    name: Kitchen
+    board: 0
+    red: 1
+    green: 2
+    blue: 3
+    warm_white: 4
+    cold_white: 5
+    cold_white_color_temperature: 6500 K
+    warm_white_color_temperature: 2700 K
+
+update:
+  - platform: ultra_line
+    ultra_line_id: ultra
+    id: board_fw
+    name: Board firmware
+    channel: stable               # stable, beta or alpha
+    status:                       # what it does now, and the blink legend afterwards
+      name: Board firmware status
+
+button:
+  - platform: template
+    name: Board firmware - install again
+    entity_category: config
+    on_press:
+      - update.perform:
+          id: board_fw
+          force_update: true      # also the same or an older version (the boards take it)

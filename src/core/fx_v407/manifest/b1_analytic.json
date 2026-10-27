@@ -1,0 +1,293 @@
+{
+ "batch": "b1_analytic",
+ "c": "b1_analytic.c",
+ "js": "b1_analytic.js",
+ "effects": [
+  {
+   "id": 37,
+   "symbol": "daylight_arc",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 640,
+    "px": 176,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 38,
+   "symbol": "kelvin_drift",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 192,
+    "px": 240,
+    "tick": 0,
+    "particle": 0, "step": 1000
+   }
+  },
+  {
+   "id": 39,
+   "symbol": "cloud_shadows",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 576,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 43,
+   "symbol": "night_sky",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 256,
+    "px": 528,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 44,
+   "symbol": "moon_path",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 192,
+    "px": 432,
+    "tick": 0,
+    "particle": 0, "step": 1250
+   }
+  },
+  {
+   "id": 47,
+   "symbol": "pool_caustics",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 384,
+    "tick": 0,
+    "particle": 0, "step": 1250, "px_pal": 528
+   }
+  },
+  {
+   "id": 52,
+   "symbol": "incense_smoke",
+   "built": true,
+   "flashy": false,
+   "white": false,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 192,
+    "px": 432,
+    "tick": 0,
+    "particle": 0, "step": 834
+   }
+  },
+  {
+   "id": 54,
+   "symbol": "sand_ripples",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 400,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 63,
+   "symbol": "marble_veins",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 720,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 76,
+   "symbol": "soap_film",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 256,
+    "px": 640,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 77,
+   "symbol": "pendulum_wave",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 448,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 79,
+   "symbol": "interference",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 448,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 80,
+   "symbol": "prism",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 640,
+    "px": 464,
+    "tick": 0,
+    "particle": 0, "step": 1667, "px_pal": 560
+   }
+  },
+  {
+   "id": 97,
+   "symbol": "beat_pump",
+   "built": true,
+   "flashy": true,
+   "white": true,
+   "hold": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 704,
+    "px": 288,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 98,
+   "symbol": "beat_bars",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 22080,
+    "px": 384,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 99,
+   "symbol": "disco_ball",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 368,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 101,
+   "symbol": "energy_blade",
+   "built": true,
+   "flashy": true,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 384,
+    "px": 224,
+    "tick": 0,
+    "particle": 0, "step": 1000
+   }
+  },
+  {
+   "id": 109,
+   "symbol": "tinsel_garland",
+   "built": true,
+   "flashy": false,
+   "white": true,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 128,
+    "px": 720,
+    "tick": 0,
+    "particle": 0
+   }
+  },
+  {
+   "id": 114,
+   "symbol": "heartbeat",
+   "built": true,
+   "flashy": false,
+   "white": false,
+   "tick_ms": 0,
+   "particles": 0,
+   "cost": {
+    "frame": 576,
+    "px": 304,
+    "tick": 0,
+    "particle": 0
+   }
+  }
+ ]
+}

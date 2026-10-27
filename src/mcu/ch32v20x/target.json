@@ -1,0 +1,15 @@
+{
+  "define": "CH32V20x_D6",
+  "startup": "src/mcu/ch32v20x/startup.S",
+  "linker": "src/mcu/ch32v20x/Link.ld",
+  "app_linker": "src/mcu/ch32v20x/Link_app.ld",
+  "flash_bytes": 65536,
+  "ram_bytes": 20480,
+  "boot_api": {
+    "flash_base": 134217728,
+    "link_base": 0,
+    "boot_bytes": 8192,
+    "table_offset": 48,
+    "entry_offset_min": 80
+  }
+}

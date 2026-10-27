@@ -1,0 +1,175 @@
+{
+  "id": 1,
+  "pwm": 1,
+  "dline": 0,
+  "return": 0,
+  "channels": 5,
+  "outputs": 1,
+  "hw_id": 1,
+  "jig_pads": [
+    "PA3",
+    "PB10"
+  ],
+  "current": {
+    "fuse_ma": 10000,
+    "board_ma": 8000,
+    "sense_mv_per_a": 200
+  },
+  "voltage": {
+    "vref_mv": 3280,
+    "supply_ratio": 23,
+    "aux_ratio": 1
+  },
+  "pins": {
+    "din": "DIN",
+    "led": "STATUS",
+    "current": "ISENSE",
+    "supply": "VSENSE",
+    "aux": "AUX",
+    "jig": "TP6",
+    "jig_extra": "TP9"
+  },
+  "product_name": "Dig2Analog-Plus-5ch",
+  "lights": 5,
+  "revision": 4,
+  "output_rating_ma": 8000,
+  "calibration_ms": 200,
+  "sense_full_scale_ma": 16500,
+  "link": {
+    "always_forwards": true,
+    "return": false,
+    "profile_mask": 15,
+    "timing_qualified": false
+  },
+  "assemblies": [
+    {
+      "id": 2,
+      "channel_ma": 3000
+    },
+    {
+      "id": 4,
+      "channel_ma": 5000
+    }
+  ],
+  "default_assembly": 2,
+  "bindings": {
+    "ch32v20x": {
+      "board": "d2a_plus",
+      "mcu": "ch32v20x",
+      "answer_uarts": [
+        3
+      ],
+      "pins": {
+        "3": [
+          [
+            "A",
+            "0",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "6",
+            "0",
+            "FLOATING"
+          ],
+          [
+            "A",
+            "5",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "1",
+            "LOW",
+            "OUTPUT"
+          ],
+          [
+            "A",
+            "2",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "3",
+            "HIGH",
+            "PULL"
+          ],
+          [
+            "A",
+            "4",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "7",
+            "0",
+            "ANALOG"
+          ],
+          [
+            "A",
+            "8",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "9",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "A",
+            "10",
+            "CLEAR",
+            "PULL"
+          ],
+          [
+            "B",
+            "14",
+            "CLEAR",
+            "PULL"
+          ],
+          [
+            "B",
+            "10",
+            "HIGH",
+            "PULL"
+          ],
+          [
+            "B",
+            "15",
+            "LOW",
+            "OUTPUT"
+          ],
+          [
+            "B",
+            "11",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "B",
+            "0",
+            "0",
+            "ALTERNATE"
+          ],
+          [
+            "B",
+            "1",
+            "0",
+            "ALTERNATE"
+          ]
+        ]
+      },
+      "adc": {
+        "current": 7,
+        "supply": 4,
+        "aux": 0
+      }
+    }
+  }
+}

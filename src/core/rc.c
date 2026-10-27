@@ -1,0 +1,92 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (C) 2026 QuinLED */
+#include "math32.h"
+/* The Diff-Power-UR-Analog-M's return channel: see rc.h. */
+#include "rc.h"
+#include "config.h"                        /* crc16_ccitt: the one copy of ultra_crc16 */
+#include "lto.h"
+#include "../target.h"
+
+/* tools: measured by name in the receiver's measurement build (the Dig2Analog-Plus-5ch's images stay as they were) */
+#if BOARD_RETURN
+#define RC_MEASURED MEASURED
+#else
+#define RC_MEASURED
+#endif
+
+RC_MEASURED int rc_poll_parse(const uint8_t *s)
+{
+    return ultra_poll_valid(s);            /* (the header's, one copy of the rule; slot FLAGS: unknown bits
+                                              are ignored, as in every slot) */
+}
+
+RC_MEASURED int32_t rc_last_edge(const uint16_t *w, uint32_t words)
+{
+    uint32_t k = words, v, b;
+    while (k-- != 0u) {
+        v = w[k];
+        if (v != 0u) {
+            for (b = 0; !(v & 1u); b++) {      /* the last high sample: the lowest set bit (MSB = earliest) */
+                v >>= 1;
+            }
+            return (int32_t)((words - 1u - k) * 16u + b);   /* its sample's end is the falling edge */
+        }
+    }
+    return -1;
+}
+
+RC_MEASURED void rc_schedule(rc_sched_t *s, uint32_t edge_tick, int32_t back_samples, uint32_t rate_q16,
+                             const uint8_t *poll)
+{
+    /* an event fires at the first tick T with (T - edge_tick) >= its offset from t0 - t0's distance back. inv = local
+     * ticks per host us, Q32 (one division); offsets <= 23.6 ms: the truncation is < 1e-5 tick. Samples -> ticks at
+     * the nominal 36 MHz: the HSI's error over <= 256 us is < 0.15 us. */
+    uint32_t inv = m32_div(65536u,0,rate_q16), pitch = rc_slot_us(poll[RC_P_RATE]);
+    uint32_t back = (uint32_t)(back_samples * 65536 / (int32_t)RC_SAMPLES_TICK);
+    uint32_t idx = poll[RC_P_INDEX] == ULTRA_POLL_RELAY_ONLY ? 0u : poll[RC_P_INDEX];
+#define RC_AT(us) (edge_tick + ((m32_shr((us),inv,16) - back + 0xFFFFu) >> 16))
+    s->dir_tick = RC_AT(RC_DIR_US);
+    s->check_tick = RC_AT(RC_CHECK_US);
+    s->late_tick = RC_AT(ULTRA_RW_DIR_MAX_US);
+    s->tx_tick = RC_AT(ULTRA_RW_FIRST_US + pitch * idx);
+    s->end_tick = RC_AT(ULTRA_RW_FIRST_US + pitch * poll[RC_P_SLOTS] + RC_END_US);
+#undef RC_AT
+}
+
+RC_MEASURED uint16_t rc_brr(uint32_t rate_q16, uint8_t rate)
+{
+    /* USART1 on PCLK2 72 MHz shares the tick's HSI: scale the nominal
+     * divider (72/144/288) by the measured clock. Round each rate separately;
+     * residual at most half a BRR step (0.70/0.35/0.18 percent). */
+    uint32_t nom = RC_BRR_BASE << rate, brr = (nom * (MCU_POLL_US * 65536u) + rate_q16 / 2u) / rate_q16;   /* (576 x 3276800 < 2^31) */
+    if (brr < nom - nom / 18u || brr > nom + nom / 18u) {
+        brr = nom;                         /* not plausible (> 5.5 % off): nominal */
+    }
+    return (uint16_t)brr;
+}
+
+void rc_pack(uint8_t *d, const uint32_t *v, uint32_t widths, uint32_t k)
+{
+    uint32_t i, n, x, len;
+    for (i = 0; i < k; i++) {
+        x = v[i];
+        len = (widths & 3u) + 1u;
+        widths >>= 2;
+        for (n = len; n-- != 0u;) {
+            d[n] = (uint8_t)x;
+            x >>= 8;
+        }
+        d += len;
+    }
+}
+
+RC_MEASURED void rc_answer(uint8_t a[RC_ANSWER_BYTES], const uint8_t *poll, uint8_t page, uint8_t rflags,
+                           uint16_t uid16)
+{
+    a[0] = ULTRA_RSP_SYNC;
+    a[1] = page;
+    a[2] = (uint8_t)((poll[RC_P_INDEX] << 4) | (rflags & 0x0Fu));
+    a[3] = poll[2];                        /* the POLL's SEQ */
+    ultra_put16(a + 4, uid16);
+    ultra_put16(a + 30, crc16_ccitt(a, 30));
+}

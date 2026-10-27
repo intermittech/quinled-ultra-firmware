@@ -1,0 +1,98 @@
+{
+  "batch": "b7_bursts",
+  "c": "b7_bursts.c",
+  "js": "b7_bursts.js",
+  "effects": [
+    {
+      "id": 94,
+      "symbol": "fireworks",
+      "built": true,
+      "flashy": true,
+      "white": true,
+      "hold": true,
+      "tick_ms": 20,
+      "particles": 400,
+      "cost": {
+        "frame": 12000,
+        "px": 340,
+        "tick": 1200,
+        "particle": 1700
+      }
+    },
+    {
+      "id": 95,
+      "symbol": "collider",
+      "built": true,
+      "flashy": true,
+      "white": true,
+      "tick_ms": 20,
+      "particles": 128,
+      "cost": {
+        "frame": 12000,
+        "px": 340,
+        "tick": 1200,
+        "particle": 1100
+      }
+    },
+    {
+      "id": 102,
+      "symbol": "confetti_cannon",
+      "built": true,
+      "flashy": false,
+      "white": false,
+      "tick_ms": 20,
+      "particles": 128,
+      "cost": {
+        "frame": 12000,
+        "px": 370,
+        "tick": 1200,
+        "particle": 1100
+      }
+    },
+    {
+      "id": 103,
+      "symbol": "pinball_relay",
+      "built": true,
+      "flashy": true,
+      "white": true,
+      "tick_ms": 20,
+      "particles": 160,
+      "cost": {
+        "frame": 12000,
+        "px": 340,
+        "tick": 1200,
+        "particle": 1100
+      }
+    },
+    {
+      "id": 106,
+      "symbol": "packet_switch",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 20,
+      "particles": 192,
+      "cost": {
+        "frame": 12000,
+        "px": 340,
+        "tick": 1200,
+        "particle": 1100
+      }
+    },
+    {
+      "id": 113,
+      "symbol": "countdown",
+      "built": true,
+      "flashy": true,
+      "white": true,
+      "tick_ms": 20,
+      "particles": 160,
+      "cost": {
+        "frame": 12000,
+        "px": 340,
+        "tick": 1200,
+        "particle": 1700
+      }
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 QuinLED
+# Release build for the QuinLED Dig2Analog-Plus-5ch firmware repo (intermittech/quinled-ultra-firmware; it uses
+# $GITHUB_REPOSITORY, so no name is hard-coded). Prepared locally, untested until the repo exists. See
+# tools/release/RELEASING.md and tools/release/KEY_MANAGEMENT.md.
+#
+# Tag vX.Y.Z-alpha.N / -beta.N / -rc.N / vX.Y.Z  ->  build + host tests + images + factory hex, GitHub release, channel
+# manifests on the `channels` branch:
+#   alpha / beta / rc: signed here with the CI key (secret UPDATE_CI_KEY_PEM) and published at once;
+#   stable:            the release stays a draft with an unsigned stable.json; the offline release key signs it on the
+#                      signing PC (sign_release.py), then the publish-stable workflow checks and publishes it.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  XPACK_GCC: "15.2.0-1"
+  # SHA-256 of xpack-riscv-none-elf-gcc-15.2.0-1-win32-x64.zip: fill in at repo setup (RELEASING.md)
+  XPACK_GCC_SHA256: "FILL-IN-AT-SETUP"
+
+jobs:
+  release:
+    runs-on: windows-2022              # the host tests use MSVC (test\*.cmd), as on the development PC
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: No private keys outside the TEST keys
+        run: |
+          if git grep -lE -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' -- ':!tools/release/keys/test/**'; then
+            echo "a private key is committed (KEY_MANAGEMENT.md: production private keys are never in the repo)"; exit 1
+          fi
+
+      - name: Toolchain (xPack RISC-V GCC, checksum checked)
+        run: |
+          url="https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v${XPACK_GCC}/xpack-riscv-none-elf-gcc-${XPACK_GCC}-win32-x64.zip"
+          curl -sSL -o gcc.zip "$url"
+          echo "${XPACK_GCC_SHA256}  gcc.zip" | sha256sum -c -
+          unzip -q gcc.zip -d "$RUNNER_TEMP"
+          echo "RISCV_GCC=$RUNNER_TEMP/xpack-riscv-none-elf-gcc-${XPACK_GCC}/bin/riscv-none-elf-gcc.exe" >> "$GITHUB_ENV"
+          pip install "cryptography>=42"
+
+      - name: Toolchain (WCH GCC 15.2 for the XW app build, checksum checked)
+        env:
+          WCH_GCC15_URL: ${{ vars.WCH_GCC15_URL }}
+        run: |
+          # tools/toolchain/README.md: the 7z from MounRiver Studio 2.5.0, kept where the project controls it
+          if [ -z "$WCH_GCC15_URL" ]; then echo "set the repository variable WCH_GCC15_URL (tools/toolchain/README.md)"; exit 1; fi
+          curl -sSL -o wch-gcc15.7z "$WCH_GCC15_URL"
+          echo "$(grep ' RISC-V Embedded GCC15.7z$' tools/toolchain/wch-gcc15-win64.sha256 | cut -c1-64)  wch-gcc15.7z" | sha256sum -c -
+          7z x -y -o"$RUNNER_TEMP/wch-gcc15" wch-gcc15.7z > /dev/null
+          bash tools/toolchain/check_wch_gcc.sh "$RUNNER_TEMP/wch-gcc15" wch-gcc15.7z
+          echo "WCH_GCC_DIR=$RUNNER_TEMP/wch-gcc15" >> "$GITHUB_ENV"
+
+      - name: Host tests
+        run: |
+          cmd //c "test\\build_host.cmd"
+          cmd //c "bootloader\\test\\build_bl_test.cmd"
+
+      - name: The firmware's protocol pin (test/test_protocol_copy.py PROTOCOL_REF)
+        run: echo "PROTOCOL_REF=$(sed -n "s/^PROTOCOL_REF = '\([0-9a-f]*\)'.*/\1/p" test/test_protocol_copy.py)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+        with:
+          repository: intermittech/quinled-ultra-protocol
+          ref: ${{ env.PROTOCOL_REF }}
+          path: quinled-ultra-protocol   # (inside the workspace: actions/checkout needs that)
+
+      - name: Cross-repo (the protocol copies and pins, the vectors, the protocol's receiver simulators on this tree)
+        run: |
+          python test/test_protocol_copy.py --proto quinled-ultra-protocol
+          python test/run_m1a_vectors.py --spec quinled-ultra-protocol --out "$RUNNER_TEMP/vectors"
+          python quinled-ultra-protocol/sender/test/run_tests.py --only sim,dline --firmware .
+
+      - name: Size and cycle gate, the record corpus (tools/size_gate.py)
+        run: |
+          pip install numpy
+          python tools/size_gate.py --measure tools/measure_baseline.txt --corpus
+
+      - name: "Build (bootloader, app twice, reproducible, images, factory hex)"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUILD_ID="$(git rev-parse --short=12 HEAD)" bash tools/build_release.sh "$VERSION" dist
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "STAGE=$(python -c "import sys; sys.path.insert(0, 'tools/release'); import qdu; print(qdu.stage_of(qdu.parse_version('$VERSION')))")" >> "$GITHUB_ENV"
+
+      - name: The released image installs through the bootloader logic
+        run: |
+          for img in dist/quinled-*.bin; do BL_TEST_IMAGE="$(cygpath -w "$img")" cmd //c "bootloader\\test\\build_bl_test.cmd"; done
+
+      - name: Channel manifests
+        run: |
+          git fetch origin channels:channels 2>/dev/null && git worktree add ch channels || {
+            git worktree add --detach ch && git -C ch checkout --orphan channels && git -C ch rm -rfq . ; }
+          IMAGES=""; for j in dist/quinled-*.json; do IMAGES="$IMAGES --image $j"; done
+          python tools/release/make_manifest.py --channels-dir ch --repo "$GITHUB_REPOSITORY" --tag "$GITHUB_REF_NAME" \
+            --summary "$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")" $IMAGES | tee changed.txt
+
+      - name: Sign alpha / beta manifests (CI key)
+        env:
+          UPDATE_CI_KEY_PEM: ${{ secrets.UPDATE_CI_KEY_PEM }}
+        run: |
+          for f in $(cat changed.txt); do
+            case "$(basename "$f")" in
+              stable.json) cp "$f" dist/stable.json ;;            # signed offline, see publish-stable.yml
+              *) python tools/release/sign_release.py sign --file "$f" --key-env UPDATE_CI_KEY_PEM
+                 python tools/release/sign_release.py verify --file "$f" --pub tools/release/keys/ci_pub.pem ;;
+            esac
+          done
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES="dist/quinled-*.bin dist/*-factory.hex dist/bootloader-rev*.hex"
+          if [ "$STAGE" = stable ]; then
+            gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --notes-from-tag $FILES dist/stable.json
+          else
+            gh release create "$GITHUB_REF_NAME" --prerelease --title "$GITHUB_REF_NAME" --notes-from-tag $FILES
+          fi
+
+      - name: Publish alpha / beta channels
+        run: |
+          cd ch
+          git config user.name "release bot"; git config user.email "actions@users.noreply.github.com"
+          git restore --staged stable.json stable.json.sig 2>/dev/null || true
+          git checkout -- stable.json stable.json.sig 2>/dev/null || true   # stable changes only via publish-stable
+          git add alpha.json alpha.json.sig beta.json beta.json.sig 2>/dev/null || true
+          git commit -m "channels: $GITHUB_REF_NAME" && git push origin channels || echo "no channel change"

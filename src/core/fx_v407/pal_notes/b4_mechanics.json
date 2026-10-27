@@ -1,0 +1,9 @@
+{
+  "55": {"palette_slots": [], "palette_note": "With a palette: the field takes the palette's first half along the strip and the gust sheen its second half."},
+  "68": {"palette_slots": [], "palette_note": "With a palette: the palette is printed on the fabric, so its colours fold and unfold with the pleats; valleys dark, fold edges bright."},
+  "78": {"palette_slots": ["Background"], "palette_note": "With a palette: the row of balls is the palette laid out, one slice per ball, moving on by one ball every swing so each ball shows every colour; the highlights and clack stay white."},
+  "81": {"palette_slots": [], "palette_note": "With a palette: the ping and the targets run through the palette's first half by distance from the source, the echoes and the dark sea its second half."},
+  "86": {"palette_slots": [], "palette_note": "With a palette: the rope is the palette along its length, dim; a bump lights it up as it passes, a flipped bump shows the palette backwards, darker."},
+  "87": {"palette_slots": [], "palette_note": "With a palette: packets from the start take the palette's first half and packets from the end its second half, changing colour as they travel."},
+  "92": {"palette_slots": [], "palette_note": "With a palette: strikes take the palette's first half and echoes its second half along the strip, over dark space of the same colours."}
+}

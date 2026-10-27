@@ -1,0 +1,751 @@
+[
+  {
+    "record": "B",
+    "index": 0,
+    "fields": {
+      "fw_word": 17,
+      "hw_id": 34,
+      "hw_rev": 51,
+      "bl_version": 68,
+      "app_state": 85,
+      "reset_flags": 102
+    }
+  },
+  {
+    "record": "R",
+    "index": 0,
+    "fields": {
+      "uptime_s": 17,
+      "proto_locked": 34,
+      "fps": 51,
+      "vs_supply_mv": 68,
+      "vs_aux_mv": 85,
+      "i_ma": -103,
+      "mcu_temp_c10": -120,
+      "cpu_pm": 136,
+      "i_k_permille": 153,
+      "out[0]": 170,
+      "out[1]": 187,
+      "out[2]": 204,
+      "out[3]": 221,
+      "out[4]": 238,
+      "i_now_ch_ma[0]": -256,
+      "i_now_ch_ma[1]": -273,
+      "i_now_ch_ma[2]": -290,
+      "i_now_ch_ma[3]": -307,
+      "i_now_ch_ma[4]": -324
+    }
+  },
+  {
+    "record": "S",
+    "index": 0,
+    "fields": {
+      "protocol": 17,
+      "pwm_preset": 34,
+      "dither_mode": 51,
+      "dither_thresh": 68,
+      "feedback_ch": 85,
+      "stagger": 102,
+      "dim_floor": 119,
+      "min_pulse": 136,
+      "signal_loss": 153,
+      "smoothing": 170,
+      "gamma": 187,
+      "last_proto": 204,
+      "raw_steps": 221
+    }
+  },
+  {
+    "record": "T",
+    "index": 0,
+    "fields": {
+      "protocol": 17,
+      "pwm_preset": 34,
+      "dither_mode": 51,
+      "dither_thresh": 68,
+      "feedback_ch": 85,
+      "stagger": 102,
+      "dim_floor": 119,
+      "min_pulse": 136,
+      "signal_loss": 153,
+      "smoothing": 170,
+      "gamma": 187,
+      "last_proto": 204,
+      "raw_steps": 221
+    }
+  },
+  {
+    "record": "I",
+    "index": 0,
+    "fields": {
+      "softstart": 17,
+      "i_model": 34,
+      "i_tripped": 51,
+      "i_trip_cause": 68,
+      "i_cal": 85,
+      "i_peak_ma": -103,
+      "i_zero_ma": -120,
+      "i_trips": 136,
+      "i_ch_ma[0]": -154,
+      "i_ch_ma[1]": -171,
+      "i_ch_ma[2]": -188,
+      "i_ch_ma[3]": -205,
+      "i_ch_ma[4]": -222,
+      "cal_count": 238,
+      "cal_fail": 255,
+      "save_why": 16
+    }
+  },
+  {
+    "record": "Y",
+    "index": 0,
+    "fields": {
+      "board_rated_ma": 17,
+      "fuse_ma": 34,
+      "channel_rated_ma": 51,
+      "user_ma": 68,
+      "ilimit50": 85,
+      "lim_ma": 102,
+      "lim_src": 119,
+      "lim_need": 136,
+      "lim_conn_ma": 153,
+      "i_limit_ma": 170,
+      "ch_max_ma[0]": 187,
+      "ch_max_ma[1]": 204,
+      "ch_max_ma[2]": 221,
+      "ch_max_ma[3]": 238,
+      "ch_max_ma[4]": 255,
+      "ch_limited": 16,
+      "retry_n": 33,
+      "retry_s": 50
+    }
+  },
+  {
+    "record": "C",
+    "index": 0,
+    "fields": {
+      "uptime_s": 17,
+      "stack_max": 34,
+      "proto_mode": 51,
+      "proto_provisional": 68,
+      "frames": 85,
+      "decoded": 102,
+      "dec_err[0]": 119,
+      "dec_err[1]": 136,
+      "dec_err[2]": 153,
+      "dec_err[3]": 170,
+      "dec_err[4]": 187,
+      "dec_err[5]": 204,
+      "config_frames": 221,
+      "ultra_headers": 238,
+      "ultra_tail_err": 255,
+      "steps": 272,
+      "saves": 289,
+      "fl_pend": 50,
+      "fl_err": 67,
+      "fl_errs": 340,
+      "fl_rej": 357
+    }
+  },
+  {
+    "record": "M",
+    "index": 0,
+    "fields": {
+      "stagger_o2": 17,
+      "stagger_o3": 34,
+      "stagger_moves": 51,
+      "ripple_ma": 68,
+      "vdda_mv": 85,
+      "mcu_peak_c10": -103,
+      "mcu_peak_s": 119,
+      "vs_supply_min_mv": 136,
+      "vs_supply_max_mv": 153,
+      "dip_ref_mv": 170,
+      "test_mode": 187,
+      "oc_show": 204,
+      "oc_cause": 221,
+      "oc_limiting": 238,
+      "oc_tripped": 255,
+      "oc_since_s": 272,
+      "oc_hold_ms": 289,
+      "cpu_peak": 306,
+      "cap.now": 323,
+      "cap.avg": 340,
+      "cap.peak": 357
+    }
+  },
+  {
+    "record": "A",
+    "index": 0,
+    "fields": {
+      "levels": 17,
+      "pct[0]": 34,
+      "pct[1]": 51,
+      "pct[2]": 68,
+      "pct[3]": 85,
+      "zero_ma": -103
+    }
+  },
+  {
+    "record": "a",
+    "index": 0,
+    "fields": {
+      "v[0]": 17,
+      "v[1]": 34,
+      "v[2]": 51,
+      "v[3]": 68
+    }
+  },
+  {
+    "record": "H",
+    "index": 0,
+    "fields": {
+      "flags": 17,
+      "cls[0]": 34,
+      "cls[1]": 51,
+      "cls[2]": 68,
+      "cls[3]": 85,
+      "cls[4]": 102,
+      "test_dev[0]": -120,
+      "test_dev[1]": -10,
+      "test_dev[2]": -27,
+      "test_dev[3]": -44,
+      "test_dev[4]": -61,
+      "model_dev[0]": -78,
+      "model_dev[1]": -95,
+      "model_dev[2]": -112,
+      "model_dev[3]": -2,
+      "model_dev[4]": -19,
+      "dark_ma": -290
+    }
+  },
+  {
+    "record": "L",
+    "index": 0,
+    "fields": {
+      "wh": 17,
+      "on_s": 34,
+      "lit_s": 51,
+      "ups": 68,
+      "dips": 85,
+      "ver": 102,
+      "merged_hi": 119,
+      "merged": 136,
+      "writes": 153,
+      "trips[0]": 170,
+      "trips[1]": 187,
+      "updates": 204,
+      "wd": 221,
+      "peak_t": 238,
+      "peak_a": 255,
+      "trip": 16,
+      "trip_h": 289,
+      "dip_pct": 50,
+      "dip_cs": 67,
+      "dip_a": 84,
+      "rst": 101,
+      "rst_h": 118
+    }
+  },
+  {
+    "record": "E",
+    "index": 0,
+    "fields": {
+      "boot_mwh": 17,
+      "base_wh": 34,
+      "saved_wh": 51,
+      "saved_s": 68,
+      "saved": 85,
+      "synced": 102,
+      "held": 119
+    }
+  },
+  {
+    "record": "e",
+    "index": 0,
+    "fields": {
+      "ch_mwh[0]": 17,
+      "ch_mwh[1]": 34,
+      "ch_mwh[2]": 51,
+      "ch_mwh[3]": 68,
+      "ch_mwh[4]": 85
+    }
+  },
+  {
+    "record": "P",
+    "index": 0,
+    "fields": {
+      "limit_events": 17,
+      "ovl_trips": 34,
+      "short_trips": 51,
+      "ack_limit": 68,
+      "ack_ovl": 85,
+      "ack_short": 102,
+      "ack_dips": 119,
+      "limit_age_s": 136,
+      "trip_age_s": 153,
+      "event_ma": 170,
+      "trip_ma": 187,
+      "last_cause": 204,
+      "latched": 221
+    }
+  },
+  {
+    "record": "V",
+    "index": 0,
+    "fields": {
+      "count": 17,
+      "in_dip": 34,
+      "n_log": 51,
+      "planned": 68,
+      "znum": -86,
+      "zden": 102,
+      "zsteps": 119
+    }
+  },
+  {
+    "record": "v",
+    "index": 0,
+    "fields": {
+      "t_s": 17,
+      "min_x": 34,
+      "ref_x": 51,
+      "dur_ms": 68,
+      "i_ma": 85
+    }
+  },
+  {
+    "record": "N",
+    "index": 0,
+    "fields": {
+      "t_s": 17,
+      "ma": 34,
+      "type": 51
+    }
+  },
+  {
+    "record": "O",
+    "index": 0,
+    "fields": {
+      "v[0]": 17,
+      "v[1]": 34,
+      "v[2]": 51,
+      "v[3]": 68,
+      "v[4]": 85,
+      "mask": 102,
+      "fade": 119,
+      "loss_v[0]": 136,
+      "loss_v[1]": 153,
+      "loss_v[2]": 170,
+      "loss_v[3]": 187,
+      "loss_v[4]": 204,
+      "loss_mask": 221,
+      "loss_fade": 238
+    }
+  },
+  {
+    "record": "F",
+    "index": 0,
+    "fields": {
+      "magic": 17,
+      "up_s": 34,
+      "pc": 51,
+      "cause": 68
+    }
+  },
+  {
+    "record": "Q",
+    "index": 0,
+    "fields": {
+      "v[0]": 17,
+      "v[1]": 34,
+      "v[2]": 51
+    }
+  },
+  {
+    "record": "D",
+    "index": 0,
+    "fields": {
+      "v[0]": 17,
+      "v[1]": 34,
+      "v[2]": 51,
+      "v[3]": 68,
+      "v[4]": 85,
+      "v[5]": 102,
+      "v[6]": 119,
+      "v[7]": 136,
+      "v[8]": 153
+    }
+  },
+  {
+    "record": "U",
+    "index": 0,
+    "fields": {
+      "config_0": 17,
+      "config_1": 34,
+      "config_2": 51,
+      "config_3": 68,
+      "config_4": 85,
+      "config_5": 102,
+      "config_6": 119,
+      "config_7": 136,
+      "config_8": 153,
+      "config_9": 170,
+      "config_10": 187,
+      "config_11": 204,
+      "config_12": 221,
+      "config_13": 238,
+      "config_14": 255,
+      "config_15": 272,
+      "config_16": 289,
+      "config_17": 306,
+      "config_18": 323,
+      "config_19": 340,
+      "config_20": 357,
+      "config_21": 374,
+      "config_22": 391,
+      "config_23": 408,
+      "config_24": 425
+    }
+  },
+  {
+    "record": "h",
+    "index": 0,
+    "fields": {
+      "lit_h": 17,
+      "ma[0]": 34,
+      "ma[1]": 51,
+      "ma[2]": 68,
+      "ma[3]": 85,
+      "ma[4]": 102
+    }
+  },
+  {
+    "record": "X",
+    "index": 0,
+    "fields": {
+      "v": 17
+    }
+  },
+  {
+    "record": "G",
+    "index": 0,
+    "fields": {
+      "g_q16": 17,
+      "min_p[0]": 34,
+      "min_p[1]": 51,
+      "min_p[2]": 68,
+      "min_p[3]": 85,
+      "min_p[4]": 102,
+      "max_p[0]": 119,
+      "max_p[1]": 136,
+      "max_p[2]": 153,
+      "max_p[3]": 170,
+      "max_p[4]": 187,
+      "mask": 204,
+      "flags": 221,
+      "role[0]": 238,
+      "role[1]": 255,
+      "role[2]": 16,
+      "role[3]": 33,
+      "role[4]": 50,
+      "base_channel": 67,
+      "defined": 84
+    }
+  },
+  {
+    "record": "g",
+    "index": 0,
+    "fields": {
+      "opt_cw": 17,
+      "opt_ww": 34,
+      "opt_warm": 51,
+      "opt_assist": 68,
+      "opt_pm[0]": 85,
+      "opt_pm[1]": 102,
+      "opt_pm[2]": 119,
+      "opt_pm[3]": 136,
+      "opt_pt[0]": 153,
+      "opt_pt[1]": 170,
+      "opt_pt[2]": 187,
+      "opt_pt[3]": 204,
+      "opt_flags": 221,
+      "opt_n": 238
+    }
+  },
+  {
+    "record": "J",
+    "index": 0,
+    "fields": {
+      "scene_v[0].m": 17,
+      "scene_v[0].a[0]": 34,
+      "scene_v[0].a[1]": 51,
+      "scene_v[0].a[2]": 68,
+      "scene_v[0].a[3]": 85,
+      "scene_v[0].a[4]": 102,
+      "scene_v[0].b[0]": 119,
+      "scene_v[0].b[1]": 136,
+      "scene_v[0].b[2]": 153,
+      "scene_v[0].b[3]": 170,
+      "scene_v[0].b[4]": 187,
+      "scene_v[1].m": 204,
+      "scene_v[1].a[0]": 221,
+      "scene_v[1].a[1]": 238,
+      "scene_v[1].a[2]": 255,
+      "scene_v[1].a[3]": 272,
+      "scene_v[1].a[4]": 289,
+      "scene_v[1].b[0]": 306,
+      "scene_v[1].b[1]": 323,
+      "scene_v[1].b[2]": 340,
+      "scene_v[1].b[3]": 357,
+      "scene_v[1].b[4]": 374,
+      "scene_fade[0]": 135,
+      "scene_fade[1]": 152,
+      "scene_have": 169
+    }
+  },
+  {
+    "record": "b",
+    "index": 0,
+    "fields": {
+      "firmware": 17,
+      "hardware": 34,
+      "revision": 51,
+      "bootloader": 68,
+      "reset": 85,
+      "update_result": 102,
+      "protection": 119
+    }
+  },
+  {
+    "record": "r",
+    "index": 0,
+    "fields": {
+      "uptime_s": 17,
+      "bus_mv": 34,
+      "led_mv": 51,
+      "current_ma": -69,
+      "vdda_mv": 85,
+      "temperature_c10": -103,
+      "fps10": 119,
+      "bits": 136,
+      "direct": 153,
+      "faults": 170,
+      "polls": 187
+    }
+  },
+  {
+    "record": "c",
+    "index": 0,
+    "fields": {
+      "flash_err": 17,
+      "saves": 34,
+      "cpu_peak": 51,
+      "ovr_late": 68,
+      "ucal.phase": 85,
+      "ucal.error": 102,
+      "ucal.elapsed": 119,
+      "uc.mode": 136
+    }
+  },
+  {
+    "record": "t",
+    "index": 0,
+    "fields": {
+      "config_64": 17,
+      "config_65": 34,
+      "config_66": 51,
+      "config_67": 68,
+      "config_68": 85,
+      "config_69": 102,
+      "config_70": 119,
+      "config_71": 136,
+      "config_72": 153,
+      "config_73": 170,
+      "config_74": 187,
+      "config_75": 204,
+      "config_76": 221,
+      "config_77": 238
+    }
+  },
+  {
+    "record": "k",
+    "index": 0,
+    "fields": {
+      "configured": 17,
+      "detected": 34,
+      "n": 51,
+      "order": 68,
+      "vbus": 85,
+      "vled": 102,
+      "idle": -120,
+      "noise": 136,
+      "residual": 153,
+      "bound": 170,
+      "k": 187,
+      "count": 204,
+      "epoch": 221,
+      "chip": 238,
+      "bpp": 255,
+      "flags": 16,
+      "ch_0": 289,
+      "ch_1": 306,
+      "ch_2": 323,
+      "ch_3": 340,
+      "ch_4": 357
+    }
+  },
+  {
+    "record": "j",
+    "index": 0,
+    "fields": {
+      "cycle": 17,
+      "fail": 34,
+      "ma[0]": -52,
+      "ma[1]": -69,
+      "ma[2]": -86,
+      "ma[3]": -103,
+      "ma[4]": -120
+    }
+  },
+  {
+    "record": "y",
+    "index": 0,
+    "fields": {
+      "board_rated_ma": 17,
+      "fuse_ma": 34,
+      "output_rated_ma": 51,
+      "user_ma": 68,
+      "ch_ma": 85,
+      "cl_q8": 102,
+      "lim_bri": 119
+    }
+  },
+  {
+    "record": "l",
+    "index": 0,
+    "fields": {
+      "ux.local": 17,
+      "ux.standalone": 34,
+      "ux.stored_have": 51,
+      "ux.seq_have": 68,
+      "ux.frames_done": 85,
+      "ux.lim_bri": 102,
+      "ux.cl_q8": 119,
+      "ux.meas_ma": 136,
+      "ux.fsum": 153,
+      "ux.save_due": 170,
+      "ux.rec_seq": 187,
+      "ux.npx": 204,
+      "ux.max_px": 221
+    }
+  },
+  {
+    "record": "p",
+    "index": 0,
+    "fields": {
+      "effect": 17,
+      "speed": 34,
+      "intensity": 51,
+      "palette": 68,
+      "brightness": 85,
+      "flags": 102,
+      "custom1": 119,
+      "custom2": 136,
+      "start_ms": -154,
+      "transition_ms": 170,
+      "seg_start": 187,
+      "seg_len": 204,
+      "color_0_0": 221,
+      "color_0_1": 238,
+      "color_0_2": 255,
+      "color_1_0": 16,
+      "color_1_1": 33,
+      "color_1_2": 50,
+      "color_2_0": 67,
+      "color_2_1": 84,
+      "color_2_2": 101
+    }
+  },
+  {
+    "record": "i",
+    "index": 0,
+    "fields": {
+      "v[0]": 17,
+      "v[1]": 34,
+      "v[2]": 51
+    }
+  },
+  {
+    "record": "W",
+    "index": 0,
+    "fields": {
+      "cfg_valid": 17,
+      "cfg_changed": 34,
+      "identify": 51,
+      "identify_arg": 68,
+      "ch_limited": 85
+    }
+  },
+  {
+    "record": "s",
+    "index": 0,
+    "fields": {
+      "ilimit50": 17,
+      "opts": 34,
+      "reserved[0]": 51,
+      "reserved[1]": 68,
+      "reserved[2]": 85,
+      "reserved[3]": 102,
+      "reserved[4]": 119
+    }
+  },
+  {
+    "record": "d",
+    "index": 0,
+    "fields": {
+      "dl.st.frames": 17,
+      "dl.st.bits_min": 34,
+      "dl.st.bits_max": 51,
+      "dl.st.bits_n": 68,
+      "dl.st.long_high": 85,
+      "dl.st.marks": 102,
+      "dl.st.answered": 119,
+      "dl.st.cap_drops": 136,
+      "dl.st.late": 153,
+      "dl.st.faults": 170
+    }
+  },
+  {
+    "record": "z",
+    "index": 0,
+    "fields": {
+      "uds.headers": 17,
+      "uds.tail_err": 34,
+      "uds.decoded": 51,
+      "uds.dec_err": 68
+    }
+  },
+  {
+    "record": "K",
+    "index": 0,
+    "fields": {
+      "profile": 17,
+      "trained": 34,
+      "flags": 51,
+      "epoch": 68,
+      "period_min": 85,
+      "period_max": 102,
+      "low_min": 119,
+      "low_max": 136,
+      "frames": 153,
+      "bad": 170,
+      "missing": 187,
+      "invalid": 204,
+      "drops": 221,
+      "last_ms": 238,
+      "error_count": 255,
+      "bad_windows": 16
+    }
+  }
+]

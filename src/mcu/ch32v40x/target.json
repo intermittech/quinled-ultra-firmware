@@ -1,0 +1,16 @@
+{
+  "define": "CH32V407",
+  "startup": "src/mcu/ch32v40x/startup.S",
+  "linker": "src/mcu/ch32v40x/Link.ld",
+  "app_linker": "src/mcu/ch32v40x/Link_app.ld",
+  "flash_bytes": 524288,
+  "ram_bytes": 204800,
+  "boot_api": {
+    "flash_base": 134217728,
+    "link_base": 0,
+    "boot_bytes": 16384,
+    "table_offset": 48,
+    "entry_offset_min": 80,
+    "boot_ram_bytes": 32768
+  }
+}

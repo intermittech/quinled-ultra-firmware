@@ -1,0 +1,25 @@
+{
+ "batch": "b4_mechanics",
+ "c": "b4_mechanics.c",
+ "js": "b4_mechanics.js",
+ "effects": [
+  {"id": 55, "symbol": "wheat_field", "built": true, "flashy": false, "white": true, "tick_ms": 0, "particles": 0,
+   "cost": {"frame": 700, "px": 450, "tick": 0, "particle": 0, "step_pal": 1080, "px_pal": 640}},
+  {"id": 61, "symbol": "wind_chimes", "built": true, "flashy": false, "white": true, "tick_ms": 0, "particles": 0,
+   "cost": {"frame": 16000, "px": 370, "tick": 0, "particle": 0, "step": 1250}},
+  {"id": 62, "symbol": "plucked_string", "built": true, "flashy": false, "white": true, "hold": true, "tick_ms": 10, "particles": 0,
+   "cost": {"frame": 4610, "px": 260, "tick": 33000, "particle": 0}},
+  {"id": 68, "symbol": "linen_pleats", "built": true, "flashy": false, "white": true, "tick_ms": 20, "particles": 0,
+   "cost": {"frame": 10100, "px": 300, "tick": 0, "particle": 0}},
+  {"id": 78, "symbol": "newton_cradle", "built": true, "flashy": false, "white": true, "tick_ms": 0, "particles": 0,
+   "cost": {"frame": 6000, "px": 220, "tick": 0, "particle": 0, "step": 1250, "px_pal": 240, "step_pal": 1350, "frame_pal": 6640}},
+  {"id": 81, "symbol": "sonar_ping", "built": true, "flashy": false, "white": false, "tick_ms": 0, "particles": 0,
+   "cost": {"frame": 31430, "px": 230, "tick": 0, "particle": 0, "step": 1000, "px_pal": 470, "step_pal": 1180}},
+  {"id": 86, "symbol": "rope_pulse", "built": true, "flashy": false, "white": false, "hold": true, "tick_ms": 10, "particles": 0,
+   "cost": {"frame": 600, "px": 140, "tick": 33000, "particle": 0, "px_pal": 280, "step_pal": 500}},
+  {"id": 87, "symbol": "soliton_courier", "built": true, "flashy": false, "white": false, "tick_ms": 0, "particles": 0,
+   "cost": {"frame": 3200, "px": 380, "tick": 0, "particle": 0, "step_pal": 920, "frame_pal": 14880}},
+  {"id": 92, "symbol": "echo_vault", "built": true, "flashy": false, "white": false, "hold": true, "tick_ms": 10, "particles": 0,
+   "cost": {"frame": 600, "px": 160, "tick": 33000, "particle": 0, "px_pal": 280, "step_pal": 580, "frame_pal": 25150}}
+ ]
+}

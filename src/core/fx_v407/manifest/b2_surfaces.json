@@ -1,0 +1,163 @@
+{
+  "batch": "b2_surfaces",
+  "c": "b2_surfaces.c",
+  "js": "b2_surfaces.js",
+  "effects": [
+    {
+      "id": 40,
+      "symbol": "ember_bed",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 6000,
+        "px": 440,
+        "tick": 0,
+        "particle": 0, "step": 1250
+      }
+    },
+    {
+      "id": 41,
+      "symbol": "shoreline",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 560,
+        "tick": 0,
+        "particle": 0, "step_pal": 1380
+      }
+    },
+    {
+      "id": 42,
+      "symbol": "tide_line",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 550,
+        "tick": 0,
+        "particle": 0, "step_pal": 1380
+      }
+    },
+    {
+      "id": 48,
+      "symbol": "bioluminescence",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 660,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 49,
+      "symbol": "waterfall",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 480,
+        "tick": 0,
+        "particle": 0,
+        "step_pal": 1200,
+        "frame_pal": 66030
+      }
+    },
+    {
+      "id": 51,
+      "symbol": "ink_bloom",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 80,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 1070,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 65,
+      "symbol": "velvet_erosion",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1190,
+        "px": 510,
+        "tick": 0,
+        "particle": 0,
+        "px_pal": 650
+      }
+    },
+    {
+      "id": 66,
+      "symbol": "glass_memory",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 80,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 850,
+        "tick": 0,
+        "particle": 0,
+        "frame_pal": 4660
+      }
+    },
+    {
+      "id": 82,
+      "symbol": "thunderstorm",
+      "built": true,
+      "flashy": true,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 900,
+        "tick": 0,
+        "particle": 0,
+        "step_pal": 1640,
+        "frame_pal": 22020
+      }
+    },
+    {
+      "id": 96,
+      "symbol": "bass_drop",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 1000,
+        "px": 630,
+        "tick": 0,
+        "particle": 0
+      }
+    }
+  ]
+}

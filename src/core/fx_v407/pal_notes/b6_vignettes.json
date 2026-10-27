@@ -1,0 +1,9 @@
+{
+  "58": {"palette_slots": [], "palette_note": "With a palette: each window glows in the palette colour of its place along the street, the TV flickers through the palette."},
+  "60": {"palette_slots": [], "palette_note": "With a palette: each lamp has the palette colour of its place in the row, a reply glows in the colour of the lamp it answers, the room is them very dim; the colours move on each turn."},
+  "70": {"palette_slots": [], "palette_note": "With a palette: the heat colours each piece, cold in the palette's first colours and hottest in its last."},
+  "83": {"palette_slots": [], "palette_note": "With a palette: each tube is one palette colour, the palette across the sign; a tube moves on to a new palette colour each time it stutters."},
+  "100": {"palette_slots": [], "palette_note": "With a palette: the filaments run through the palette from the core (its first colour) out to the tips."},
+  "104": {"palette_slots": [], "palette_note": "With a palette: each club has its own palette colour on the downbeat and the colour half a palette away on the offbeat, the room is them very dim; the colours move on one palette colour a bar."},
+  "108": {"palette_slots": [], "palette_note": "With a palette: the ice runs through the palette from the root down, so a falling drop walks the palette to its last colour at the splash."}
+}

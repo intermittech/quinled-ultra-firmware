@@ -1,0 +1,5493 @@
+{
+  "schema": 5,
+  "encoding": "ASCII uppercase hexadecimal integers; signed fields are two-complement at their declared width",
+  "checksum": "CRC-8/SMBUS polynomial 0x07 init 0, no reflection, xorout 0; all bytes before *",
+  "max_line_bytes": 240,
+  "records": [
+    {
+      "record": "B",
+      "name": "boot",
+      "ctype": "cli_status_t",
+      "base": "c->st",
+      "fields": [
+        {
+          "name": "fw_word",
+          "member": "fw_word",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Firmware semantic version word; zero is development",
+          "explanation": "Firmware semantic version word; zero is development"
+        },
+        {
+          "name": "hw_id",
+          "member": "hw_id",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Hardware product identifier; use the firmware-owned board definitions.",
+          "explanation": "Hardware product identifier; use the firmware-owned board definitions."
+        },
+        {
+          "name": "hw_rev",
+          "member": "hw_rev",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "from the bootloader info",
+          "explanation": "from the bootloader info"
+        },
+        {
+          "name": "bl_version",
+          "member": "bl_version",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the bootloader's (UPD_BL_INFO), 0 = none (standalone build)",
+          "explanation": "the bootloader's (UPD_BL_INFO), 0 = none (standalone build)"
+        },
+        {
+          "name": "app_state",
+          "member": "app_state",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0 standalone, 1 trial (not confirmed), 2 confirmed",
+          "explanation": "0 standalone, 1 trial (not confirmed), 2 confirmed"
+        },
+        {
+          "name": "reset_flags",
+          "member": "reset_flags",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "RCC RSTSCKR at boot",
+          "explanation": "RCC RSTSCKR at boot"
+        }
+      ],
+      "condition": null,
+      "explanation": "Boot. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "R",
+      "name": "real time",
+      "ctype": "cli_status_t",
+      "base": "c->st",
+      "fields": [
+        {
+          "name": "uptime_s",
+          "member": "uptime_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "s since boot (32 bits: 136 years)",
+          "explanation": "s since boot (32 bits: 136 years)"
+        },
+        {
+          "name": "proto_locked",
+          "member": "proto_locked",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra.",
+          "explanation": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra."
+        },
+        {
+          "name": "fps",
+          "member": "fps",
+          "bytes": 4,
+          "signed": false,
+          "unit": "Hz",
+          "scale": 1,
+          "meaning": "frames in the last second",
+          "explanation": "frames in the last second"
+        },
+        {
+          "name": "vs_supply_mv",
+          "member": "vs_supply_mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "vs supply mv",
+          "explanation": "vs supply mv"
+        },
+        {
+          "name": "vs_aux_mv",
+          "member": "vs_aux_mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "the second voltage, live: the Diff-Power-UR-Analog-M's V_B (the LED supply after the fuse), the Dig2Analog-Plus-5ch's auxiliary input; 0 = not measured yet",
+          "explanation": "the second voltage, live: the Diff-Power-UR-Analog-M's V_B (the LED supply after the fuse), the Dig2Analog-Plus-5ch's auxiliary input; 0 = not measured yet"
+        },
+        {
+          "name": "i_ma",
+          "member": "i_ma",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "board current now, mA (measured)",
+          "explanation": "board current now, mA (measured)"
+        },
+        {
+          "name": "mcu_temp_c10",
+          "member": "mcu_temp_c10",
+          "bytes": 2,
+          "signed": true,
+          "unit": "degC",
+          "scale": 0.1,
+          "meaning": "0.1 C, MCUTEMP_NA (-32768) = not valid",
+          "explanation": "0.1 C, MCUTEMP_NA (-32768) = not valid"
+        },
+        {
+          "name": "cpu_pm",
+          "member": "cpu_pm",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "cpu pm",
+          "explanation": "cpu pm"
+        },
+        {
+          "name": "i_k_permille",
+          "member": "i_k_permille",
+          "bytes": 4,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "limiter scale of all outputs",
+          "explanation": "limiter scale of all outputs"
+        },
+        {
+          "name": "out[0]",
+          "member": "out[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "current output levels, 16 bit",
+          "explanation": "current output levels, 16 bit"
+        },
+        {
+          "name": "out[1]",
+          "member": "out[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "current output levels, 16 bit",
+          "explanation": "current output levels, 16 bit"
+        },
+        {
+          "name": "out[2]",
+          "member": "out[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "current output levels, 16 bit",
+          "explanation": "current output levels, 16 bit"
+        },
+        {
+          "name": "out[3]",
+          "member": "out[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "current output levels, 16 bit",
+          "explanation": "current output levels, 16 bit"
+        },
+        {
+          "name": "out[4]",
+          "member": "out[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "current output levels, 16 bit",
+          "explanation": "current output levels, 16 bit"
+        },
+        {
+          "name": "i_now_ch_ma[0]",
+          "member": "i_now_ch_ma[0]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's current now: the model at its output, mA (watch)",
+          "explanation": "each channel's current now: the model at its output, mA (watch)"
+        },
+        {
+          "name": "i_now_ch_ma[1]",
+          "member": "i_now_ch_ma[1]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's current now: the model at its output, mA (watch)",
+          "explanation": "each channel's current now: the model at its output, mA (watch)"
+        },
+        {
+          "name": "i_now_ch_ma[2]",
+          "member": "i_now_ch_ma[2]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's current now: the model at its output, mA (watch)",
+          "explanation": "each channel's current now: the model at its output, mA (watch)"
+        },
+        {
+          "name": "i_now_ch_ma[3]",
+          "member": "i_now_ch_ma[3]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's current now: the model at its output, mA (watch)",
+          "explanation": "each channel's current now: the model at its output, mA (watch)"
+        },
+        {
+          "name": "i_now_ch_ma[4]",
+          "member": "i_now_ch_ma[4]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's current now: the model at its output, mA (watch)",
+          "explanation": "each channel's current now: the model at its output, mA (watch)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Real time. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "spans": [
+        [
+          9,
+          5
+        ],
+        [
+          14,
+          5
+        ]
+      ]
+    },
+    {
+      "record": "S",
+      "name": "stored settings",
+      "ctype": "settings_t",
+      "base": "c->set",
+      "fields": [
+        {
+          "name": "protocol",
+          "member": "protocol",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra.",
+          "explanation": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra."
+        },
+        {
+          "name": "pwm_preset",
+          "member": "pwm_preset",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM preset index 0..14; 255 selects raw_steps.",
+          "explanation": "PWM preset index 0..14; 255 selects raw_steps."
+        },
+        {
+          "name": "dither_mode",
+          "member": "dither_mode",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Dither mode: 0 on, 1 off below threshold, 2 off.",
+          "explanation": "Dither mode: 0 on, 1 off below threshold, 2 off."
+        },
+        {
+          "name": "dither_thresh",
+          "member": "dither_thresh",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "0.1 % units",
+          "explanation": "0.1 % units"
+        },
+        {
+          "name": "feedback_ch",
+          "member": "feedback_ch",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Feedback indicator: 0 red, 1 all channels, 2 disabled.",
+          "explanation": "Feedback indicator: 0 red, 1 all channels, 2 disabled."
+        },
+        {
+          "name": "stagger",
+          "member": "stagger",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM staggering: 0 off, 1 fixed thirds, 2 fixed plus spread, 3 adaptive, 4 adaptive plus spread.",
+          "explanation": "PWM staggering: 0 off, 1 fixed thirds, 2 fixed plus spread, 3 adaptive, 4 adaptive plus spread."
+        },
+        {
+          "name": "dim_floor",
+          "member": "dim_floor",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Minimum pulse policy: 0 pulse skipping, 1 clamp, 2 disabled.",
+          "explanation": "Minimum pulse policy: 0 pulse skipping, 1 clamp, 2 disabled."
+        },
+        {
+          "name": "min_pulse",
+          "member": "min_pulse",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ns",
+          "scale": 10,
+          "meaning": "10 ns units",
+          "explanation": "10 ns units"
+        },
+        {
+          "name": "signal_loss",
+          "member": "signal_loss",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "signal loss",
+          "explanation": "signal loss"
+        },
+        {
+          "name": "smoothing",
+          "member": "smoothing",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "smoothing",
+          "explanation": "smoothing"
+        },
+        {
+          "name": "gamma",
+          "member": "gamma",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "1: gamma 2.8 after the brightness, 0 = none",
+          "explanation": "1: gamma 2.8 after the brightness, 0 = none"
+        },
+        {
+          "name": "last_proto",
+          "member": "last_proto",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra.",
+          "explanation": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra."
+        },
+        {
+          "name": "raw_steps",
+          "member": "raw_steps",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Custom PWM period in MCU timer counts; active only when pwm_preset is 255.",
+          "explanation": "Custom PWM period in MCU timer counts; active only when pwm_preset is 255."
+        }
+      ],
+      "condition": null,
+      "explanation": "Stored settings. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "T",
+      "name": "effective settings",
+      "ctype": "settings_t",
+      "base": "c->eff",
+      "fields": [
+        {
+          "name": "protocol",
+          "member": "protocol",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra.",
+          "explanation": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra."
+        },
+        {
+          "name": "pwm_preset",
+          "member": "pwm_preset",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM preset index 0..14; 255 selects raw_steps.",
+          "explanation": "PWM preset index 0..14; 255 selects raw_steps."
+        },
+        {
+          "name": "dither_mode",
+          "member": "dither_mode",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Dither mode: 0 on, 1 off below threshold, 2 off.",
+          "explanation": "Dither mode: 0 on, 1 off below threshold, 2 off."
+        },
+        {
+          "name": "dither_thresh",
+          "member": "dither_thresh",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "0.1 % units",
+          "explanation": "0.1 % units"
+        },
+        {
+          "name": "feedback_ch",
+          "member": "feedback_ch",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Feedback indicator: 0 red, 1 all channels, 2 disabled.",
+          "explanation": "Feedback indicator: 0 red, 1 all channels, 2 disabled."
+        },
+        {
+          "name": "stagger",
+          "member": "stagger",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM staggering: 0 off, 1 fixed thirds, 2 fixed plus spread, 3 adaptive, 4 adaptive plus spread.",
+          "explanation": "PWM staggering: 0 off, 1 fixed thirds, 2 fixed plus spread, 3 adaptive, 4 adaptive plus spread."
+        },
+        {
+          "name": "dim_floor",
+          "member": "dim_floor",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Minimum pulse policy: 0 pulse skipping, 1 clamp, 2 disabled.",
+          "explanation": "Minimum pulse policy: 0 pulse skipping, 1 clamp, 2 disabled."
+        },
+        {
+          "name": "min_pulse",
+          "member": "min_pulse",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ns",
+          "scale": 10,
+          "meaning": "10 ns units",
+          "explanation": "10 ns units"
+        },
+        {
+          "name": "signal_loss",
+          "member": "signal_loss",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "signal loss",
+          "explanation": "signal loss"
+        },
+        {
+          "name": "smoothing",
+          "member": "smoothing",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "smoothing",
+          "explanation": "smoothing"
+        },
+        {
+          "name": "gamma",
+          "member": "gamma",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "1: gamma 2.8 after the brightness, 0 = none",
+          "explanation": "1: gamma 2.8 after the brightness, 0 = none"
+        },
+        {
+          "name": "last_proto",
+          "member": "last_proto",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra.",
+          "explanation": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra."
+        },
+        {
+          "name": "raw_steps",
+          "member": "raw_steps",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Custom PWM period in MCU timer counts; active only when pwm_preset is 255.",
+          "explanation": "Custom PWM period in MCU timer counts; active only when pwm_preset is 255."
+        }
+      ],
+      "condition": null,
+      "explanation": "Effective settings. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "I",
+      "name": "limits and calibration state",
+      "ctype": "cli_status_t",
+      "base": "c->st",
+      "fields": [
+        {
+          "name": "softstart",
+          "member": "softstart",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "soft start on (core/sstart.h)",
+          "explanation": "soft start on (core/sstart.h)"
+        },
+        {
+          "name": "i_model",
+          "member": "i_model",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "channel model: 0 none, 1 learned, 2 calibrated",
+          "explanation": "channel model: 0 none, 1 learned, 2 calibrated"
+        },
+        {
+          "name": "i_tripped",
+          "member": "i_tripped",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "i tripped",
+          "explanation": "i tripped"
+        },
+        {
+          "name": "i_trip_cause",
+          "member": "i_trip_cause",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "outputs forced off now; last cause (1 short, 2 overload)",
+          "explanation": "outputs forced off now; last cause (1 short, 2 overload)"
+        },
+        {
+          "name": "i_cal",
+          "member": "i_cal",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "a calibration is running",
+          "explanation": "a calibration is running"
+        },
+        {
+          "name": "i_peak_ma",
+          "member": "i_peak_ma",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "i peak ma (signed)",
+          "explanation": "i peak ma (signed)"
+        },
+        {
+          "name": "i_zero_ma",
+          "member": "i_zero_ma",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "~100 ms average, peak of the last ms, zero (logic + offset)",
+          "explanation": "~100 ms average, peak of the last ms, zero (logic + offset)"
+        },
+        {
+          "name": "i_trips",
+          "member": "i_trips",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "i trips",
+          "explanation": "i trips"
+        },
+        {
+          "name": "i_ch_ma[0]",
+          "member": "i_ch_ma[0]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel currents at 100 % (model)",
+          "explanation": "channel currents at 100 % (model)"
+        },
+        {
+          "name": "i_ch_ma[1]",
+          "member": "i_ch_ma[1]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel currents at 100 % (model)",
+          "explanation": "channel currents at 100 % (model)"
+        },
+        {
+          "name": "i_ch_ma[2]",
+          "member": "i_ch_ma[2]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel currents at 100 % (model)",
+          "explanation": "channel currents at 100 % (model)"
+        },
+        {
+          "name": "i_ch_ma[3]",
+          "member": "i_ch_ma[3]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel currents at 100 % (model)",
+          "explanation": "channel currents at 100 % (model)"
+        },
+        {
+          "name": "i_ch_ma[4]",
+          "member": "i_ch_ma[4]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel currents at 100 % (model)",
+          "explanation": "channel currents at 100 % (model)"
+        },
+        {
+          "name": "cal_count",
+          "member": "cal_count",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "tests stored on this board",
+          "explanation": "tests stored on this board"
+        },
+        {
+          "name": "cal_fail",
+          "member": "cal_fail",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the last test stopped incomplete: ISENSE_CAL_F_* (0: complete / none)",
+          "explanation": "the last test stopped incomplete: ISENSE_CAL_F_* (0: complete / none)"
+        },
+        {
+          "name": "save_why",
+          "member": "save_why",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "why a pending write waits: 0 nothing pending, 1 debounce, 2 waiting for dark (the hour's write while bright used), 3 the write budget, 4 a flash error's hold-off, 5 the supply (main.c save_why)",
+          "explanation": "why a pending write waits: 0 nothing pending, 1 debounce, 2 waiting for dark (the hour's write while bright used), 3 the write budget, 4 a flash error's hold-off, 5 the supply (main.c save_why)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Limits and calibration state. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "spans": [
+        [
+          0,
+          5
+        ],
+        [
+          5,
+          2
+        ],
+        [
+          8,
+          5
+        ]
+      ]
+    },
+    {
+      "record": "Y",
+      "name": "limits",
+      "ctype": "cli_status_t",
+      "base": "c->st",
+      "fields": [
+        {
+          "name": "board_rated_ma",
+          "member": "lim_board_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the board's rating (the current sense's ceiling), mA",
+          "explanation": "the board's rating (the current sense's ceiling), mA"
+        },
+        {
+          "name": "fuse_ma",
+          "member": "lim_fuse_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the fuse's rating, mA",
+          "explanation": "the fuse's rating, mA"
+        },
+        {
+          "name": "channel_rated_ma",
+          "member": "lim_ch_rated_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's rating, mA",
+          "explanation": "each channel's rating, mA"
+        },
+        {
+          "name": "user_ma",
+          "member": "lim_user_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the user's board limit in effect: the lower of the stored one and Ultra CONFIG 21, 0 = none",
+          "explanation": "the user's board limit in effect: the lower of the stored one and Ultra CONFIG 21, 0 = none"
+        },
+        {
+          "name": "ilimit50",
+          "member": "ilimit50",
+          "bytes": 1,
+          "signed": false,
+          "unit": "mA",
+          "scale": 50,
+          "meaning": "stored board limit x 50 mA (0 = the board rating)",
+          "explanation": "stored board limit x 50 mA (0 = the board rating)"
+        },
+        {
+          "name": "lim_ma",
+          "member": "lim_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "0xFFFF = none",
+          "explanation": "0xFFFF = none"
+        },
+        {
+          "name": "lim_src",
+          "member": "lim_src",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "lim src",
+          "explanation": "lim src"
+        },
+        {
+          "name": "lim_need",
+          "member": "lim_need",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "CLIMIT_SRC_*, CLIMIT_NEED_*",
+          "explanation": "CLIMIT_SRC_*, CLIMIT_NEED_*"
+        },
+        {
+          "name": "lim_conn_ma",
+          "member": "lim_conn_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "connected load (all channels at 100 %), 0 = not known",
+          "explanation": "connected load (all channels at 100 %), 0 = not known"
+        },
+        {
+          "name": "i_limit_ma",
+          "member": "i_limit_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the current sense's limit in effect, mA",
+          "explanation": "the current sense's limit in effect, mA"
+        },
+        {
+          "name": "ch_max_ma[0]",
+          "member": "ch_max_ma[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating",
+          "explanation": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating"
+        },
+        {
+          "name": "ch_max_ma[1]",
+          "member": "ch_max_ma[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating",
+          "explanation": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating"
+        },
+        {
+          "name": "ch_max_ma[2]",
+          "member": "ch_max_ma[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating",
+          "explanation": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating"
+        },
+        {
+          "name": "ch_max_ma[3]",
+          "member": "ch_max_ma[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating",
+          "explanation": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating"
+        },
+        {
+          "name": "ch_max_ma[4]",
+          "member": "ch_max_ma[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating",
+          "explanation": "each channel's ceiling in effect: Ultra CONFIG 12 (its TARGET), else the channel's rating"
+        },
+        {
+          "name": "ch_limited",
+          "member": "ch_limited",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the last render capped a channel at its ceiling (Ultra mode)",
+          "explanation": "the last render capped a channel at its ceiling (Ultra mode)"
+        },
+        {
+          "name": "retry_n",
+          "member": "retry_n",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "retries since the count started (saturates at 254)",
+          "explanation": "retries since the count started (saturates at 254)"
+        },
+        {
+          "name": "retry_s",
+          "member": "retry_s",
+          "bytes": 1,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "the trips' retry policy",
+          "explanation": "the trips' retry policy"
+        }
+      ],
+      "condition": null,
+      "explanation": "Limits. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "spans": [
+        [
+          0,
+          4
+        ]
+      ]
+    },
+    {
+      "record": "C",
+      "name": "counters",
+      "ctype": "cli_status_t",
+      "base": "c->st",
+      "fields": [
+        {
+          "name": "uptime_s",
+          "member": "uptime_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "s since boot (32 bits: 136 years)",
+          "explanation": "s since boot (32 bits: 136 years)"
+        },
+        {
+          "name": "stack_max",
+          "member": "stack_max",
+          "bytes": 4,
+          "signed": false,
+          "unit": "byte",
+          "scale": 1,
+          "meaning": "the stack's high-water mark, bytes (painted at boot; 0 = not known)",
+          "explanation": "the stack's high-water mark, bytes (painted at boot; 0 = not known)"
+        },
+        {
+          "name": "proto_mode",
+          "member": "proto_mode",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra.",
+          "explanation": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra."
+        },
+        {
+          "name": "proto_provisional",
+          "member": "proto_provisional",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra.",
+          "explanation": "Input protocol: 0 none, 1 WS2915 32-bit, 2 WS2915 26-bit, 3 WS2805, 4 Ultra."
+        },
+        {
+          "name": "frames",
+          "member": "frames",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "frame ends seen",
+          "explanation": "frame ends seen"
+        },
+        {
+          "name": "decoded",
+          "member": "decoded",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "slots decoded",
+          "explanation": "slots decoded"
+        },
+        {
+          "name": "dec_err[0]",
+          "member": "dec_err[0]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code"
+        },
+        {
+          "name": "dec_err[1]",
+          "member": "dec_err[1]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code"
+        },
+        {
+          "name": "dec_err[2]",
+          "member": "dec_err[2]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code"
+        },
+        {
+          "name": "dec_err[3]",
+          "member": "dec_err[3]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code"
+        },
+        {
+          "name": "dec_err[4]",
+          "member": "dec_err[4]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code"
+        },
+        {
+          "name": "dec_err[5]",
+          "member": "dec_err[5]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code"
+        },
+        {
+          "name": "config_frames",
+          "member": "config_frames",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "accepted config commands",
+          "explanation": "accepted config commands"
+        },
+        {
+          "name": "ultra_headers",
+          "member": "ultra_headers",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Ultra active: frames of an Ultra length whose tail held a valid header",
+          "explanation": "Ultra active: frames of an Ultra length whose tail held a valid header"
+        },
+        {
+          "name": "ultra_tail_err",
+          "member": "ultra_tail_err",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "... and those whose tail did not (decode error, gap, CRC)",
+          "explanation": "... and those whose tail did not (decode error, gap, CRC)"
+        },
+        {
+          "name": "steps",
+          "member": "steps",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM period in counts",
+          "explanation": "PWM period in counts"
+        },
+        {
+          "name": "saves",
+          "member": "saves",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "flash records written since boot",
+          "explanation": "flash records written since boot"
+        },
+        {
+          "name": "fl_pend",
+          "member": "fl_pend",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "bit per store: a write is waiting (debounce, budget, a low moment)",
+          "explanation": "bit per store: a write is waiting (debounce, budget, a low moment)"
+        },
+        {
+          "name": "fl_err",
+          "member": "fl_err",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the last failed operation's FLASH_ERR_* (core/flashrec.h; 0: none)",
+          "explanation": "the last failed operation's FLASH_ERR_* (core/flashrec.h; 0: none)"
+        },
+        {
+          "name": "fl_errs",
+          "member": "fl_errs",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "failed operations since boot",
+          "explanation": "failed operations since boot"
+        },
+        {
+          "name": "fl_rej",
+          "member": "fl_rej",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "records the loaders rejected at boot, 6 bits per store (the effect store: heads it lists that did not load)",
+          "explanation": "records the loaders rejected at boot, 6 bits per store (the effect store: heads it lists that did not load)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Counters. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "spans": [
+        [
+          4,
+          11
+        ]
+      ]
+    },
+    {
+      "record": "M",
+      "name": "monitoring",
+      "ctype": "cli_status_t",
+      "base": "c->st",
+      "fields": [
+        {
+          "name": "stagger_o2",
+          "member": "stagger_o2",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "stagger o2",
+          "explanation": "stagger o2"
+        },
+        {
+          "name": "stagger_o3",
+          "member": "stagger_o3",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "adaptive stagger: TIM2 / TIM3 offsets, Q16 of the period",
+          "explanation": "adaptive stagger: TIM2 / TIM3 offsets, Q16 of the period"
+        },
+        {
+          "name": "stagger_moves",
+          "member": "stagger_moves",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "stagger moves",
+          "explanation": "stagger moves"
+        },
+        {
+          "name": "ripple_ma",
+          "member": "ripple_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "moves so far, LED_+ ripple estimate (mA rms)",
+          "explanation": "moves so far, LED_+ ripple estimate (mA rms)"
+        },
+        {
+          "name": "vdda_mv",
+          "member": "vdda_mv",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "the 3.3 V rail from VREFINT, 0 = not known",
+          "explanation": "the 3.3 V rail from VREFINT, 0 = not known"
+        },
+        {
+          "name": "mcu_peak_c10",
+          "member": "mcu_peak_c10",
+          "bytes": 2,
+          "signed": true,
+          "unit": "degC",
+          "scale": 0.1,
+          "meaning": "the highest since boot, 0.1 C (MCUTEMP_NA: none yet)",
+          "explanation": "the highest since boot, 0.1 C (MCUTEMP_NA: none yet)"
+        },
+        {
+          "name": "mcu_peak_s",
+          "member": "mcu_peak_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "uptime then (s)",
+          "explanation": "uptime then (s)"
+        },
+        {
+          "name": "vs_supply_min_mv",
+          "member": "vs_supply_min_mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "vs supply min mv",
+          "explanation": "vs supply min mv"
+        },
+        {
+          "name": "vs_supply_max_mv",
+          "member": "vs_supply_max_mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "min / max: since the last status",
+          "explanation": "min / max: since the last status"
+        },
+        {
+          "name": "dip_ref_mv",
+          "member": "dip_ref_mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "their reference",
+          "explanation": "their reference"
+        },
+        {
+          "name": "test_mode",
+          "member": "test_mode",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "test jig mode (core/testjig.h): the test pad is grounded",
+          "explanation": "test jig mode (core/testjig.h): the test pad is grounded"
+        },
+        {
+          "name": "oc_show",
+          "member": "oc_show",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "OCLED_*: 0 off, 1 limit, 2 trip",
+          "explanation": "OCLED_*: 0 off, 1 limit, 2 trip"
+        },
+        {
+          "name": "oc_cause",
+          "member": "oc_cause",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the last trip's cause: 1 short, 2 overload",
+          "explanation": "the last trip's cause: 1 short, 2 overload"
+        },
+        {
+          "name": "oc_limiting",
+          "member": "oc_limiting",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "oc limiting",
+          "explanation": "oc limiting"
+        },
+        {
+          "name": "oc_tripped",
+          "member": "oc_tripped",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the conditions now",
+          "explanation": "the conditions now"
+        },
+        {
+          "name": "oc_since_s",
+          "member": "oc_since_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "uptime (s) when the shown pattern started",
+          "explanation": "uptime (s) when the shown pattern started"
+        },
+        {
+          "name": "oc_hold_ms",
+          "member": "oc_hold_ms",
+          "bytes": 4,
+          "signed": false,
+          "unit": "ms",
+          "scale": 1,
+          "meaning": "hold left (0 while the condition is on)",
+          "explanation": "hold left (0 while the condition is on)"
+        },
+        {
+          "name": "cpu_peak",
+          "member": "cpu_peak",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "cpu peak",
+          "explanation": "cpu peak"
+        },
+        {
+          "name": "cap.now",
+          "member": "cap.now",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "host ms of the last fx_engine_frame",
+          "explanation": "host ms of the last fx_engine_frame"
+        },
+        {
+          "name": "cap.avg",
+          "member": "cap.avg",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "cap.avg",
+          "explanation": "cap.avg"
+        },
+        {
+          "name": "cap.peak",
+          "member": "cap.peak",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "%: now, the ~1 min rms, its highest since boot",
+          "explanation": "%: now, the ~1 min rms, its highest since boot"
+        }
+      ],
+      "condition": null,
+      "explanation": "Monitoring. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "A",
+      "name": "calibration",
+      "ctype": "isense_cal_t",
+      "base": "&c->st->cal",
+      "fields": [
+        {
+          "name": "levels",
+          "member": "levels",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ISENSE_LEVELS: the standard test; 1: one level at pct[0]; 0: none",
+          "explanation": "ISENSE_LEVELS: the standard test; 1: one level at pct[0]; 0: none"
+        },
+        {
+          "name": "pct[0]",
+          "member": "pct[0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "the record to write: the magic, the next sequence number, the CRC",
+          "explanation": "the record to write: the magic, the next sequence number, the CRC"
+        },
+        {
+          "name": "pct[1]",
+          "member": "pct[1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "the record to write: the magic, the next sequence number, the CRC",
+          "explanation": "the record to write: the magic, the next sequence number, the CRC"
+        },
+        {
+          "name": "pct[2]",
+          "member": "pct[2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "the record to write: the magic, the next sequence number, the CRC",
+          "explanation": "the record to write: the magic, the next sequence number, the CRC"
+        },
+        {
+          "name": "pct[3]",
+          "member": "pct[3]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "the record to write: the magic, the next sequence number, the CRC",
+          "explanation": "the record to write: the magic, the next sequence number, the CRC"
+        },
+        {
+          "name": "zero_ma",
+          "member": "zero_ma",
+          "bytes": 2,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "logic current + amplifier offset, mA",
+          "explanation": "logic current + amplifier offset, mA"
+        }
+      ],
+      "condition": null,
+      "explanation": "Calibration. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "a",
+      "name": "calibration channel",
+      "ctype": "uint16_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "v[0]",
+          "member": "v[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Measured calibration current at this level; level percentages are in record A.",
+          "explanation": "Measured calibration current at this level; level percentages are in record A."
+        },
+        {
+          "name": "v[1]",
+          "member": "v[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Measured calibration current at this level; level percentages are in record A.",
+          "explanation": "Measured calibration current at this level; level percentages are in record A."
+        },
+        {
+          "name": "v[2]",
+          "member": "v[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Measured calibration current at this level; level percentages are in record A.",
+          "explanation": "Measured calibration current at this level; level percentages are in record A."
+        },
+        {
+          "name": "v[3]",
+          "member": "v[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Measured calibration current at this level; level percentages are in record A.",
+          "explanation": "Measured calibration current at this level; level percentages are in record A."
+        }
+      ],
+      "condition": null,
+      "explanation": "Calibration channel. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "H",
+      "name": "health",
+      "ctype": "health_t",
+      "base": "c->st->hl",
+      "fields": [
+        {
+          "name": "flags",
+          "member": "flags",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Bit flags: 1 tested, 2 abnormal channel, 4 changed dark current, 8 model drift, 16 calibration suggested, 32 hot.",
+          "explanation": "Bit flags: 1 tested, 2 abnormal channel, 4 changed dark current, 8 model drift, 16 calibration suggested, 32 hot."
+        },
+        {
+          "name": "cls[0]",
+          "member": "cls[0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Channel 0: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected.",
+          "explanation": "Channel 0: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected."
+        },
+        {
+          "name": "cls[1]",
+          "member": "cls[1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Channel 1: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected.",
+          "explanation": "Channel 1: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected."
+        },
+        {
+          "name": "cls[2]",
+          "member": "cls[2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Channel 2: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected.",
+          "explanation": "Channel 2: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected."
+        },
+        {
+          "name": "cls[3]",
+          "member": "cls[3]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Channel 3: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected.",
+          "explanation": "Channel 3: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected."
+        },
+        {
+          "name": "cls[4]",
+          "member": "cls[4]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Channel 4: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected.",
+          "explanation": "Channel 4: low bits 0 unknown, 1 no load, 2 normal, 3 abnormal; reason bits 16 not rising, 32 above expected, 64 below expected."
+        },
+        {
+          "name": "test_dev[0]",
+          "member": "test_dev[0]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 0 latest full calibration current versus preceding calibration; signed percent, -128 unavailable.",
+          "explanation": "Channel 0 latest full calibration current versus preceding calibration; signed percent, -128 unavailable."
+        },
+        {
+          "name": "test_dev[1]",
+          "member": "test_dev[1]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 1 latest full calibration current versus preceding calibration; signed percent, -128 unavailable.",
+          "explanation": "Channel 1 latest full calibration current versus preceding calibration; signed percent, -128 unavailable."
+        },
+        {
+          "name": "test_dev[2]",
+          "member": "test_dev[2]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 2 latest full calibration current versus preceding calibration; signed percent, -128 unavailable.",
+          "explanation": "Channel 2 latest full calibration current versus preceding calibration; signed percent, -128 unavailable."
+        },
+        {
+          "name": "test_dev[3]",
+          "member": "test_dev[3]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 3 latest full calibration current versus preceding calibration; signed percent, -128 unavailable.",
+          "explanation": "Channel 3 latest full calibration current versus preceding calibration; signed percent, -128 unavailable."
+        },
+        {
+          "name": "test_dev[4]",
+          "member": "test_dev[4]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 4 latest full calibration current versus preceding calibration; signed percent, -128 unavailable.",
+          "explanation": "Channel 4 latest full calibration current versus preceding calibration; signed percent, -128 unavailable."
+        },
+        {
+          "name": "model_dev[0]",
+          "member": "model_dev[0]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 0 running model versus calibration current; signed percent, -128 unavailable.",
+          "explanation": "Channel 0 running model versus calibration current; signed percent, -128 unavailable."
+        },
+        {
+          "name": "model_dev[1]",
+          "member": "model_dev[1]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 1 running model versus calibration current; signed percent, -128 unavailable.",
+          "explanation": "Channel 1 running model versus calibration current; signed percent, -128 unavailable."
+        },
+        {
+          "name": "model_dev[2]",
+          "member": "model_dev[2]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 2 running model versus calibration current; signed percent, -128 unavailable.",
+          "explanation": "Channel 2 running model versus calibration current; signed percent, -128 unavailable."
+        },
+        {
+          "name": "model_dev[3]",
+          "member": "model_dev[3]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 3 running model versus calibration current; signed percent, -128 unavailable.",
+          "explanation": "Channel 3 running model versus calibration current; signed percent, -128 unavailable."
+        },
+        {
+          "name": "model_dev[4]",
+          "member": "model_dev[4]",
+          "bytes": 1,
+          "signed": true,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "Channel 4 running model versus calibration current; signed percent, -128 unavailable.",
+          "explanation": "Channel 4 running model versus calibration current; signed percent, -128 unavailable."
+        },
+        {
+          "name": "dark_ma",
+          "member": "dark_ma",
+          "bytes": 2,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Current dark-current offset minus the calibration reference; this console field is mA.",
+          "explanation": "Current dark-current offset minus the calibration reference; this console field is mA."
+        }
+      ],
+      "condition": null,
+      "explanation": "Health. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "L",
+      "name": "lifetime",
+      "ctype": "life_rec_t",
+      "base": "&c->st->en->lt",
+      "fields": [
+        {
+          "name": "wh",
+          "member": "wh",
+          "bytes": 4,
+          "signed": false,
+          "unit": "Wh",
+          "scale": 1,
+          "meaning": "0: input energy, Wh",
+          "explanation": "0: input energy, Wh"
+        },
+        {
+          "name": "on_s",
+          "member": "on_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "4: powered time, s",
+          "explanation": "4: powered time, s"
+        },
+        {
+          "name": "lit_s",
+          "member": "lit_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "8: time with an output on, s",
+          "explanation": "8: time with an output on, s"
+        },
+        {
+          "name": "ups",
+          "member": "ups",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "12: power-ups",
+          "explanation": "12: power-ups"
+        },
+        {
+          "name": "dips",
+          "member": "dips",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "16: supply dips",
+          "explanation": "16: supply dips"
+        },
+        {
+          "name": "ver",
+          "member": "ver",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "20: the app version last seen: the CRC-8 of its core/fwver.h word (energy_ver; development builds aren't compared); format 2: bytes 20..23 the word itself",
+          "explanation": "20: the app version last seen: the CRC-8 of its core/fwver.h word (energy_ver; development builds aren't compared); format 2: bytes 20..23 the word itself"
+        },
+        {
+          "name": "merged_hi",
+          "member": "merged_hi",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "21: (format 3) the powered time a hub merged in (LIFE_SYNC), 0.1 h, 24 bits:",
+          "explanation": "21: (format 3) the powered time a hub merged in (LIFE_SYNC), 0.1 h, 24 bits:"
+        },
+        {
+          "name": "merged",
+          "member": "merged",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "22: ... its low 16 (LIFE_MERGED). The board's own powered time is on_s - merged x 360 s, its write allowance's",
+          "explanation": "22: ... its low 16 (LIFE_MERGED). The board's own powered time is on_s - merged x 360 s, its write allowance's"
+        },
+        {
+          "name": "writes",
+          "member": "writes",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "24: records written, this one included (the newest has the most; one a write)",
+          "explanation": "24: records written, this one included (the newest has the most; one a write)"
+        },
+        {
+          "name": "trips[0]",
+          "member": "trips[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "28: overload trips, 30: short-circuit trips (saturating)",
+          "explanation": "28: overload trips, 30: short-circuit trips (saturating)"
+        },
+        {
+          "name": "trips[1]",
+          "member": "trips[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "28: overload trips, 30: short-circuit trips (saturating)",
+          "explanation": "28: overload trips, 30: short-circuit trips (saturating)"
+        },
+        {
+          "name": "updates",
+          "member": "updates",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "32: firmware updates: boots with a new app version",
+          "explanation": "32: firmware updates: boots with a new app version"
+        },
+        {
+          "name": "wd",
+          "member": "wd",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "34: watchdog resets (saturating)",
+          "explanation": "34: watchdog resets (saturating)"
+        },
+        {
+          "name": "peak_t",
+          "member": "peak_t",
+          "bytes": 1,
+          "signed": false,
+          "unit": "degC",
+          "scale": 0.5,
+          "meaning": "35: the highest MCU temperature, 0.5 C (0..127.5 C)",
+          "explanation": "35: the highest MCU temperature, 0.5 C (0..127.5 C)"
+        },
+        {
+          "name": "peak_a",
+          "member": "peak_a",
+          "bytes": 1,
+          "signed": false,
+          "unit": "A",
+          "scale": 0.5,
+          "meaning": "36: the highest board current (~100 ms average), 0.5 A",
+          "explanation": "36: the highest board current (~100 ms average), 0.5 A"
+        },
+        {
+          "name": "trip",
+          "member": "trip",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "37: the last trip: 1 short, 2 overload (bits 0-1) | its current, 2 A (bits 2-7, saturating at 126 A; a short: its peak)",
+          "explanation": "37: the last trip: 1 short, 2 overload (bits 0-1) | its current, 2 A (bits 2-7, saturating at 126 A; a short: its peak)"
+        },
+        {
+          "name": "trip_h",
+          "member": "trip_h",
+          "bytes": 2,
+          "signed": false,
+          "unit": "h",
+          "scale": 1,
+          "meaning": "38: ... the lit hours then (saturating)",
+          "explanation": "38: ... the lit hours then (saturating)"
+        },
+        {
+          "name": "dip_pct",
+          "member": "dip_pct",
+          "bytes": 1,
+          "signed": false,
+          "unit": "percent",
+          "scale": 1,
+          "meaning": "40: the last supply dip: its lowest reading, % of its reference",
+          "explanation": "40: the last supply dip: its lowest reading, % of its reference"
+        },
+        {
+          "name": "dip_cs",
+          "member": "dip_cs",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ms",
+          "scale": 10,
+          "meaning": "41: ... how long, x 10 ms (255: longer)",
+          "explanation": "41: ... how long, x 10 ms (255: longer)"
+        },
+        {
+          "name": "dip_a",
+          "member": "dip_a",
+          "bytes": 1,
+          "signed": false,
+          "unit": "A",
+          "scale": 0.5,
+          "meaning": "42: ... the board current at its lowest, 0.5 A (saturating)",
+          "explanation": "42: ... the board current at its lowest, 0.5 A (saturating)"
+        },
+        {
+          "name": "rst",
+          "member": "rst",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "43: the last abnormal reset: 1 watchdog, 2 an exception (then the watchdog) (bits 0-1) | the exception's mcause (bits 2-7)",
+          "explanation": "43: the last abnormal reset: 1 watchdog, 2 an exception (then the watchdog) (bits 0-1) | the exception's mcause (bits 2-7)"
+        },
+        {
+          "name": "rst_h",
+          "member": "rst_h",
+          "bytes": 1,
+          "signed": false,
+          "unit": "h",
+          "scale": 1,
+          "meaning": "44: ... the uptime of that run, h (saturating)",
+          "explanation": "44: ... the uptime of that run, h (saturating)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Lifetime. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "E",
+      "name": "energy",
+      "ctype": "energy_t",
+      "base": "c->st->en",
+      "fields": [
+        {
+          "name": "boot_mwh",
+          "member": "boot_mwh",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mWh",
+          "scale": 1,
+          "meaning": "since boot (wraps: the ENERGY page's counter)",
+          "explanation": "since boot (wraps: the ENERGY page's counter)"
+        },
+        {
+          "name": "base_wh",
+          "member": "base_wh",
+          "bytes": 4,
+          "signed": false,
+          "unit": "Wh",
+          "scale": 1,
+          "meaning": "the lifetime energy, Wh: as stored at boot + the Wh carried since",
+          "explanation": "the lifetime energy, Wh: as stored at boot + the Wh carried since"
+        },
+        {
+          "name": "saved_wh",
+          "member": "saved_wh",
+          "bytes": 4,
+          "signed": false,
+          "unit": "Wh",
+          "scale": 1,
+          "meaning": "saved wh",
+          "explanation": "saved wh"
+        },
+        {
+          "name": "saved_s",
+          "member": "saved_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "uptime of the last write, s (the page's age, LIFE_SAVE_S)",
+          "explanation": "uptime of the last write, s (the page's age, LIFE_SAVE_S)"
+        },
+        {
+          "name": "saved",
+          "member": "saved",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "stored since boot",
+          "explanation": "stored since boot"
+        },
+        {
+          "name": "synced",
+          "member": "synced",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "energy_sync this boot: ENERGY_SYNC_ONCE a merge applied (one a boot); ENERGY_SYNC_HUB the hub's ledger agrees (applied or nothing ahead)",
+          "explanation": "energy_sync this boot: ENERGY_SYNC_ONCE a merge applied (one a boot); ENERGY_SYNC_HUB the hub's ledger agrees (applied or nothing ahead)"
+        },
+        {
+          "name": "held",
+          "member": "held",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "energy_second: the lifetime allowance is used up (the receiver's DIAG EXHAUSTED; see the limit above)",
+          "explanation": "energy_second: the lifetime allowance is used up (the receiver's DIAG EXHAUSTED; see the limit above)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Energy. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "e",
+      "name": "channel energy",
+      "ctype": "energy_t",
+      "base": "c->st->en",
+      "fields": [
+        {
+          "name": "ch_mwh[0]",
+          "member": "ch_mwh[0]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mWh",
+          "scale": 1,
+          "meaning": "each channel since boot, mWh",
+          "explanation": "each channel since boot, mWh"
+        },
+        {
+          "name": "ch_mwh[1]",
+          "member": "ch_mwh[1]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mWh",
+          "scale": 1,
+          "meaning": "each channel since boot, mWh",
+          "explanation": "each channel since boot, mWh"
+        },
+        {
+          "name": "ch_mwh[2]",
+          "member": "ch_mwh[2]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mWh",
+          "scale": 1,
+          "meaning": "each channel since boot, mWh",
+          "explanation": "each channel since boot, mWh"
+        },
+        {
+          "name": "ch_mwh[3]",
+          "member": "ch_mwh[3]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mWh",
+          "scale": 1,
+          "meaning": "each channel since boot, mWh",
+          "explanation": "each channel since boot, mWh"
+        },
+        {
+          "name": "ch_mwh[4]",
+          "member": "ch_mwh[4]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mWh",
+          "scale": 1,
+          "meaning": "each channel since boot, mWh",
+          "explanation": "each channel since boot, mWh"
+        }
+      ],
+      "condition": "MON_EXTRA",
+      "explanation": "Channel energy. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "P",
+      "name": "power events",
+      "ctype": "pwrev_t",
+      "base": "c->st->pw",
+      "fields": [
+        {
+          "name": "limit_events",
+          "member": "limit_events",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "limit events",
+          "explanation": "limit events"
+        },
+        {
+          "name": "ovl_trips",
+          "member": "ovl_trips",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ovl trips",
+          "explanation": "ovl trips"
+        },
+        {
+          "name": "short_trips",
+          "member": "short_trips",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "since power-up, wrap",
+          "explanation": "since power-up, wrap"
+        },
+        {
+          "name": "ack_limit",
+          "member": "ack_limit",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ack limit",
+          "explanation": "ack limit"
+        },
+        {
+          "name": "ack_ovl",
+          "member": "ack_ovl",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ack ovl",
+          "explanation": "ack ovl"
+        },
+        {
+          "name": "ack_short",
+          "member": "ack_short",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ack short",
+          "explanation": "ack short"
+        },
+        {
+          "name": "ack_dips",
+          "member": "ack_dips",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the counts the controller acknowledged",
+          "explanation": "the counts the controller acknowledged"
+        },
+        {
+          "name": "limit_age_s",
+          "member": "limit_age_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "limit age s",
+          "explanation": "limit age s"
+        },
+        {
+          "name": "trip_age_s",
+          "member": "trip_age_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "s since the last limit event started / the last trip (PWREV_AGE_NONE)",
+          "explanation": "s since the last limit event started / the last trip (PWREV_AGE_NONE)"
+        },
+        {
+          "name": "event_ma",
+          "member": "event_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "board current when the last limit event started, mA",
+          "explanation": "board current when the last limit event started, mA"
+        },
+        {
+          "name": "trip_ma",
+          "member": "trip_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the current to record for a trip, mA (short circuit: the peak sample)",
+          "explanation": "the current to record for a trip, mA (short circuit: the peak sample)"
+        },
+        {
+          "name": "last_cause",
+          "member": "last_cause",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the last trip's cause (its hold, the console)",
+          "explanation": "the last trip's cause (its hold, the console)"
+        },
+        {
+          "name": "latched",
+          "member": "latched",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the retries used up: tripped until isense_rearm",
+          "explanation": "the retries used up: tripped until isense_rearm"
+        }
+      ],
+      "condition": null,
+      "explanation": "Power events. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "V",
+      "name": "supply summary",
+      "ctype": "vdip_t",
+      "base": "c->st->dip",
+      "fields": [
+        {
+          "name": "count",
+          "member": "count",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "calibrations stored on this board (wraps at 65535)",
+          "explanation": "calibrations stored on this board (wraps at 65535)"
+        },
+        {
+          "name": "in_dip",
+          "member": "in_dip",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "1: a dip now; 2: a planned cut's (`planned` at its first low reading): the same for the flash and a calibration, but no count, no log, no deepest",
+          "explanation": "1: a dip now; 2: a planned cut's (`planned` at its first low reading): the same for the flash and a calibration, but no count, no log, no deepest"
+        },
+        {
+          "name": "n_log",
+          "member": "n_log",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "dips in the log",
+          "explanation": "dips in the log"
+        },
+        {
+          "name": "planned",
+          "member": "planned",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "(the receiver's main.c) a power-off notice holds: a dip starting now is the planned cut's; the reference holds meanwhile (and through the cut's dip)",
+          "explanation": "(the receiver's main.c) a power-off notice holds: a dip starting now is the planned cut's; the reference holds meanwhile (and through the cut's dip)"
+        },
+        {
+          "name": "znum",
+          "member": "znum",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "the steps' fall of the supply, mV (the current rising)",
+          "explanation": "the steps' fall of the supply, mV (the current rising)"
+        },
+        {
+          "name": "zden",
+          "member": "zden",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "... their rise of the current, mA",
+          "explanation": "... their rise of the current, mA"
+        },
+        {
+          "name": "zsteps",
+          "member": "zsteps",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "steps taken (saturates)",
+          "explanation": "steps taken (saturates)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Supply summary. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "v",
+      "name": "supply dip",
+      "ctype": "vdip_ev_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "t_s",
+          "member": "t_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "uptime, s",
+          "explanation": "uptime, s"
+        },
+        {
+          "name": "min_x",
+          "member": "min_x",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "its lowest reading (pair sum)",
+          "explanation": "its lowest reading (pair sum)"
+        },
+        {
+          "name": "ref_x",
+          "member": "ref_x",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the reference when it began (pair sum; 0 = no dip here)",
+          "explanation": "the reference when it began (pair sum; 0 = no dip here)"
+        },
+        {
+          "name": "dur_ms",
+          "member": "dur_ms",
+          "bytes": 2,
+          "signed": false,
+          "unit": "ms",
+          "scale": 1,
+          "meaning": "how long it lasted (65535 = longer)",
+          "explanation": "how long it lasted (65535 = longer)"
+        },
+        {
+          "name": "i_ma",
+          "member": "i_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "board current now, mA (measured)",
+          "explanation": "board current now, mA (measured)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Supply dip. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "N",
+      "name": "event log",
+      "ctype": "evl_ev_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "t_s",
+          "member": "t_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "uptime, s",
+          "explanation": "uptime, s"
+        },
+        {
+          "name": "ma",
+          "member": "ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "each channel at 100 %, mA (0: no load)",
+          "explanation": "each channel at 100 %, mA (0: no load)"
+        },
+        {
+          "name": "type",
+          "member": "type",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Event type: 0 empty, 1 limit, 2 overload, 3 short, 4 supply dip, 5 calibration, 6 calibration failed, 7 latch, 8 option bytes bad, 9 protection OK, 10 protection failed, 11 hot. Preserve unknown numbers.",
+          "explanation": "Event type: 0 empty, 1 limit, 2 overload, 3 short, 4 supply dip, 5 calibration, 6 calibration failed, 7 latch, 8 option bytes bad, 9 protection OK, 10 protection failed, 11 hot. Preserve unknown numbers."
+        }
+      ],
+      "condition": null,
+      "explanation": "Event log. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "O",
+      "name": "stored analog scenes",
+      "ctype": "scene_t",
+      "base": "c->scene",
+      "fields": [
+        {
+          "name": "v[0]",
+          "member": "v[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "outputs CH1..CH5",
+          "explanation": "outputs CH1..CH5"
+        },
+        {
+          "name": "v[1]",
+          "member": "v[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "outputs CH1..CH5",
+          "explanation": "outputs CH1..CH5"
+        },
+        {
+          "name": "v[2]",
+          "member": "v[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "outputs CH1..CH5",
+          "explanation": "outputs CH1..CH5"
+        },
+        {
+          "name": "v[3]",
+          "member": "v[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "outputs CH1..CH5",
+          "explanation": "outputs CH1..CH5"
+        },
+        {
+          "name": "v[4]",
+          "member": "v[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "outputs CH1..CH5",
+          "explanation": "outputs CH1..CH5"
+        },
+        {
+          "name": "mask",
+          "member": "mask",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "channels shown at power-up (bit 0 = CH1); 0 = no scene",
+          "explanation": "channels shown at power-up (bit 0 = CH1); 0 = no scene"
+        },
+        {
+          "name": "fade",
+          "member": "fade",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ms",
+          "scale": 100,
+          "meaning": "Fade into power-on levels in 100 ms units",
+          "explanation": "Fade into power-on levels in 100 ms units"
+        },
+        {
+          "name": "loss_v[0]",
+          "member": "loss_v[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Stored signal-loss PWM level, channel 0",
+          "explanation": "Stored signal-loss PWM level, channel 0"
+        },
+        {
+          "name": "loss_v[1]",
+          "member": "loss_v[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Stored signal-loss PWM level, channel 1",
+          "explanation": "Stored signal-loss PWM level, channel 1"
+        },
+        {
+          "name": "loss_v[2]",
+          "member": "loss_v[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Stored signal-loss PWM level, channel 2",
+          "explanation": "Stored signal-loss PWM level, channel 2"
+        },
+        {
+          "name": "loss_v[3]",
+          "member": "loss_v[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Stored signal-loss PWM level, channel 3",
+          "explanation": "Stored signal-loss PWM level, channel 3"
+        },
+        {
+          "name": "loss_v[4]",
+          "member": "loss_v[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Stored signal-loss PWM level, channel 4",
+          "explanation": "Stored signal-loss PWM level, channel 4"
+        },
+        {
+          "name": "loss_mask",
+          "member": "loss_mask",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Signal-loss defined channels",
+          "explanation": "Signal-loss defined channels"
+        },
+        {
+          "name": "loss_fade",
+          "member": "loss_fade",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ms",
+          "scale": 100,
+          "meaning": "Fade into signal-loss levels in 100 ms units",
+          "explanation": "Fade into signal-loss levels in 100 ms units"
+        }
+      ],
+      "condition": null,
+      "explanation": "Scene. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "F",
+      "name": "reset breadcrumbs",
+      "ctype": "bcrumb_t",
+      "base": "&c->st->bc",
+      "fields": [
+        {
+          "name": "magic",
+          "member": "magic",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0: CALHIST_MAGIC",
+          "explanation": "0: CALHIST_MAGIC"
+        },
+        {
+          "name": "up_s",
+          "member": "up_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "uptime, s",
+          "explanation": "uptime, s"
+        },
+        {
+          "name": "pc",
+          "member": "pc",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the main loop's PC at the last ms tick, or the faulting instruction's",
+          "explanation": "the main loop's PC at the last ms tick, or the faulting instruction's"
+        },
+        {
+          "name": "cause",
+          "member": "cause",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the exception's mcause (0: none; 0 itself, a misaligned fetch, can't happen with the compressed instructions)",
+          "explanation": "the exception's mcause (0: none; 0 itself, a misaligned fetch, can't happen with the compressed instructions)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Reset breadcrumbs. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "spans": [
+        [
+          0,
+          4
+        ]
+      ]
+    },
+    {
+      "record": "Q",
+      "name": "overruns",
+      "ctype": "uint32_t",
+      "base": "c->st->ovr",
+      "fields": [
+        {
+          "name": "v[0]",
+          "member": "v[0]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "Captured frames dropped",
+          "explanation": "Captured frames dropped"
+        },
+        {
+          "name": "v[1]",
+          "member": "v[1]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "Frame ends not handled",
+          "explanation": "Frame ends not handled"
+        },
+        {
+          "name": "v[2]",
+          "member": "v[2]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "Render milliseconds late",
+          "explanation": "Render milliseconds late"
+        }
+      ],
+      "condition": null,
+      "explanation": "Overruns. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "D",
+      "name": "hardware diagnostics",
+      "ctype": "uint16_t",
+      "base": "c->st->hwd",
+      "fields": [
+        {
+          "name": "v[0]",
+          "member": "v[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "Milliseconds without a regular ADC conversion start",
+          "explanation": "Milliseconds without a regular ADC conversion start"
+        },
+        {
+          "name": "v[1]",
+          "member": "v[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "Injected ADC sequences not finished within one millisecond",
+          "explanation": "Injected ADC sequences not finished within one millisecond"
+        },
+        {
+          "name": "v[2]",
+          "member": "v[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 1 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 1 transfer errors; error disables that DMA channel."
+        },
+        {
+          "name": "v[3]",
+          "member": "v[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 2 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 2 transfer errors; error disables that DMA channel."
+        },
+        {
+          "name": "v[4]",
+          "member": "v[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 3 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 3 transfer errors; error disables that DMA channel."
+        },
+        {
+          "name": "v[5]",
+          "member": "v[5]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 4 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 4 transfer errors; error disables that DMA channel."
+        },
+        {
+          "name": "v[6]",
+          "member": "v[6]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 5 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 5 transfer errors; error disables that DMA channel."
+        },
+        {
+          "name": "v[7]",
+          "member": "v[7]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 6 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 6 transfer errors; error disables that DMA channel."
+        },
+        {
+          "name": "v[8]",
+          "member": "v[8]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "count",
+          "scale": 1,
+          "meaning": "DMA1 channel 7 transfer errors; error disables that DMA channel.",
+          "explanation": "DMA1 channel 7 transfer errors; error disables that DMA channel."
+        }
+      ],
+      "condition": null,
+      "explanation": "Hardware diagnostics. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "U",
+      "name": "ultra config",
+      "ctype": "uint16_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "config_0",
+          "member": "v[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Reserved zero; validity is W.cfg_valid.",
+          "explanation": "Reserved zero; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_1",
+          "member": "v[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM preset index 0..14; validity is W.cfg_valid.",
+          "explanation": "PWM preset index 0..14; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_2",
+          "member": "v[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "ns",
+          "scale": 10,
+          "meaning": "Requested PWM period; MCU conversion is applied separately; validity is W.cfg_valid.",
+          "explanation": "Requested PWM period; MCU conversion is applied separately; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_3",
+          "member": "v[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Dither mode: 0 on, 1 off below threshold, 2 off; validity is W.cfg_valid.",
+          "explanation": "Dither mode: 0 on, 1 off below threshold, 2 off; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_4",
+          "member": "v[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "Dither threshold; validity is W.cfg_valid.",
+          "explanation": "Dither threshold; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_5",
+          "member": "v[5]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Minimum pulse: 0 pulse skipping, 1 clamp, 2 disabled; validity is W.cfg_valid.",
+          "explanation": "Minimum pulse: 0 pulse skipping, 1 clamp, 2 disabled; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_6",
+          "member": "v[6]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "ns",
+          "scale": 10,
+          "meaning": "Minimum pulse duration; validity is W.cfg_valid.",
+          "explanation": "Minimum pulse duration; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_7",
+          "member": "v[7]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "PWM staggering: 0 off, 1 fixed, 2 fixed plus spread, 3 adaptive, 4 adaptive plus spread; validity is W.cfg_valid.",
+          "explanation": "PWM staggering: 0 off, 1 fixed, 2 fixed plus spread, 3 adaptive, 4 adaptive plus spread; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_8",
+          "member": "v[8]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Signal loss: 0 hold, 1 off, 2 fade off, 3 stored signal-loss levels; validity is W.cfg_valid.",
+          "explanation": "Signal loss: 0 hold, 1 off, 2 fade off, 3 stored signal-loss levels; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_9",
+          "member": "v[9]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "ms",
+          "scale": 100,
+          "meaning": "Signal loss timeout; validity is W.cfg_valid.",
+          "explanation": "Signal loss timeout; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_10",
+          "member": "v[10]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Feedback: 0 red, 1 all, 2 disabled; validity is W.cfg_valid.",
+          "explanation": "Feedback: 0 red, 1 all, 2 disabled; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_11",
+          "member": "v[11]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 0 full-on model current; validity is W.cfg_valid.",
+          "explanation": "Channel 0 full-on model current; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_12",
+          "member": "v[12]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 1 full-on model current; validity is W.cfg_valid.",
+          "explanation": "Channel 1 full-on model current; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_13",
+          "member": "v[13]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 2 full-on model current; validity is W.cfg_valid.",
+          "explanation": "Channel 2 full-on model current; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_14",
+          "member": "v[14]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 3 full-on model current; validity is W.cfg_valid.",
+          "explanation": "Channel 3 full-on model current; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_15",
+          "member": "v[15]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 4 full-on model current; validity is W.cfg_valid.",
+          "explanation": "Channel 4 full-on model current; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_16",
+          "member": "v[16]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 0 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid.",
+          "explanation": "Channel 0 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_17",
+          "member": "v[17]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 1 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid.",
+          "explanation": "Channel 1 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_18",
+          "member": "v[18]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 2 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid.",
+          "explanation": "Channel 2 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_19",
+          "member": "v[19]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 3 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid.",
+          "explanation": "Channel 3 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_20",
+          "member": "v[20]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 4 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid.",
+          "explanation": "Channel 4 maximum current, zero means no extra channel ceiling; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_21",
+          "member": "v[21]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Board input-current ceiling; validity is W.cfg_valid.",
+          "explanation": "Board input-current ceiling; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_22",
+          "member": "v[22]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra.; validity is W.cfg_valid.",
+          "explanation": "Requested input mode: 0 automatic, 1 WS2915, 2 WS2805, 3 Ultra.; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_23",
+          "member": "v[23]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "boolean",
+          "scale": 1,
+          "meaning": "Soft start enabled; validity is W.cfg_valid.",
+          "explanation": "Soft start enabled; validity is W.cfg_valid."
+        },
+        {
+          "name": "config_24",
+          "member": "v[24]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Retry: low byte count (255 unlimited), high byte interval in seconds; validity is W.cfg_valid.",
+          "explanation": "Retry: low byte count (255 unlimited), high byte interval in seconds; validity is W.cfg_valid."
+        }
+      ],
+      "condition": null,
+      "explanation": "Ultra config. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "h",
+      "name": "calibration history entry",
+      "ctype": "calhist_ent_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "lit_h",
+          "member": "lit_h",
+          "bytes": 2,
+          "signed": false,
+          "unit": "h",
+          "scale": 1,
+          "meaning": "the lifetime record's lit hours at the test (saturating)",
+          "explanation": "the lifetime record's lit hours at the test (saturating)"
+        },
+        {
+          "name": "ma[0]",
+          "member": "ma[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 0 full calibration current; record index 0 is first, 1 is latest.",
+          "explanation": "Channel 0 full calibration current; record index 0 is first, 1 is latest."
+        },
+        {
+          "name": "ma[1]",
+          "member": "ma[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 1 full calibration current; record index 0 is first, 1 is latest.",
+          "explanation": "Channel 1 full calibration current; record index 0 is first, 1 is latest."
+        },
+        {
+          "name": "ma[2]",
+          "member": "ma[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 2 full calibration current; record index 0 is first, 1 is latest.",
+          "explanation": "Channel 2 full calibration current; record index 0 is first, 1 is latest."
+        },
+        {
+          "name": "ma[3]",
+          "member": "ma[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 3 full calibration current; record index 0 is first, 1 is latest.",
+          "explanation": "Channel 3 full calibration current; record index 0 is first, 1 is latest."
+        },
+        {
+          "name": "ma[4]",
+          "member": "ma[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Channel 4 full calibration current; record index 0 is first, 1 is latest.",
+          "explanation": "Channel 4 full calibration current; record index 0 is first, 1 is latest."
+        }
+      ],
+      "condition": "MON_EXTRA",
+      "explanation": "Calibration history entry. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "X",
+      "name": "message",
+      "ctype": "uint32_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "v",
+          "member": "v",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Numeric event identifier; look up events in this schema, preserving unknown identifiers.",
+          "explanation": "Numeric event identifier; look up events in this schema, preserving unknown identifiers."
+        }
+      ],
+      "condition": null,
+      "explanation": "Message. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "G",
+      "name": "light definition",
+      "ctype": "ultra_light_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "g_q16",
+          "member": "g_q16",
+          "bytes": 4,
+          "signed": false,
+          "unit": "ratio",
+          "scale": 1.52587890625e-05,
+          "meaning": "gamma x 65536",
+          "explanation": "gamma x 65536"
+        },
+        {
+          "name": "min_p[0]",
+          "member": "min_p[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending",
+          "explanation": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending"
+        },
+        {
+          "name": "min_p[1]",
+          "member": "min_p[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending",
+          "explanation": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending"
+        },
+        {
+          "name": "min_p[2]",
+          "member": "min_p[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending",
+          "explanation": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending"
+        },
+        {
+          "name": "min_p[3]",
+          "member": "min_p[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending",
+          "explanation": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending"
+        },
+        {
+          "name": "min_p[4]",
+          "member": "min_p[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending",
+          "explanation": "options (LIGHT_OPT): dim to warm, mireds x 10 of the CW / WW LEDs and of the warm end, red assist (Q16); * set points (ULTRA_OPT_POINTS): M and mireds x 10, sorted by M, descending"
+        },
+        {
+          "name": "max_p[0]",
+          "member": "max_p[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "max p",
+          "explanation": "max p"
+        },
+        {
+          "name": "max_p[1]",
+          "member": "max_p[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "max p",
+          "explanation": "max p"
+        },
+        {
+          "name": "max_p[2]",
+          "member": "max_p[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "max p",
+          "explanation": "max p"
+        },
+        {
+          "name": "max_p[3]",
+          "member": "max_p[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "max p",
+          "explanation": "max p"
+        },
+        {
+          "name": "max_p[4]",
+          "member": "max_p[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "max p",
+          "explanation": "max p"
+        },
+        {
+          "name": "mask",
+          "member": "mask",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "channels shown at power-up (bit 0 = CH1); 0 = no scene",
+          "explanation": "channels shown at power-up (bit 0 = CH1); 0 = no scene"
+        },
+        {
+          "name": "flags",
+          "member": "flags",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ULTRA_HE_F_*, HEALTH_F_CAL",
+          "explanation": "ULTRA_HE_F_*, HEALTH_F_CAL"
+        },
+        {
+          "name": "role[0]",
+          "member": "role[0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "role",
+          "explanation": "role"
+        },
+        {
+          "name": "role[1]",
+          "member": "role[1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "role",
+          "explanation": "role"
+        },
+        {
+          "name": "role[2]",
+          "member": "role[2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "role",
+          "explanation": "role"
+        },
+        {
+          "name": "role[3]",
+          "member": "role[3]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "role",
+          "explanation": "role"
+        },
+        {
+          "name": "role[4]",
+          "member": "role[4]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "role",
+          "explanation": "role"
+        },
+        {
+          "name": "base_channel",
+          "member": "base_channel",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "roles map to base_channel + component",
+          "explanation": "roles map to base_channel + component"
+        },
+        {
+          "name": "defined",
+          "member": "defined",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "LIGHT_DEF received since the init",
+          "explanation": "LIGHT_DEF received since the init"
+        }
+      ],
+      "condition": null,
+      "explanation": "Light definition. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "g",
+      "name": "light options",
+      "ctype": "ultra_light_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "opt_cw",
+          "member": "opt_cw",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt cw",
+          "explanation": "opt cw"
+        },
+        {
+          "name": "opt_ww",
+          "member": "opt_ww",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt ww",
+          "explanation": "opt ww"
+        },
+        {
+          "name": "opt_warm",
+          "member": "opt_warm",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt warm",
+          "explanation": "opt warm"
+        },
+        {
+          "name": "opt_assist",
+          "member": "opt_assist",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt assist",
+          "explanation": "opt assist"
+        },
+        {
+          "name": "opt_pm[0]",
+          "member": "opt_pm[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pm",
+          "explanation": "opt pm"
+        },
+        {
+          "name": "opt_pm[1]",
+          "member": "opt_pm[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pm",
+          "explanation": "opt pm"
+        },
+        {
+          "name": "opt_pm[2]",
+          "member": "opt_pm[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pm",
+          "explanation": "opt pm"
+        },
+        {
+          "name": "opt_pm[3]",
+          "member": "opt_pm[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pm",
+          "explanation": "opt pm"
+        },
+        {
+          "name": "opt_pt[0]",
+          "member": "opt_pt[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pt",
+          "explanation": "opt pt"
+        },
+        {
+          "name": "opt_pt[1]",
+          "member": "opt_pt[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pt",
+          "explanation": "opt pt"
+        },
+        {
+          "name": "opt_pt[2]",
+          "member": "opt_pt[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pt",
+          "explanation": "opt pt"
+        },
+        {
+          "name": "opt_pt[3]",
+          "member": "opt_pt[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt pt",
+          "explanation": "opt pt"
+        },
+        {
+          "name": "opt_flags",
+          "member": "opt_flags",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt flags",
+          "explanation": "opt flags"
+        },
+        {
+          "name": "opt_n",
+          "member": "opt_n",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "opt n",
+          "explanation": "opt n"
+        }
+      ],
+      "condition": null,
+      "explanation": "Light options. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "J",
+      "name": "light scenes",
+      "ctype": "ultra_light_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "scene_v[0].m",
+          "member": "scene_v[0].m",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].a[0]",
+          "member": "scene_v[0].a[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].a[1]",
+          "member": "scene_v[0].a[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].a[2]",
+          "member": "scene_v[0].a[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].a[3]",
+          "member": "scene_v[0].a[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].a[4]",
+          "member": "scene_v[0].a[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].b[0]",
+          "member": "scene_v[0].b[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].b[1]",
+          "member": "scene_v[0].b[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].b[2]",
+          "member": "scene_v[0].b[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].b[3]",
+          "member": "scene_v[0].b[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[0].b[4]",
+          "member": "scene_v[0].b[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical power-on level",
+          "explanation": "Logical power-on level"
+        },
+        {
+          "name": "scene_v[1].m",
+          "member": "scene_v[1].m",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].a[0]",
+          "member": "scene_v[1].a[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].a[1]",
+          "member": "scene_v[1].a[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].a[2]",
+          "member": "scene_v[1].a[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].a[3]",
+          "member": "scene_v[1].a[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].a[4]",
+          "member": "scene_v[1].a[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].b[0]",
+          "member": "scene_v[1].b[0]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].b[1]",
+          "member": "scene_v[1].b[1]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].b[2]",
+          "member": "scene_v[1].b[2]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].b[3]",
+          "member": "scene_v[1].b[3]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_v[1].b[4]",
+          "member": "scene_v[1].b[4]",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Logical signal-loss level",
+          "explanation": "Logical signal-loss level"
+        },
+        {
+          "name": "scene_fade[0]",
+          "member": "scene_fade[0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ms",
+          "scale": 100,
+          "meaning": "Power-on fade in 100 ms units",
+          "explanation": "Power-on fade in 100 ms units"
+        },
+        {
+          "name": "scene_fade[1]",
+          "member": "scene_fade[1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "ms",
+          "scale": 100,
+          "meaning": "Signal-loss fade in 100 ms units",
+          "explanation": "Signal-loss fade in 100 ms units"
+        },
+        {
+          "name": "scene_have",
+          "member": "scene_have",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Bit 0 power-on and bit 1 signal-loss levels received",
+          "explanation": "Bit 0 power-on and bit 1 signal-loss levels received"
+        }
+      ],
+      "condition": null,
+      "explanation": "Light scene. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "b",
+      "name": "digital boot",
+      "ctype": "values",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "firmware",
+          "expr": "fw_version",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "firmware",
+          "explanation": "firmware"
+        },
+        {
+          "name": "hardware",
+          "expr": "ud_hw_id()",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Hardware product identifier; use the firmware-owned board definitions.",
+          "explanation": "Hardware product identifier; use the firmware-owned board definitions."
+        },
+        {
+          "name": "revision",
+          "expr": "upd.info.hw_rev",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "revision",
+          "explanation": "revision"
+        },
+        {
+          "name": "bootloader",
+          "expr": "upd.info.bl_version",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "bootloader",
+          "explanation": "bootloader"
+        },
+        {
+          "name": "reset",
+          "expr": "reset_flags",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "reset",
+          "explanation": "reset"
+        },
+        {
+          "name": "update_result",
+          "expr": "upd_res",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "update result",
+          "explanation": "update result"
+        },
+        {
+          "name": "protection",
+          "expr": "bl_prot",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "protection",
+          "explanation": "protection"
+        }
+      ],
+      "explanation": "Digital boot. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ud_emit": true
+    },
+    {
+      "record": "r",
+      "name": "digital real time",
+      "ctype": "values",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "uptime_s",
+          "expr": "up_s",
+          "bytes": 4,
+          "signed": false,
+          "unit": "s",
+          "scale": 1,
+          "meaning": "s since boot (32 bits: 136 years)",
+          "explanation": "s since boot (32 bits: 136 years)"
+        },
+        {
+          "name": "bus_mv",
+          "expr": "vs_bus.mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "bus mv",
+          "explanation": "bus mv"
+        },
+        {
+          "name": "led_mv",
+          "expr": "vs_vb.mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "led mv",
+          "explanation": "led mv"
+        },
+        {
+          "name": "current_ma",
+          "expr": "i_avg",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "current ma",
+          "explanation": "current ma"
+        },
+        {
+          "name": "vdda_mv",
+          "expr": "mt.vdda_mv",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mV",
+          "scale": 1,
+          "meaning": "the 3.3 V rail from VREFINT, 0 = not known",
+          "explanation": "the 3.3 V rail from VREFINT, 0 = not known"
+        },
+        {
+          "name": "temperature_c10",
+          "expr": "mt.c10",
+          "bytes": 4,
+          "signed": true,
+          "unit": "degC",
+          "scale": 0.1,
+          "meaning": "temperature c10",
+          "explanation": "temperature c10"
+        },
+        {
+          "name": "fps10",
+          "expr": "uds.fps10",
+          "bytes": 4,
+          "signed": false,
+          "unit": "Hz",
+          "scale": 0.1,
+          "meaning": "fps10",
+          "explanation": "fps10"
+        },
+        {
+          "name": "bits",
+          "expr": "dl.st.bits_last",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "bits",
+          "explanation": "bits"
+        },
+        {
+          "name": "direct",
+          "expr": "dl.direct",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the mux is direct: 1 (BOOT, the fallback)",
+          "explanation": "the mux is direct: 1 (BOOT, the fallback)"
+        },
+        {
+          "name": "faults",
+          "expr": "uds.faults",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "delay-line faults: reported (dline_fault) or found (saturating)",
+          "explanation": "delay-line faults: reported (dline_fault) or found (saturating)"
+        },
+        {
+          "name": "polls",
+          "expr": "uds.polls",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "polls",
+          "explanation": "polls"
+        }
+      ],
+      "explanation": "Digital real time. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ud_emit": true
+    },
+    {
+      "record": "c",
+      "name": "digital counters",
+      "ctype": "values",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "flash_err",
+          "expr": "flash_err",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "flash err",
+          "explanation": "flash err"
+        },
+        {
+          "name": "saves",
+          "expr": "saves",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "flash records written since boot",
+          "explanation": "flash records written since boot"
+        },
+        {
+          "name": "cpu_peak",
+          "expr": "cpu_peak",
+          "bytes": 4,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "cpu peak",
+          "explanation": "cpu peak"
+        },
+        {
+          "name": "ovr_late",
+          "expr": "ovr_late",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ovr late",
+          "explanation": "ovr late"
+        },
+        {
+          "name": "ucal.phase",
+          "expr": "ucal.phase",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "FX_SM_DITHER: the frame's phase, (the frame index on the host grid) x 97 mod 256 (fx_dither_phase)",
+          "explanation": "FX_SM_DITHER: the frame's phase, (the frame index on the host grid) x 97 mod 256 (fx_dither_phase)"
+        },
+        {
+          "name": "ucal.error",
+          "expr": "ucal.error",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ucal.error",
+          "explanation": "ucal.error"
+        },
+        {
+          "name": "ucal.elapsed",
+          "expr": "ucal.elapsed",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ucal.elapsed",
+          "explanation": "ucal.elapsed"
+        },
+        {
+          "name": "uc.mode",
+          "expr": "uc.mode",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "uc.mode",
+          "explanation": "uc.mode"
+        }
+      ],
+      "explanation": "Digital counters. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ud_emit": true
+    },
+    {
+      "record": "t",
+      "name": "pixel configuration",
+      "ctype": "uint16_t",
+      "base": "ux.cfg",
+      "fields": [
+        {
+          "name": "config_64",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Pixel chip identifier",
+          "explanation": "Pixel chip identifier",
+          "member": "[0]"
+        },
+        {
+          "name": "config_65",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Packed channel order",
+          "explanation": "Packed channel order",
+          "member": "[1]"
+        },
+        {
+          "name": "config_66",
+          "bytes": 2,
+          "signed": false,
+          "unit": "pixel",
+          "scale": 1,
+          "meaning": "Configured strip length",
+          "explanation": "Configured strip length",
+          "member": "[2]"
+        },
+        {
+          "name": "config_67",
+          "bytes": 2,
+          "signed": false,
+          "unit": "Hz",
+          "scale": 1,
+          "meaning": "Maximum frame rate, zero means line limited",
+          "explanation": "Maximum frame rate, zero means line limited",
+          "member": "[3]"
+        },
+        {
+          "name": "config_68",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 0.1,
+          "meaning": "Full-brightness current per LED channel; zero selects 20 mA",
+          "explanation": "Full-brightness current per LED channel; zero selects 20 mA",
+          "member": "[4]"
+        },
+        {
+          "name": "config_69",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "Bus input current limit; zero selects 2250 mA",
+          "explanation": "Bus input current limit; zero selects 2250 mA",
+          "member": "[5]"
+        },
+        {
+          "name": "config_70",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "White mode bits 0..1; cold-white split bits 8..15, zero means even",
+          "explanation": "White mode bits 0..1; cold-white split bits 8..15, zero means even",
+          "member": "[6]"
+        },
+        {
+          "name": "config_71",
+          "bytes": 2,
+          "signed": false,
+          "unit": "pixel",
+          "scale": 1,
+          "meaning": "Virtual strip offset",
+          "explanation": "Virtual strip offset",
+          "member": "[7]"
+        },
+        {
+          "name": "config_72",
+          "bytes": 2,
+          "signed": false,
+          "unit": "pixel",
+          "scale": 1,
+          "meaning": "Virtual strip length",
+          "explanation": "Virtual strip length",
+          "member": "[8]"
+        },
+        {
+          "name": "config_73",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Signal-loss policy",
+          "explanation": "Signal-loss policy",
+          "member": "[9]"
+        },
+        {
+          "name": "config_74",
+          "bytes": 2,
+          "signed": false,
+          "unit": "ms",
+          "scale": 100,
+          "meaning": "Signal-loss timeout",
+          "explanation": "Signal-loss timeout",
+          "member": "[10]"
+        },
+        {
+          "name": "config_75",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Pixel line/output mode",
+          "explanation": "Pixel line/output mode",
+          "member": "[11]"
+        },
+        {
+          "name": "config_76",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Output smoothing mode",
+          "explanation": "Output smoothing mode",
+          "member": "[12]"
+        },
+        {
+          "name": "config_77",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Output smoothing mode",
+          "explanation": "Output smoothing mode",
+          "member": "[13]"
+        }
+      ],
+      "explanation": "Pixel configuration. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ud_emit": true,
+      "condition": "defined(CONSOLE_UR_DIGITAL_M)"
+    },
+    {
+      "record": "k",
+      "name": "digital calibration model",
+      "ctype": "udcal_model_t",
+      "base": "&ucal.model",
+      "fields": [
+        {
+          "name": "configured",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "configured",
+          "explanation": "configured",
+          "member": "configured"
+        },
+        {
+          "name": "detected",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "detected",
+          "explanation": "detected",
+          "member": "detected"
+        },
+        {
+          "name": "n",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "10: entries",
+          "explanation": "10: entries",
+          "member": "n"
+        },
+        {
+          "name": "order",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "order",
+          "explanation": "order",
+          "member": "order"
+        },
+        {
+          "name": "vbus",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mV",
+          "scale": 10,
+          "meaning": "vbus",
+          "explanation": "vbus",
+          "member": "vbus"
+        },
+        {
+          "name": "vled",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mV",
+          "scale": 10,
+          "meaning": "vled",
+          "explanation": "vled",
+          "member": "vled"
+        },
+        {
+          "name": "idle",
+          "bytes": 2,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "ticks without a new edge",
+          "explanation": "ticks without a new edge",
+          "member": "idle"
+        },
+        {
+          "name": "noise",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "noise",
+          "explanation": "noise",
+          "member": "noise"
+        },
+        {
+          "name": "residual",
+          "bytes": 2,
+          "signed": false,
+          "unit": "percent",
+          "scale": 0.1,
+          "meaning": "residual",
+          "explanation": "residual",
+          "member": "residual"
+        },
+        {
+          "name": "bound",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "bound",
+          "explanation": "bound",
+          "member": "bound"
+        },
+        {
+          "name": "k",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "scale of all outputs, Q16 (65536 = none): min(feed-forward, k_fb)",
+          "explanation": "scale of all outputs, Q16 (65536 = none): min(feed-forward, k_fb)",
+          "member": "k"
+        },
+        {
+          "name": "count",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "calibrations stored on this board (wraps at 65535)",
+          "explanation": "calibrations stored on this board (wraps at 65535)",
+          "member": "count"
+        },
+        {
+          "name": "epoch",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "epoch",
+          "explanation": "epoch",
+          "member": "epoch"
+        },
+        {
+          "name": "chip",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "chip",
+          "explanation": "chip",
+          "member": "chip"
+        },
+        {
+          "name": "bpp",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "wire bytes per pixel: 3 RGB, 4 RGBW (WS2814, SK6812), 5 WS2805",
+          "explanation": "wire bytes per pixel: 3 RGB, 4 RGBW (WS2814, SK6812), 5 WS2805",
+          "member": "bpp"
+        },
+        {
+          "name": "flags",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ULTRA_HE_F_*, HEALTH_F_CAL",
+          "explanation": "ULTRA_HE_F_*, HEALTH_F_CAL",
+          "member": "flags"
+        },
+        {
+          "name": "ch_0",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 0.00390625,
+          "meaning": "ch 0",
+          "explanation": "ch 0",
+          "member": "ch[0]"
+        },
+        {
+          "name": "ch_1",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 0.00390625,
+          "meaning": "ch 1",
+          "explanation": "ch 1",
+          "member": "ch[1]"
+        },
+        {
+          "name": "ch_2",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 0.00390625,
+          "meaning": "ch 2",
+          "explanation": "ch 2",
+          "member": "ch[2]"
+        },
+        {
+          "name": "ch_3",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 0.00390625,
+          "meaning": "ch 3",
+          "explanation": "ch 3",
+          "member": "ch[3]"
+        },
+        {
+          "name": "ch_4",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 0.00390625,
+          "meaning": "ch 4",
+          "explanation": "ch 4",
+          "member": "ch[4]"
+        }
+      ],
+      "explanation": "Digital calibration model. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ud_emit": true,
+      "condition": "defined(CONSOLE_UR_DIGITAL_M)",
+      "spans": [
+        [
+          0,
+          6
+        ],
+        [
+          6,
+          7
+        ],
+        [
+          13,
+          3
+        ]
+      ]
+    },
+    {
+      "record": "j",
+      "name": "digital jig cycle",
+      "ctype": "udjig_t",
+      "base": "&tj",
+      "fields": [
+        {
+          "name": "cycle",
+          "member": "cycles",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "test mode's complete cycles (the 1.5 s pattern) since it began",
+          "explanation": "test mode's complete cycles (the 1.5 s pattern) since it began"
+        },
+        {
+          "name": "fail",
+          "member": "fail",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the verdict: bit n = channel n outside 5..400 mA (0 = PASS); only the chip's channels are judged",
+          "explanation": "the verdict: bit n = channel n outside 5..400 mA (0 = PASS); only the chip's channels are judged"
+        },
+        {
+          "name": "ma[0]",
+          "member": "ma[0]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel R's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)",
+          "explanation": "channel R's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)"
+        },
+        {
+          "name": "ma[1]",
+          "member": "ma[1]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel G's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)",
+          "explanation": "channel G's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)"
+        },
+        {
+          "name": "ma[2]",
+          "member": "ma[2]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel B's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)",
+          "explanation": "channel B's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)"
+        },
+        {
+          "name": "ma[3]",
+          "member": "ma[3]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel W1's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)",
+          "explanation": "channel W1's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)"
+        },
+        {
+          "name": "ma[4]",
+          "member": "ma[4]",
+          "bytes": 4,
+          "signed": true,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "channel W2's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)",
+          "explanation": "channel W2's bus current: 16 pixels at 25 %, minus the all-off slot's (a channel the chip lacks: dark, ~0)"
+        }
+      ],
+      "condition": "defined(CONSOLE_UR_DIGITAL_M)",
+      "explanation": "Digital jig cycle. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "y",
+      "name": "digital limits",
+      "fields": [
+        {
+          "name": "board_rated_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the board's rating, mA",
+          "explanation": "the board's rating, mA",
+          "expr": "ISENSE_BOARD_MA"
+        },
+        {
+          "name": "fuse_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the fuse's rating, mA",
+          "explanation": "the fuse's rating, mA",
+          "expr": "ISENSE_FUSE_MA"
+        },
+        {
+          "name": "output_rated_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the pixel output's rating, mA",
+          "explanation": "the pixel output's rating, mA",
+          "expr": "BOARD_OUTPUT_RATING_MA"
+        },
+        {
+          "name": "user_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "the user's board limit: board CONFIG 21 as applied (0 = none: the rating)",
+          "explanation": "the user's board limit: board CONFIG 21 as applied (0 = none: the rating)",
+          "expr": "ux.input_valid ? ux.input_limit_ma : 0u"
+        },
+        {
+          "name": "ch_ma",
+          "bytes": 4,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "pixel CONFIG: mA per channel at full (0: 20 mA assumed)",
+          "explanation": "pixel CONFIG: mA per channel at full (0: 20 mA assumed)",
+          "expr": "ux.cfg[ULTRA_CFG_PX_MA_CH - ULTRA_CFG_PX_FIRST]"
+        },
+        {
+          "name": "cl_q8",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the limiter's closed-loop trim of the limit, Q8 (8..256)",
+          "explanation": "the limiter's closed-loop trim of the limit, Q8 (8..256)",
+          "expr": "ux.cl_q8"
+        },
+        {
+          "name": "lim_bri",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the limiter's brightness for the pixels, 255 = not limiting",
+          "explanation": "the limiter's brightness for the pixels, 255 = not limiting",
+          "expr": "ux.lim_bri"
+        }
+      ],
+      "explanation": "Digital limits. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ctype": "values",
+      "base": "unused",
+      "condition": null,
+      "ud_emit": true
+    },
+    {
+      "record": "l",
+      "name": "digital calibration and output state",
+      "ctype": "udfx_t",
+      "base": "&ux",
+      "fields": [
+        {
+          "name": "ux.local",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "local pixel effects: the encoder (core/ur_digital_m/udfx.c) owns every ring word from its position on, so the window never asks for BLANK_N (it would cut the effect's frame) and a fault's recovery needs no quiet run. Set and cleared by udfx_tick only in PASS, behind a latch",
+          "explanation": "local pixel effects: the encoder (core/ur_digital_m/udfx.c) owns every ring word from its position on, so the window never asks for BLANK_N (it would cut the effect's frame) and a fault's recovery needs no quiet run. Set and cleared by udfx_tick only in PASS, behind a latch",
+          "member": "local"
+        },
+        {
+          "name": "ux.standalone",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.standalone",
+          "explanation": "ux.standalone",
+          "member": "standalone"
+        },
+        {
+          "name": "ux.stored_have",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.stored have",
+          "explanation": "ux.stored have",
+          "member": "stored_have"
+        },
+        {
+          "name": "ux.seq_have",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.seq have",
+          "explanation": "ux.seq have",
+          "member": "seq_have"
+        },
+        {
+          "name": "ux.frames_done",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.frames done",
+          "explanation": "ux.frames done",
+          "member": "frames_done"
+        },
+        {
+          "name": "ux.lim_bri",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.lim bri",
+          "explanation": "ux.lim bri",
+          "member": "lim_bri"
+        },
+        {
+          "name": "ux.cl_q8",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.cl q8",
+          "explanation": "ux.cl q8",
+          "member": "cl_q8"
+        },
+        {
+          "name": "ux.meas_ma",
+          "bytes": 2,
+          "signed": false,
+          "unit": "mA",
+          "scale": 1,
+          "meaning": "ux.meas ma",
+          "explanation": "ux.meas ma",
+          "member": "meas_ma"
+        },
+        {
+          "name": "ux.fsum",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.fsum",
+          "explanation": "ux.fsum",
+          "member": "fsum"
+        },
+        {
+          "name": "ux.save_due",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.save due",
+          "explanation": "ux.save due",
+          "member": "save_due"
+        },
+        {
+          "name": "ux.rec_seq",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.rec seq",
+          "explanation": "ux.rec seq",
+          "member": "rec_seq"
+        },
+        {
+          "name": "ux.npx",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "pixels on the strip",
+          "explanation": "pixels on the strip",
+          "member": "npx"
+        },
+        {
+          "name": "ux.max_px",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ux.max px",
+          "explanation": "ux.max px",
+          "member": "max_px"
+        }
+      ],
+      "explanation": "Digital calibration and output state. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "ud_emit": true,
+      "condition": "defined(CONSOLE_UR_DIGITAL_M)"
+    },
+    {
+      "record": "p",
+      "name": "pixel segment",
+      "ctype": "ultra_pixel_fx_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "effect",
+          "member": "effect",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "effect",
+          "explanation": "effect"
+        },
+        {
+          "name": "speed",
+          "member": "speed",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "speed",
+          "explanation": "speed"
+        },
+        {
+          "name": "intensity",
+          "member": "intensity",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "intensity",
+          "explanation": "intensity"
+        },
+        {
+          "name": "palette",
+          "member": "palette",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "palette",
+          "explanation": "palette"
+        },
+        {
+          "name": "brightness",
+          "member": "brightness",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "brightness",
+          "explanation": "brightness"
+        },
+        {
+          "name": "flags",
+          "member": "flags",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ULTRA_HE_F_*, HEALTH_F_CAL",
+          "explanation": "ULTRA_HE_F_*, HEALTH_F_CAL"
+        },
+        {
+          "name": "custom1",
+          "member": "custom1",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "custom1",
+          "explanation": "custom1"
+        },
+        {
+          "name": "custom2",
+          "member": "custom2",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "custom2",
+          "explanation": "custom2"
+        },
+        {
+          "name": "start_ms",
+          "member": "start_ms",
+          "bytes": 4,
+          "signed": true,
+          "unit": "ms",
+          "scale": 1,
+          "meaning": "relative to the header TIME",
+          "explanation": "relative to the header TIME"
+        },
+        {
+          "name": "transition_ms",
+          "member": "transition_ms",
+          "bytes": 2,
+          "signed": false,
+          "unit": "ms",
+          "scale": 1,
+          "meaning": "transition ms",
+          "explanation": "transition ms"
+        },
+        {
+          "name": "seg_start",
+          "member": "seg_start",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "seg start",
+          "explanation": "seg start"
+        },
+        {
+          "name": "seg_len",
+          "member": "seg_len",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the engine: pixels; len 0 = to the end of the strip",
+          "explanation": "the engine: pixels; len 0 = to the end of the strip"
+        },
+        {
+          "name": "color_0_0",
+          "member": "c[0][0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_0_1",
+          "member": "c[0][1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_0_2",
+          "member": "c[0][2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_1_0",
+          "member": "c[1][0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_1_1",
+          "member": "c[1][1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_1_2",
+          "member": "c[1][2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_2_0",
+          "member": "c[2][0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_2_1",
+          "member": "c[2][1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        },
+        {
+          "name": "color_2_2",
+          "member": "c[2][2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the test (48 bytes; levels 0 = cleared)",
+          "explanation": "the test (48 bytes; levels 0 = cleared)"
+        }
+      ],
+      "explanation": "Pixel segment. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "i",
+      "name": "unique identity",
+      "ctype": "uint32_t",
+      "base": "c->st->uid",
+      "fields": [
+        {
+          "name": "v[0]",
+          "member": "v[0]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "MCU unique identity word 0; preserve all 32 bits.",
+          "explanation": "MCU unique identity word 0; preserve all 32 bits."
+        },
+        {
+          "name": "v[1]",
+          "member": "v[1]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "MCU unique identity word 1; preserve all 32 bits.",
+          "explanation": "MCU unique identity word 1; preserve all 32 bits."
+        },
+        {
+          "name": "v[2]",
+          "member": "v[2]",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "MCU unique identity word 2; preserve all 32 bits.",
+          "explanation": "MCU unique identity word 2; preserve all 32 bits."
+        }
+      ],
+      "explanation": "Unique identity. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "W",
+      "name": "Ultra applied config state",
+      "ctype": "ultra_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "cfg_valid",
+          "member": "cfg_valid",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Bit i means Ultra CONFIG slot i is valid; zero slots without a bit are unavailable.",
+          "explanation": "Bit i means Ultra CONFIG slot i is valid; zero slots without a bit are unavailable."
+        },
+        {
+          "name": "cfg_changed",
+          "member": "cfg_changed",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "Bit i means CONFIG slot i awaits application.",
+          "explanation": "Bit i means CONFIG slot i awaits application."
+        },
+        {
+          "name": "identify",
+          "member": "identify",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "last IDENTIFY: ULTRA_IDENT_* 0..4 (unknown values are dropped)",
+          "explanation": "last IDENTIFY: ULTRA_IDENT_* 0..4 (unknown values are dropped)"
+        },
+        {
+          "name": "identify_arg",
+          "member": "identify_arg",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "its second byte (calibration duty %)",
+          "explanation": "its second byte (calibration duty %)"
+        },
+        {
+          "name": "ch_limited",
+          "member": "ch_limited",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the last ultra_render() capped a channel at its CONFIG 16-20 limit (power events, pwrev.h); the board limit (CONFIG 21) is the current sense's",
+          "explanation": "the last ultra_render() capped a channel at its CONFIG 16-20 limit (power events, pwrev.h); the board limit (CONFIG 21) is the current sense's"
+        }
+      ],
+      "explanation": "Ultra applied config state. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "s",
+      "name": "stored extension",
+      "ctype": "store_ext_t",
+      "base": "unused",
+      "fields": [
+        {
+          "name": "ilimit50",
+          "member": "ilimit50",
+          "bytes": 1,
+          "signed": false,
+          "unit": "mA",
+          "scale": 50,
+          "meaning": "stored board limit x 50 mA (0 = the board rating)",
+          "explanation": "stored board limit x 50 mA (0 = the board rating)"
+        },
+        {
+          "name": "opts",
+          "member": "opts",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "STORE_OPT_*, 0xFF = the defaults (on)",
+          "explanation": "STORE_OPT_*, 0xFF = the defaults (on)"
+        },
+        {
+          "name": "reserved[0]",
+          "member": "reserved[0]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)",
+          "explanation": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)"
+        },
+        {
+          "name": "reserved[1]",
+          "member": "reserved[1]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)",
+          "explanation": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)"
+        },
+        {
+          "name": "reserved[2]",
+          "member": "reserved[2]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)",
+          "explanation": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)"
+        },
+        {
+          "name": "reserved[3]",
+          "member": "reserved[3]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)",
+          "explanation": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)"
+        },
+        {
+          "name": "reserved[4]",
+          "member": "reserved[4]",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)",
+          "explanation": "0xFF ([0]: store_pack_ext's, [1]: STORE_VOIDS)"
+        }
+      ],
+      "explanation": "Stored extension. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit."
+    },
+    {
+      "record": "d",
+      "name": "digital line counters",
+      "fields": [
+        {
+          "name": "dl.st.frames",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "frame ends seen",
+          "explanation": "frame ends seen",
+          "member": "frames"
+        },
+        {
+          "name": "dl.st.bits_min",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "dl.st.bits min",
+          "explanation": "dl.st.bits min",
+          "member": "bits_min"
+        },
+        {
+          "name": "dl.st.bits_max",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "... since dline_minmax_restart (min 0xFFFFFFFF: none)",
+          "explanation": "... since dline_minmax_restart (min 0xFFFFFFFF: none)",
+          "member": "bits_max"
+        },
+        {
+          "name": "dl.st.bits_n",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "frames measured",
+          "explanation": "frames measured",
+          "member": "bits_n"
+        },
+        {
+          "name": "dl.st.long_high",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "HOLDs: a HIGH > 60 us that isn't a marker, a released line > 5 ms",
+          "explanation": "HOLDs: a HIGH > 60 us that isn't a marker, a released line > 5 ms",
+          "member": "long_high"
+        },
+        {
+          "name": "dl.st.marks",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "marker frames (windows)",
+          "explanation": "marker frames (windows)",
+          "member": "marks"
+        },
+        {
+          "name": "dl.st.answered",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "SENDs (wraps)",
+          "explanation": "SENDs (wraps)",
+          "member": "answered"
+        },
+        {
+          "name": "dl.st.cap_drops",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "marker frames not captured: the main loop still had one, or a flash op (saturating)",
+          "explanation": "marker frames not captured: the main loop still had one, or a flash op (saturating)",
+          "member": "cap_drops"
+        },
+        {
+          "name": "dl.st.late",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "ticks that came too late for the ring (saturating)",
+          "explanation": "ticks that came too late for the ring (saturating)",
+          "member": "late"
+        },
+        {
+          "name": "dl.st.faults",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "delay-line faults: reported (dline_fault) or found (saturating)",
+          "explanation": "delay-line faults: reported (dline_fault) or found (saturating)",
+          "member": "faults"
+        }
+      ],
+      "explanation": "Digital line counters. Field order and native widths are fixed.",
+      "ctype": "dline_stats_t",
+      "base": "&dl.st",
+      "condition": "defined(CONSOLE_UR_DIGITAL_M)",
+      "ud_emit": true,
+      "spans": [
+        [
+          2,
+          3
+        ],
+        [
+          4,
+          3
+        ],
+        [
+          7,
+          3
+        ]
+      ]
+    },
+    {
+      "record": "z",
+      "name": "digital decoded counters",
+      "fields": [
+        {
+          "name": "uds.headers",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "uds.headers",
+          "explanation": "uds.headers",
+          "member": "headers"
+        },
+        {
+          "name": "uds.tail_err",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "uds.tail err",
+          "explanation": "uds.tail err",
+          "member": "tail_err"
+        },
+        {
+          "name": "uds.decoded",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "slots decoded",
+          "explanation": "slots decoded",
+          "member": "decoded"
+        },
+        {
+          "name": "uds.dec_err",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "by -WS_ERR_* code",
+          "explanation": "by -WS_ERR_* code",
+          "member": "dec_err"
+        }
+      ],
+      "explanation": "Digital decoded counters. Field order and native widths are fixed.",
+      "ctype": "ur_digital_m_stats_t",
+      "base": "&uds",
+      "condition": "defined(CONSOLE_UR_DIGITAL_M)",
+      "ud_emit": true,
+      "spans": [
+        [
+          0,
+          4
+        ]
+      ]
+    },
+    {
+      "record": "K",
+      "name": "link statistics",
+      "ctype": "link_stats_t",
+      "base": "&line_stats",
+      "fields": [
+        {
+          "name": "profile",
+          "member": "profile",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "the input line's timing profile this epoch (the capture's, as LINK_STATS)",
+          "explanation": "the input line's timing profile this epoch (the capture's, as LINK_STATS)"
+        },
+        {
+          "name": "trained",
+          "member": "trained",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "1: rate acquisition complete (all four training patterns seen)",
+          "explanation": "1: rate acquisition complete (all four training patterns seen)"
+        },
+        {
+          "name": "flags",
+          "member": "flags",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "LINK_STATS flags: 4 a counter saturated, 8 errors seen, 0x10 rate request",
+          "explanation": "LINK_STATS flags: 4 a counter saturated, 8 errors seen, 0x10 rate request"
+        },
+        {
+          "name": "epoch",
+          "member": "epoch",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "counting epoch: a new profile or 2 s without frames starts the counters again",
+          "explanation": "counting epoch: a new profile or 2 s without frames starts the counters again"
+        },
+        {
+          "name": "period_min",
+          "member": "live.period_min",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "shortest bit period, capture samples (acquisition frames)",
+          "explanation": "shortest bit period, capture samples (acquisition frames)"
+        },
+        {
+          "name": "period_max",
+          "member": "live.period_max",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "longest bit period, capture samples",
+          "explanation": "longest bit period, capture samples"
+        },
+        {
+          "name": "low_min",
+          "member": "live.low_min",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "shortest LOW time, capture samples",
+          "explanation": "shortest LOW time, capture samples"
+        },
+        {
+          "name": "low_max",
+          "member": "live.low_max",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "longest LOW time, capture samples",
+          "explanation": "longest LOW time, capture samples"
+        },
+        {
+          "name": "frames",
+          "member": "live.frames",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "good frames this epoch (saturating)",
+          "explanation": "good frames this epoch (saturating)"
+        },
+        {
+          "name": "bad",
+          "member": "live.bad",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "frames with a bad CRC or bad symbols this epoch (saturating)",
+          "explanation": "frames with a bad CRC or bad symbols this epoch (saturating)"
+        },
+        {
+          "name": "missing",
+          "member": "live.missing",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "training patterns missing at an acquisition window's end (saturating)",
+          "explanation": "training patterns missing at an acquisition window's end (saturating)"
+        },
+        {
+          "name": "invalid",
+          "member": "live.invalid",
+          "bytes": 2,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "invalid symbols and capture overruns this epoch (saturating)",
+          "explanation": "invalid symbols and capture overruns this epoch (saturating)"
+        },
+        {
+          "name": "drops",
+          "member": "drops",
+          "bytes": 4,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "capture overruns since boot",
+          "explanation": "capture overruns since boot"
+        },
+        {
+          "name": "last_ms",
+          "member": "last_ms",
+          "bytes": 4,
+          "signed": false,
+          "unit": "ms",
+          "scale": 1,
+          "meaning": "uptime of the last good frame, ms",
+          "explanation": "uptime of the last good frame, ms"
+        },
+        {
+          "name": "error_count",
+          "member": "error_count",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "errors in the current 1 s window",
+          "explanation": "errors in the current 1 s window"
+        },
+        {
+          "name": "bad_windows",
+          "member": "bad_windows",
+          "bytes": 1,
+          "signed": false,
+          "unit": "raw",
+          "scale": 1,
+          "meaning": "1 s windows in a row with 4 or more errors (3: rate request)",
+          "explanation": "1 s windows in a row with 4 or more errors (3: rate request)"
+        }
+      ],
+      "condition": null,
+      "explanation": "Link statistics. Field order is fixed; multiply each decoded signed or unsigned integer by its scale to obtain the stated unit.",
+      "spans": [
+        [
+          4,
+          4
+        ],
+        [
+          8,
+          4
+        ]
+      ]
+    }
+  ],
+  "events": [
+    {
+      "value": 1,
+      "name": "m_type_help",
+      "explanation": "type help"
+    },
+    {
+      "value": 2,
+      "name": "m_tj_on",
+      "explanation": "test mode: on"
+    },
+    {
+      "value": 3,
+      "name": "m_tj_off",
+      "explanation": "test mode: off"
+    },
+    {
+      "value": 4,
+      "name": "m_tj_reset",
+      "explanation": "factory reset (jig pad)"
+    },
+    {
+      "value": 5,
+      "name": "m_flash_err",
+      "explanation": "flash: error"
+    },
+    {
+      "value": 6,
+      "name": "m_pending",
+      "explanation": "pending"
+    },
+    {
+      "value": 7,
+      "name": "m_failed",
+      "explanation": "failed"
+    },
+    {
+      "value": 8,
+      "name": "m_update",
+      "explanation": "firmware update: into the bootloader"
+    },
+    {
+      "value": 9,
+      "name": "m_config",
+      "explanation": "configuration changed (settings, CONFIG, scenes, light definitions): a full dump follows"
+    },
+    {
+      "value": 200,
+      "name": "ud_update",
+      "explanation": "Entering bootloader"
+    },
+    {
+      "value": 201,
+      "name": "ud_flash",
+      "explanation": "Flash operation failed"
+    }
+  ]
+}

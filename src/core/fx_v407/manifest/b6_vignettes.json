@@ -1,0 +1,189 @@
+{
+  "batch": "b6_vignettes",
+  "c": "b6_vignettes.c",
+  "js": "b6_vignettes.js",
+  "effects": [
+    {
+      "id": 58,
+      "symbol": "town_at_night",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 49942,
+        "px": 244,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 59,
+      "symbol": "lantern_row",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 30461,
+        "px": 218,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 60,
+      "symbol": "lamp_conversation",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 20093,
+        "px": 230,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 70,
+      "symbol": "porcelain_kiln",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 33281,
+        "px": 247,
+        "tick": 0,
+        "particle": 0, "step": 1000
+      }
+    },
+    {
+      "id": 83,
+      "symbol": "neon_sign",
+      "built": true,
+      "flashy": false,
+      "white": false,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 23141,
+        "px": 362,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 85,
+      "symbol": "domino_run",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 46809,
+        "px": 378,
+        "tick": 0,
+        "particle": 0, "step": 1250
+      }
+    },
+    {
+      "id": 93,
+      "symbol": "folded_time",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 15690,
+        "px": 718,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 100,
+      "symbol": "plasma_globe",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 117920,
+        "px": 238,
+        "tick": 0,
+        "particle": 0,
+        "frame_pal": 121630
+      }
+    },
+    {
+      "id": 104,
+      "symbol": "pocket_rave",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 19826,
+        "px": 348,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 108,
+      "symbol": "icicle_drip",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 19684,
+        "px": 341,
+        "tick": 0,
+        "particle": 0,
+        "px_pal": 360
+      }
+    },
+    {
+      "id": 110,
+      "symbol": "ribbon_unwrap",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 18080,
+        "px": 370,
+        "tick": 0,
+        "particle": 0
+      }
+    },
+    {
+      "id": 111,
+      "symbol": "haunted_hall",
+      "built": true,
+      "flashy": false,
+      "white": true,
+      "tick_ms": 0,
+      "particles": 0,
+      "cost": {
+        "frame": 35601,
+        "px": 622,
+        "tick": 0,
+        "particle": 0
+      }
+    }
+  ]
+}
